@@ -69,7 +69,6 @@ class SkewedVCKernel(SequenceKernel):
         self.coeffs = Parameter(self.calc_polynomial_coeffs(), requires_grad=False)
         
         lsf = self.l * torch.log(1 - self.q_powers)
-        print(lsf)
         self.log_scaling_factors = Parameter(lsf, requires_grad=False)
         
         log_odds = torch.log(self.q_powers) - torch.log(1 - self.q_powers)
@@ -99,17 +98,16 @@ class SkewedVCKernel(SequenceKernel):
     def log_p(self, value):
         return self._set_log_p(value)
     
-    def __call__(self, x1, x2, lambdas, log_p):
-        log_p = log_p - torch.logsumexp(log_p, 1)
+    def _forward(self, x1, x2, lambdas, log_p):
+        log_p = log_p - torch.logsumexp(log_p, 1).unsqueeze(1)
         log_p_flat = torch.flatten(log_p)
         c_ki = torch.matmul(self.coeffs, lambdas)
         common = torch.matmul(x1, x2.T)
 
         # Init first power
         M = torch.diag(log_p_flat)
-        kernel = torch.exp(-torch.matmul(torch.matmul(x1, M), x2.T))
+        kernel = c_ki[0] * torch.exp(-torch.matmul(torch.matmul(x1, M), x2.T))
         kernel[common < self.l] = 0
-        kernel = c_ki[0] * kernel
         
         # Add the remaining powers        
         for power in range(1, self.s):
@@ -121,5 +119,5 @@ class SkewedVCKernel(SequenceKernel):
         return(kernel)
 
     def forward(self, x1, x2, diag=False, **params):
-        kernel = self(x1, x2, log_lambdas=torch.exp(self.log_lda), log_p=self.log_p)
+        kernel = self._forward(x1, x2, lambdas=torch.exp(self.log_lda), log_p=self.log_p)
         return(kernel)

@@ -14,37 +14,43 @@ class KernelsTests(unittest.TestCase):
         V = torch.stack([torch.pow(lambdas, i) for i in range(3)], 1)
 
         B = kernel.coeffs
-        assert(np.allclose(B.sum(0), [1, 0, 0]))
-        assert(np.allclose(B.sum(1), [1, 0, 0]))
-        
         P = np.array(torch.matmul(B, V))
         assert(np.allclose(P, np.eye(3), atol=1e-4))
-        
-    # def test_odds_ratio(self):
-    #     l = 8
-    #     x = np.arange(l+1)
-    #     q = (l - 1) / l
-    #     fx = q ** x / (1 - q) ** x
-    #     print(x)
-    #     print(fx)
-    
     
     def test_skewed_vc_kernel(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
-        
+        log_p = torch.log(torch.tensor([[0.5, 0.5],
+                                        [0.5, 0.5]], dtype=torch.float32))
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
                           [0, 1, 0, 1]], dtype=torch.float32)
+
+        # k=0        
         lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
-        log_p = torch.log(torch.tensor([[0.5, 0.5],
-                                        [0.5, 0.5]], dtype=torch.float32))
-        cov = kernel(x, x, lambdas, log_p)
-        print(cov)
+        cov = kernel._forward(x, x, lambdas, log_p)
         assert(np.allclose(cov, 1))
+        
+        # k=1        
+        lambdas = torch.tensor([0, 1, 0], dtype=torch.float32)
+        cov = kernel._forward(x, x, lambdas, log_p).numpy()
+        k1 = np.array([[2, 0, 0, -2],
+                       [0, 2, -2, 0],
+                       [0, -2, 2, 0],
+                       [-2, 0, 0, 2]], dtype=np.float32)
+        assert(np.abs(cov - k1).mean() < 1e-4)
+        
+        # k=2
+        lambdas = torch.tensor([0, 0, 1], dtype=torch.float32)
+        cov = kernel._forward(x, x, lambdas, log_p).numpy()
+        k1 = np.array([[1, -1, -1, 1],
+                       [-1, 1, 1, -1],
+                       [-1, 1, 1, -1],
+                       [1, -1, -1, 1]], dtype=np.float32)
+        assert(np.abs(cov - k1).mean() < 1e-4)
         
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_skewed_vc_kernel']
+    import sys;sys.argv = ['', 'KernelsTests']
     unittest.main()
