@@ -1,16 +1,11 @@
-
 import numpy as np
 import torch
-import torch.nn.functional as F
-from torch.nn import Parameter
 import gpytorch
 
-from gpytorch import settings
-from gpytorch.constraints import Positive
-from gpytorch.constraints import LessThan
-import itertools
 from itertools import combinations
-from pip._internal.cli.cmdoptions import constraints
+
+from torch.nn import Parameter
+from gpytorch.constraints import LessThan
 
 
 class SequenceKernel(gpytorch.kernels.kernel.Kernel):
@@ -24,7 +19,8 @@ class SequenceKernel(gpytorch.kernels.kernel.Kernel):
         
         super().__init__(**kwargs)
     
-    def register_params(self, params, constraints):
+    def register_params(self, params={}, constraints={}):
+        self.params = params
         for param_name, param in params.items():
             self.register_parameter(name=param_name, parameter=param)
             
@@ -49,14 +45,15 @@ class SequenceKernel(gpytorch.kernels.kernel.Kernel):
 
 
 class SkewedVCKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, train_p=True, 
-                log_lda_prior=None, log_lda_constraint=None, 
-                log_p_prior=None, log_p_constraint=None,
-                **kwargs):
+    def __init__(self, n_alleles, seq_length, train_p=True,
+                 force_exp_decay=False, 
+                 log_lda_prior=None, log_p_prior=None,
+                 **kwargs):
         
         super().__init__(n_alleles, seq_length, **kwargs)
         
         self.train_p = train_p
+        self.force_exp_decay = force_exp_decay
         self.define_aux_variables()
         self.define_kernel_params()
     
@@ -75,20 +72,49 @@ class SkewedVCKernel(SequenceKernel):
         self.log_odds = Parameter(log_odds, requires_grad=False)
     
     def define_kernel_params(self):
+        constraints = {}
         params = {'raw_log_p': Parameter(torch.zeros(*self.batch_shape, self.l, self.alpha),
-                                         requires_grad=self.train_p),
-                  'raw_log_lda': Parameter(torch.zeros(*self.batch_shape, self.l + 1))}
-        constraints = {'raw_log_lda': LessThan(upper_bound=0.),
-                       'raw_log_p': LessThan(upper_bound=0.)}
-        self.register_params(params, constraints=constraints)
+                                         requires_grad=self.train_p)}
+
+        if self.force_exp_decay:
+            params['raw_log_lda_alpha'] = Parameter(torch.zeros(*self.batch_shape, 1)+1)
+            params['raw_log_lda_beta'] = Parameter(torch.zeros(*self.batch_shape, 1)-10)
+            constraints['raw_log_lda_beta'] = LessThan(upper_bound=0.)
+        else:
+            params['raw_log_lda'] = Parameter(torch.zeros(*self.batch_shape, self.l))
+        
+        self.register_params(params=params, constraints=constraints)
+
+    @property
+    def log_lda_alpha(self):
+        return(self.raw_log_lda_alpha)
+    
+    @property
+    def log_lda_beta(self):
+        return(self.raw_log_lda_beta_constraint.transform(self.raw_log_lda_beta))
 
     @property
     def log_lda(self):
-        return self.raw_log_lda_constraint.transform(self.raw_log_lda)
-
+        if self.force_exp_decay:
+            return(self.log_lda_alpha + self.log_lda_beta * torch.arange(self.l))
+        return(self.raw_log_lda)
+    
+    @property
+    def lambdas(self):
+        lambdas = torch.zeros(self.s)
+        lambdas[1:] = torch.exp(self.log_lda)
+        return(lambdas)
+    
     @property
     def log_p(self):
-        return self.raw_log_p_constraint.transform(self.raw_log_p)
+        return(self.raw_log_p)
+
+    def normalize_log_p(self, log_p):
+        return(log_p - torch.logsumexp(log_p, 1).unsqueeze(1))
+    
+    @property
+    def p(self):
+        return(torch.exp(self.normalize_log_p(self.log_p)))
 
     @log_lda.setter
     def log_lda(self, value):
@@ -99,7 +125,7 @@ class SkewedVCKernel(SequenceKernel):
         return self._set_log_p(value)
     
     def _forward(self, x1, x2, lambdas, log_p):
-        log_p = log_p - torch.logsumexp(log_p, 1).unsqueeze(1)
+        log_p = self.normalize_log_p(log_p)
         log_p_flat = torch.flatten(log_p)
         c_ki = torch.matmul(self.coeffs, lambdas)
         common = torch.matmul(x1, x2.T)
@@ -119,5 +145,5 @@ class SkewedVCKernel(SequenceKernel):
         return(kernel)
 
     def forward(self, x1, x2, diag=False, **params):
-        kernel = self._forward(x1, x2, lambdas=torch.exp(self.log_lda), log_p=self.log_p)
+        kernel = self._forward(x1, x2, lambdas=self.lambdas, log_p=self.log_p)
         return(kernel)

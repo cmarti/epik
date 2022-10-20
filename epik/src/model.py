@@ -11,7 +11,7 @@ from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikeliho
 
 class GPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, kernel, likelihood,
-                 output_device=None, n_devices=None, train_mean=False):
+                 output_device=None, n_devices=None, train_mean=True):
         super(GPModel, self).__init__(train_x, train_y, likelihood)
         
         if train_mean:
@@ -35,21 +35,28 @@ class GPModel(gpytorch.models.ExactGP):
 class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
                  output_device=None, n_devices=1,
-                 dtype=torch.float32, train_mean=False):
+                 dtype=torch.float32, train_mean=False,
+                 alleles=None):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.output_device = output_device
         self.n_devices = n_devices
         self.dtype = dtype
         self.train_mean = train_mean
+        self.alleles = alleles
     
+    def get_alleles(self, c):
+        if self.alleles is not None:
+            return(self.alleles)
+        else:
+            return(np.unique(c))
+        
     def seq_to_one_hot(self, X):
         m = np.array([[a for a in x] for x in X])
         onehot = []
         for i in range(m.shape[1]):
             c = m[:, i]
-            alleles = np.unique(c)
-            for allele in alleles:
+            for allele in self.get_alleles(c):
                 onehot.append(self.get_tensor(c == allele))
         onehot = torch.stack(onehot, 1)
         return(onehot)
@@ -117,16 +124,15 @@ class EpiK(object):
             loss = -mll(output, y)
             loss.backward()
             optimizer.step()
-            
             self.report_progress(pbar, loss)
     
-    def predict(self, X):
-        x = self.seq_to_one_hot(X)
+    def predict(self, pred_X):
+        pred_x = self.seq_to_one_hot(pred_X)
         self.model.eval()
         self.likelihood.eval()
         
         with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            f_preds = self.model(x)
+            f_preds = self.model(pred_x)
         # TODO: error when asking for variance: f_preds.variance
         return(f_preds.mean)
         
