@@ -8,7 +8,7 @@ from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikeliho
 from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikelihood,
                                                       GaussianLikelihood)
 from scipy.stats.stats import pearsonr
-from epik.src.utils import get_tensor
+from epik.src.utils import get_tensor, to_device
 
 
 class GPModel(gpytorch.models.ExactGP):
@@ -51,7 +51,7 @@ class EpiK(object):
         if self.likelihood_type == 'Gaussian':
             if y_var is not None:
                 likelihood = FixedNoiseGaussianLikelihood(noise=self.get_tensor(y_var),
-                                                          learn_additional_noise=False)
+                                                          learn_additional_noise=True)
             else:
                 likelihood = GaussianLikelihood()
         else:
@@ -60,7 +60,7 @@ class EpiK(object):
         
         self.likelihood = self.to_device(likelihood)
     
-    def report_progress(self, pbar, loss, rho=False):
+    def report_progress(self, pbar, loss, rho=None):
         if self.output_device is not None:
             loss = loss.cpu()
         report_dict = {'loss': '{:.3f}'.format(loss.detach().numpy())}
@@ -82,6 +82,9 @@ class EpiK(object):
             report_dict['test rho'] = '{:.2f}'.format(rho)
         
         pbar.set_postfix(report_dict)
+    
+    def to_device(self, x):
+        return(to_device(x, self.output_device))
     
     def get_tensor(self, ndarray):
         return(get_tensor(ndarray, dtype=self.dtype, device=self.output_device))

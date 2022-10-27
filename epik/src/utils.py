@@ -26,7 +26,7 @@ def to_device(tensor, output_device=None):
     return(tensor)
 
 
-def get_tensor(ndarray, dtype, device=None):
+def get_tensor(ndarray, dtype=torch.float32, device=None):
     if not torch.is_tensor(ndarray):
         ndarray = torch.tensor(ndarray, dtype=dtype)
-    return(to_device(ndarray, device=device))
+    return(to_device(ndarray, output_device=device))

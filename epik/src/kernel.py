@@ -77,11 +77,12 @@ class SkewedVCKernel(SequenceKernel):
                                          requires_grad=self.train_p)}
 
         if self.force_exp_decay:
-            params['raw_log_lda_alpha'] = Parameter(torch.zeros(*self.batch_shape, 1)+1)
-            params['raw_log_lda_beta'] = Parameter(torch.zeros(*self.batch_shape, 1)-10)
+            params['raw_log_lda_alpha'] = Parameter(torch.zeros(*self.batch_shape, 1))
+            params['raw_log_lda_beta'] = Parameter(torch.zeros(*self.batch_shape, 1)-1)
             constraints['raw_log_lda_beta'] = LessThan(upper_bound=0.)
         else:
-            params['raw_log_lda'] = Parameter(-2.0*torch.arange(self.l))
+#             params['raw_log_lda'] = Parameter(torch.ones(*self.batch_shape, self.l))
+            params['raw_log_lda'] = Parameter(-1.5 * torch.arange(self.l))
         
         self.register_params(params=params, constraints=constraints)
 
