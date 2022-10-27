@@ -7,6 +7,8 @@ from gpytorch.kernels.multi_device_kernel import MultiDeviceKernel
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
 from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikelihood,
                                                       GaussianLikelihood)
+from scipy.stats.stats import pearsonr
+from epik.src.utils import get_tensor
 
 
 class GPModel(gpytorch.models.ExactGP):
@@ -45,32 +47,6 @@ class EpiK(object):
         self.train_mean = train_mean
         self.alleles = alleles
     
-    def get_alleles(self, c):
-        if self.alleles is not None:
-            return(self.alleles)
-        else:
-            return(np.unique(c))
-        
-    def seq_to_one_hot(self, X):
-        m = np.array([[a for a in x] for x in X])
-        onehot = []
-        for i in range(m.shape[1]):
-            c = m[:, i]
-            for allele in self.get_alleles(c):
-                onehot.append(self.get_tensor(c == allele))
-        onehot = torch.stack(onehot, 1)
-        return(onehot)
-
-    def to_device(self, tensor):
-        if self.output_device is not None:
-            tensor = tensor.to(self.output_device)
-        return(tensor)
-
-    def get_tensor(self, ndarray):
-        if not torch.is_tensor(ndarray):
-            ndarray = torch.tensor(ndarray, dtype=self.dtype)
-        return(self.to_device(ndarray))
-    
     def set_likelihood(self, y_var=None):
         if self.likelihood_type == 'Gaussian':
             if y_var is not None:
@@ -84,15 +60,15 @@ class EpiK(object):
         
         self.likelihood = self.to_device(likelihood)
     
-    def report_progress(self, pbar, loss):
+    def report_progress(self, pbar, loss, rho=False):
         if self.output_device is not None:
             loss = loss.cpu()
         report_dict = {'loss': '{:.3f}'.format(loss.detach().numpy())}
         if hasattr(self.model.covar_module, 'log_lda'):
             lambdas = self.model.covar_module.log_lda
-            lambdas_text = ['{:.2f}'.format(np.exp(l)) for l in lambdas.detach().numpy()]
+            lambdas_text = ['{:.2f}'.format(l) for l in lambdas.detach().numpy()]
             lambdas_text = '[{}]'.format(', '.join(lambdas_text))
-            report_dict['lambdas'] = lambdas_text
+            report_dict['log(lambda)'] = lambdas_text
         
         if self.model.covar_module.lengthscale is not None:
             v = self.model.covar_module.lengthscale.detach().numpy()
@@ -101,13 +77,19 @@ class EpiK(object):
             if self.model.covar_module.base_kernel.lengthscale is not None:
                 v = self.model.covar_module.base_kernel.lengthscale.detach().numpy()
                 report_dict['lengthscale'] = '{:.2f}'.format(v[0][0])
+        
+        if rho is not None:
+            report_dict['test rho'] = '{:.2f}'.format(rho)
+        
         pbar.set_postfix(report_dict)
     
+    def get_tensor(self, ndarray):
+        return(get_tensor(ndarray, dtype=self.dtype, device=self.output_device))
+    
     def fit(self, X, y, y_var=None, n_iter=100, learning_rate=0.1):
-        x = self.seq_to_one_hot(X)
-        y = self.get_tensor(y)
+        X, y = self.get_tensor(X), self.get_tensor(y)
         self.set_likelihood(y_var=y_var)
-        self.model = self.to_device(GPModel(x, y, self.kernel, self.likelihood,
+        self.model = self.to_device(GPModel(X, y, self.kernel, self.likelihood,
                                             output_device=self.output_device,
                                             n_devices=self.n_devices,
                                             train_mean=self.train_mean)) 
@@ -119,20 +101,22 @@ class EpiK(object):
         
         pbar = tqdm(range(n_iter), desc='Iterations')
         for _ in pbar:
-            optimizer.zero_grad()
-            output = self.model(x)
-            loss = -mll(output, y)
-            loss.backward()
-            optimizer.step()
-            self.report_progress(pbar, loss)
+            try:
+                optimizer.zero_grad()
+                output = self.model(X)
+                loss = -mll(output, y)
+                loss.backward()
+                optimizer.step()
+                self.report_progress(pbar, loss)
+            except KeyboardInterrupt:
+                break
     
     def predict(self, pred_X):
-        pred_x = self.seq_to_one_hot(pred_X)
         self.model.eval()
         self.likelihood.eval()
         
-        with torch.no_grad(), gpytorch.settings.fast_pred_var():
-            f_preds = self.model(pred_x)
+        with torch.no_grad(): #, gpytorch.settings.fast_pred_var():
+            f_preds = self.model(pred_X)
         # TODO: error when asking for variance: f_preds.variance
         return(f_preds.mean)
         

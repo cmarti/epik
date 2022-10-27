@@ -1,6 +1,6 @@
 import numpy as np
-import torch
 import gpytorch
+import torch
 
 from itertools import combinations
 
@@ -81,7 +81,7 @@ class SkewedVCKernel(SequenceKernel):
             params['raw_log_lda_beta'] = Parameter(torch.zeros(*self.batch_shape, 1)-10)
             constraints['raw_log_lda_beta'] = LessThan(upper_bound=0.)
         else:
-            params['raw_log_lda'] = Parameter(torch.zeros(*self.batch_shape, self.l))
+            params['raw_log_lda'] = Parameter(-2.0*torch.arange(self.l))
         
         self.register_params(params=params, constraints=constraints)
 
