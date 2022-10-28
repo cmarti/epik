@@ -37,19 +37,9 @@ def get_smn1_data(n):
 
 
 class ModelsTests(unittest.TestCase):
-    def test_one_hot_encoding(self):
-        X = np.array(['AA', 'AB', 'BA', 'BB'])
-        x = seq_to_one_hot(X).numpy()
-        onehot = np.array([[1, 0, 1, 0],
-                           [1, 0, 0, 1],
-                           [0, 1, 1, 0],
-                           [0, 1, 0, 1.]])
-        assert(np.allclose(x - onehot, 0))
-        
     def test_epik_basic(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
-        model = EpiK(kernel, likelihood_type='Gaussian',
-                     alleles=['A', 'B'])
+        model = EpiK(kernel, likelihood_type='Gaussian')
         
         X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
         y = torch.tensor([0.2, 1.1, 0.5, 1.5])
@@ -59,8 +49,7 @@ class ModelsTests(unittest.TestCase):
         
     def test_epik_basic_loo(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2, train_p=False)
-        model = EpiK(kernel, likelihood_type='Gaussian', train_mean=True,
-                     alleles=['A', 'B'])
+        model = EpiK(kernel, likelihood_type='Gaussian')
         
         train_X = seq_to_one_hot(np.array(['AA', 'AB', 'BA']), alleles=['A', 'B'])
         test_X = seq_to_one_hot(np.array(['BB']), alleles=['A', 'B'])
@@ -91,9 +80,9 @@ class ModelsTests(unittest.TestCase):
         
     def test_epik_basic_RBF(self):
         kernel = ScaleKernel(RBFKernel())
-        model = EpiK(kernel, likelihood_type='Gaussian', train_mean=True)
+        model = EpiK(kernel, likelihood_type='Gaussian')
         
-        X = np.array(['AA', 'AB', 'BA', 'BB'])
+        X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
         y = torch.tensor([0.2, 1.1, 0.5, 1.5])
         model.fit(X, y, n_iter=200)
         ypred = model.predict(X)
@@ -103,8 +92,7 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
         
         kernel = ScaleKernel(RBFKernel())
-        model = EpiK(kernel, likelihood_type='Gaussian', train_mean=True,
-                     alleles=['A', 'C', 'G', 'U'])
+        model = EpiK(kernel, likelihood_type='Gaussian')
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.05)
         
@@ -117,12 +105,10 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_smn1(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=4000)
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=7000)
         
-        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True,
-                                force_exp_decay=False)
-        model = EpiK(kernel, likelihood_type='Gaussian', train_mean=True,
-                     alleles=['A', 'C', 'G', 'U'])
+        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=1)
+        model = EpiK(kernel, likelihood_type='Gaussian')
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.02)
         
@@ -135,13 +121,12 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_smn1_gpu(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=4000)
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=8000)
         output_device = torch.device('cuda:0')
         
-        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True,
-                                force_exp_decay=False)
-        model = EpiK(kernel, likelihood_type='Gaussian', train_mean=True,
-                     alleles=['A', 'C', 'G', 'U'], output_device=output_device)
+        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=0.2)
+        model = EpiK(kernel, likelihood_type='Gaussian',
+                     output_device=output_device)
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.02)
         

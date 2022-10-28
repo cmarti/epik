@@ -1,15 +1,16 @@
 import numpy as np
-import gpytorch
 import torch
 
 from itertools import combinations
 
 from torch.nn import Parameter
-from gpytorch.constraints import LessThan
+from gpytorch.kernels.kernel import Kernel
+from gpytorch.priors.torch_priors import NormalPrior
+
 from epik.src.utils import to_device
 
 
-class SequenceKernel(gpytorch.kernels.kernel.Kernel):
+class SequenceKernel(Kernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
         self.alpha = n_alleles
@@ -43,20 +44,30 @@ class SequenceKernel(gpytorch.kernels.kernel.Kernel):
                                   for v in combinations(k_lambdas, self.l - power)]).sum()
                 B[power, k] = norm_factor * (-1) ** (power) * p
         return(B)
+    
+    def get_theta_to_log_lda_matrix(self):
+        matrix = torch.zeros((self.l, self.l))
+        matrix[0, 0] = 1
+        matrix[1, 0] = -1
+        matrix[1, 1] = 1
+        for i in range(2, self.l):
+            matrix[i, i-2] = -1
+            matrix[i, i-1] = 2
+            matrix[i, i] = -1
+        return(torch.inverse(matrix))
 
 
 class SkewedVCKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, train_p=True,
-                 force_exp_decay=False, 
+    def __init__(self, n_alleles, seq_length, train_p=True, tau=0.2,
                  log_lda_prior=None, log_p_prior=None,
                  **kwargs):
         
         super().__init__(n_alleles, seq_length, **kwargs)
         
         self.train_p = train_p
-        self.force_exp_decay = force_exp_decay
         self.define_aux_variables()
         self.define_kernel_params()
+        self.define_priors(tau)
     
     def calc_eigenvalues(self):
         lambdas = self.q ** torch.arange(self.s)
@@ -65,6 +76,8 @@ class SkewedVCKernel(SequenceKernel):
     def define_aux_variables(self):
         self.q_powers = torch.pow(self.q, torch.arange(self.s))
         self.coeffs = Parameter(self.calc_polynomial_coeffs(), requires_grad=False)
+        self.theta_to_log_lda_m = Parameter(self.get_theta_to_log_lda_matrix(),
+                                            requires_grad=False)
         
         lsf = self.l * torch.log(1 - self.q_powers)
         self.log_scaling_factors = Parameter(lsf, requires_grad=False)
@@ -76,16 +89,12 @@ class SkewedVCKernel(SequenceKernel):
         constraints = {}
         params = {'raw_log_p': Parameter(torch.zeros(*self.batch_shape, self.l, self.alpha),
                                          requires_grad=self.train_p)}
-
-        if self.force_exp_decay:
-            params['raw_log_lda_alpha'] = Parameter(torch.zeros(*self.batch_shape, 1))
-            params['raw_log_lda_beta'] = Parameter(torch.zeros(*self.batch_shape, 1)-1)
-            constraints['raw_log_lda_beta'] = LessThan(upper_bound=0.)
-        else:
-#             params['raw_log_lda'] = Parameter(torch.ones(*self.batch_shape, self.l))
-            params['raw_log_lda'] = Parameter(-1.5 * torch.arange(self.l))
-        
+        params['raw_theta'] = Parameter(torch.zeros(self.l))
         self.register_params(params=params, constraints=constraints)
+    
+    def define_priors(self, tau):
+        self.register_prior("raw_theta_prior", NormalPrior(0, tau),
+                            lambda module: module.raw_theta[2:])
 
     @property
     def log_lda_alpha(self):
@@ -97,9 +106,7 @@ class SkewedVCKernel(SequenceKernel):
 
     @property
     def log_lda(self):
-        if self.force_exp_decay:
-            return(self.log_lda_alpha + self.log_lda_beta * torch.arange(self.l))
-        return(self.raw_log_lda)
+        return(torch.matmul(self.theta_to_log_lda_m, self.raw_theta))
     
     @property
     def lambdas(self):

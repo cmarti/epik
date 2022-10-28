@@ -1,26 +1,20 @@
-from tqdm import tqdm
-import numpy as np
 import torch
 import gpytorch
 
+from tqdm import tqdm
 from gpytorch.kernels.multi_device_kernel import MultiDeviceKernel
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
 from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikelihood,
                                                       GaussianLikelihood)
-from scipy.stats.stats import pearsonr
+
 from epik.src.utils import get_tensor, to_device
 
 
 class GPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, kernel, likelihood,
-                 output_device=None, n_devices=None, train_mean=True):
+                 output_device=None, n_devices=None):
         super(GPModel, self).__init__(train_x, train_y, likelihood)
-        
-        if train_mean:
-            self.mean_module = gpytorch.means.ConstantMean()
-        else:
-            self.mean_module = gpytorch.means.ZeroMean()
-        
+        self.mean_module = gpytorch.means.ConstantMean()
         if output_device is None:
             self.covar_module = kernel
         else:
@@ -37,15 +31,12 @@ class GPModel(gpytorch.models.ExactGP):
 class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
                  output_device=None, n_devices=1,
-                 dtype=torch.float32, train_mean=False,
-                 alleles=None):
+                 dtype=torch.float32):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.output_device = output_device
         self.n_devices = n_devices
         self.dtype = dtype
-        self.train_mean = train_mean
-        self.alleles = alleles
     
     def set_likelihood(self, y_var=None):
         if self.likelihood_type == 'Gaussian':
@@ -94,8 +85,7 @@ class EpiK(object):
         self.set_likelihood(y_var=y_var)
         self.model = self.to_device(GPModel(X, y, self.kernel, self.likelihood,
                                             output_device=self.output_device,
-                                            n_devices=self.n_devices,
-                                            train_mean=self.train_mean)) 
+                                            n_devices=self.n_devices)) 
 
         self.model.train()
         self.likelihood.train()
