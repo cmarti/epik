@@ -21,7 +21,7 @@ def seq_to_one_hot(X, alleles=None):
 
 
 def to_device(tensor, output_device=None):
-    if output_device is not None:
+    if output_device is not None and output_device != -1:
         tensor = tensor.to(output_device)
     return(tensor)
 

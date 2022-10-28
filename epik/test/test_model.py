@@ -82,12 +82,12 @@ class ModelsTests(unittest.TestCase):
         model = EpiK(kernel, likelihood_type='Gaussian',
                      output_device=output_device)
         
-        X = np.array(['AA', 'AB', 'BA', 'BB'])
+        X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
         y = torch.tensor([0.2, 1.1, 0.5, 1.5])
         model.fit(X, y, n_iter=100)
         ypred = model.predict(X)
         assert(ypred.shape[0] == 4)
-        assert(pearsonr(ypred, y)[0] > 0.9)
+        assert(pearsonr(ypred.cpu().numpy(), y.cpu().numpy())[0] > 0.9)
         
     def test_epik_basic_RBF(self):
         kernel = ScaleKernel(RBFKernel())
@@ -113,10 +113,8 @@ class ModelsTests(unittest.TestCase):
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
-        print(train_rho, test_rho)
         assert(train_rho > 0.7)
         assert(test_rho > 0.6)
-        
     
     def test_epik_smn1(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=4000)
@@ -128,12 +126,30 @@ class ModelsTests(unittest.TestCase):
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.02)
         
-        train_ypred = model.predict(train_x)
+        train_ypred = model.predict(train_x).detach().numpy()
         test_ypred = model.predict(test_x).detach().numpy()
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
-        print(train_rho, test_rho)
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+    
+    def test_epik_smn1_gpu(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=4000)
+        output_device = torch.device('cuda:0')
+        
+        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True,
+                                force_exp_decay=False)
+        model = EpiK(kernel, likelihood_type='Gaussian', train_mean=True,
+                     alleles=['A', 'C', 'G', 'U'], output_device=output_device)
+        model.fit(train_x, train_y, y_var=train_y_var,
+                  n_iter=100, learning_rate=0.02)
+        
+        train_ypred = model.predict(train_x).cpu().detach().numpy()
+        test_ypred = model.predict(test_x).cpu().detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
         

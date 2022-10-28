@@ -6,6 +6,7 @@ from itertools import combinations
 
 from torch.nn import Parameter
 from gpytorch.constraints import LessThan
+from epik.src.utils import to_device
 
 
 class SequenceKernel(gpytorch.kernels.kernel.Kernel):
@@ -102,7 +103,8 @@ class SkewedVCKernel(SequenceKernel):
     
     @property
     def lambdas(self):
-        lambdas = torch.zeros(self.s)
+        lambdas = to_device(torch.zeros(self.s), 
+                            output_device=self.log_lda.get_device())
         lambdas[1:] = torch.exp(self.log_lda)
         return(lambdas)
     

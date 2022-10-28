@@ -119,7 +119,7 @@ class EpiK(object):
         self.likelihood.eval()
         
         with torch.no_grad(): #, gpytorch.settings.fast_pred_var():
-            f_preds = self.model(pred_X)
+            f_preds = self.model(self.get_tensor(pred_X))
         # TODO: error when asking for variance: f_preds.variance
         return(f_preds.mean)
         
