@@ -59,7 +59,6 @@ class SequenceKernel(Kernel):
 
 class SkewedVCKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, train_p=True, tau=0.2,
-                 log_lda_prior=None, log_p_prior=None,
                  **kwargs):
         
         super().__init__(n_alleles, seq_length, **kwargs)
@@ -138,12 +137,12 @@ class SkewedVCKernel(SequenceKernel):
         log_p = self.normalize_log_p(log_p)
         log_p_flat = torch.flatten(log_p)
         c_ki = torch.matmul(self.coeffs, lambdas)
-        common = torch.matmul(x1, x2.T)
 
         # Init first power
         M = torch.diag(log_p_flat)
         kernel = c_ki[0] * torch.exp(-torch.matmul(torch.matmul(x1, M), x2.T))
-        kernel[common < self.l] = 0
+        kernel[torch.matmul(x1, x2.T) < self.l] = 0
+        torch.cuda.empty_cache()
         
         # Add the remaining powers        
         for power in range(1, self.s):
@@ -152,6 +151,7 @@ class SkewedVCKernel(SequenceKernel):
             log_factors = torch.logsumexp(log_factors, 1)
             M = torch.diag(log_factors)
             kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + torch.matmul(torch.matmul(x1, M), x2.T))
+        torch.cuda.empty_cache()
         return(kernel)
 
     def forward(self, x1, x2, diag=False, **params):

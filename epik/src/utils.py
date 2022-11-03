@@ -30,3 +30,14 @@ def get_tensor(ndarray, dtype=torch.float32, device=None):
     if not torch.is_tensor(ndarray):
         ndarray = torch.tensor(ndarray, dtype=dtype)
     return(to_device(ndarray, output_device=device))
+
+
+def get_gpu_memory(device=None):
+    mem = torch.cuda.memory_allocated(device) / 2**20
+    suffix = 'MB'
+    
+    if mem < 1:
+        mem = mem * 2**10
+        suffix = 'KB' 
+    
+    return('{:.0f}{}'.format(mem, suffix))

@@ -17,13 +17,13 @@ from scipy.stats.stats import pearsonr
 from epik.src.utils import seq_to_one_hot
 
 
-def get_smn1_data(n):
+def get_smn1_data(n, seed=0):
+    np.random.seed(seed)
     data = pd.read_csv(join(TEST_DATA_DIR, 'smn1data.csv'),
                            header=None, index_col=0, names=['m', 'std'])
     data = data.loc[[x[3] == 'U' for x in data.index], :]
     data.index = [x[:3] + x[4:] for x in data.index]
     
-    n = 1000
     p = n / data.shape[0]
     ps = np.random.uniform(size=data.shape[0])
     test = data.loc[ps < p, :]
@@ -105,7 +105,7 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_smn1(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=7000)
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         
         kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=1)
         model = EpiK(kernel, likelihood_type='Gaussian')
@@ -121,7 +121,7 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_smn1_gpu(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=8000)
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         output_device = torch.device('cuda:0')
         
         kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=0.2)
@@ -132,6 +132,28 @@ class ModelsTests(unittest.TestCase):
         
         train_ypred = model.predict(train_x).cpu().detach().numpy()
         test_ypred = model.predict(test_x).cpu().detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+    
+    def test_epik_smn1_gpu_partition(self):
+        partition_size = 100
+
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
+        n_devices, output_device = 1, torch.device('cuda:0')
+        
+        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=0.2)
+        model = EpiK(kernel, likelihood_type='Gaussian',
+                     output_device=output_device, n_devices=n_devices)
+        
+        # model.optimize_partition_size(train_x, train_y, y_var=train_y_var)
+        model.fit(train_x, train_y, y_var=train_y_var,
+                  n_iter=50, learning_rate=0.02, partition_size=partition_size)
+        
+        train_ypred = model.predict(train_x, partition_size=partition_size).cpu().detach().numpy()
+        test_ypred = model.predict(test_x, partition_size=partition_size).cpu().detach().numpy()
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
