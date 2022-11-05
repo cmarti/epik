@@ -8,6 +8,7 @@ from gpytorch.kernels.kernel import Kernel
 from gpytorch.priors.torch_priors import NormalPrior
 
 from epik.src.utils import to_device
+from gpytorch.constraints.constraints import LessThan
 
 
 class SequenceKernel(Kernel):
@@ -156,4 +157,62 @@ class SkewedVCKernel(SequenceKernel):
 
     def forward(self, x1, x2, diag=False, **params):
         kernel = self._forward(x1, x2, lambdas=self.lambdas, log_p=self.log_p)
+        return(kernel)
+
+
+class DiploidKernel(SequenceKernel):
+    def __init__(self, seq_length, **kwargs):
+        super().__init__(n_alleles=2, seq_length=seq_length, **kwargs)
+        self.define_kernel_params()
+    
+    def define_kernel_params(self):
+        constraints = {'raw_log_lda': LessThan(upper_bound=0.),
+                       'raw_log_eta': LessThan(upper_bound=0.)}
+        params = {'raw_log_lda': Parameter(torch.zeros(*self.batch_shape, 1, 1)),
+                  'raw_log_eta': Parameter(torch.zeros(*self.batch_shape, 1, 1))}
+        self.register_params(params=params, constraints=constraints)
+    
+    # now set up the 'actual' paramter
+    @property
+    def log_lda(self):
+        # when accessing the parameter, apply the constraint transform
+        return self.raw_log_lda_constraint.transform(self.raw_log_lda)
+
+    @property
+    def log_eta(self):
+        # when accessing the parameter, apply the constraint transform
+        return self.raw_log_eta_constraint.transform(self.raw_log_eta)
+
+    @log_lda.setter
+    def log_lda(self, value):
+        return self._set_log_lda(value)
+
+    @log_eta.setter
+    def log_eta(self, value):
+        return self._set_log_eta(value)
+  
+    def _forward(self, log_lda, log_eta, S1, S2, D2):
+        L = self.seq_length
+        lda = torch.exp(log_lda)
+        eta = torch.exp(log_eta)
+        kernel = (((1 + lda + eta)**(S2 - L/2)) *((1 - lda + eta)**D2) *((1 + eta)**(S1 - L/2)) * (1 - eta)**((L - S1 - S2 - D2)))
+        return(kernel)
+    
+    def dist(self, x1, x2):
+        res = x1.matmul(x2.transpose(-2, -1))
+        return(res)   
+
+    def forward(self, geno1, geno2, **params):
+        geno1_ht = 1.*(geno1 == 1.)
+        geno2_ht = 1.*(geno2 == 1.)        
+        geno1_h0 = 1.*(geno1 == 0.)
+        geno1_h1 = 1.*(geno1 == 2.)
+        geno2_h0 = 1.*(geno2 == 0.)
+        geno2_h1 = 1.*(geno2 == 2.)
+
+        S1 = self.dist(geno1_ht, geno2_ht)
+        S2 = self.dist(geno1_h0, geno2_h0) + self.dist(geno1_h1, geno2_h1)
+        D2 = self.dist(geno1_h0, geno2_h1) + self.dist(geno1_h1, geno2_h0)
+
+        kernel = self._forward(self.log_lda, self.log_eta, S1, S2, D2)
         return(kernel)
