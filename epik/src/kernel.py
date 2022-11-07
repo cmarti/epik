@@ -89,12 +89,18 @@ class SkewedVCKernel(SequenceKernel):
         constraints = {}
         params = {'raw_log_p': Parameter(torch.zeros(*self.batch_shape, self.l, self.alpha),
                                          requires_grad=self.train_p)}
-        params['raw_theta'] = Parameter(torch.zeros(self.l))
+        raw_theta0 = torch.zeros(self.l)
+        raw_theta0[0:2] = -1
+        params['raw_theta'] = Parameter(raw_theta0)
         self.register_params(params=params, constraints=constraints)
     
     def define_priors(self, tau):
         self.register_prior("raw_theta_prior", NormalPrior(0, tau),
                             lambda module: module.raw_theta[2:])
+        self.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
+                            lambda module: module.raw_theta[1])
+        self.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
+                            lambda module: module.raw_theta[0])
 
     @property
     def log_lda_alpha(self):
