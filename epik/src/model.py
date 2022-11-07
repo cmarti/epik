@@ -134,6 +134,7 @@ class EpiK(object):
                 loss = -loss_function(output, y)
                 loss.backward()
                 optimizer.step()
+                self.loss = loss
                 
                 if n_iter > 1:
                     self.report_progress(pbar, loss)
