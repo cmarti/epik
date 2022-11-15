@@ -1,2 +1,3 @@
 - Implement regular VC kernel
+- Implement VC kernel with exponential decay variant: use generating function
 - Create binary for sending jobs to cluster 
