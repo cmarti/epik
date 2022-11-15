@@ -87,11 +87,14 @@ class SkewedVCKernel(SequenceKernel):
     
     def define_kernel_params(self):
         constraints = {}
-        params = {'raw_log_p': Parameter(torch.zeros(*self.batch_shape, self.l, self.alpha),
-                                         requires_grad=self.train_p)}
+        
+        log_p0 = torch.zeros(*self.batch_shape, self.l, self.alpha+1)
+        params = {'raw_log_p': Parameter(log_p0, requires_grad=self.train_p)}
+        
         raw_theta0 = torch.zeros(self.l)
         raw_theta0[0:2] = -1
         params['raw_theta'] = Parameter(raw_theta0)
+        
         self.register_params(params=params, constraints=constraints)
     
     def define_priors(self, tau):
@@ -142,7 +145,7 @@ class SkewedVCKernel(SequenceKernel):
     
     def _forward(self, x1, x2, lambdas, log_p):
         log_p = self.normalize_log_p(log_p)
-        log_p_flat = torch.flatten(log_p)
+        log_p_flat = torch.flatten(log_p[:, :-1])
         c_ki = torch.matmul(self.coeffs, lambdas)
 
         # Init first power
@@ -178,7 +181,6 @@ class DiploidKernel(SequenceKernel):
                   'raw_log_eta': Parameter(torch.zeros(*self.batch_shape, 1, 1))}
         self.register_params(params=params, constraints=constraints)
     
-    # now set up the 'actual' paramter
     @property
     def log_lda(self):
         # when accessing the parameter, apply the constraint transform
