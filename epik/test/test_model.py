@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 import unittest
 
+import torch
 import pandas as pd
 import numpy as np
-import torch
 
 from os.path import join
 
@@ -24,15 +24,25 @@ def get_smn1_data(n, seed=0):
     data = data.loc[[x[3] == 'U' for x in data.index], :]
     data.index = [x[:3] + x[4:] for x in data.index]
     
-    p = n / data.shape[0]
-    ps = np.random.uniform(size=data.shape[0])
-    test = data.loc[ps < p, :]
-    train = data.loc[ps > (1 - p), :]
-    
     alleles = ['A', 'C', 'G', 'U']
-    train_x, train_y = seq_to_one_hot(train.index.values, alleles=alleles), train['m'].values
-    test_x, test_y = seq_to_one_hot(test.index.values, alleles=alleles), test['m'].values
-    train_y_var = (train['std'] ** 2).values
+    X, y = seq_to_one_hot(data.index.values, alleles=alleles), data['m'].values
+    ymean, ystd = y.mean(), y.std()
+    y = (y -ymean) / ystd
+    y_var = (data['std'].values / ystd) ** 2
+    
+    ps = np.random.uniform(size=data.shape[0])
+    p = n / data.shape[0]
+    
+    train = ps < p
+    train_x, train_y = X[train, :], y[train]
+    train_y_var = y_var[train] 
+
+    test = ps > (1 - p)
+    test_x, test_y = X[test, :], y[test]
+    
+    ps = np.random.uniform(size=test_x.shape[0])
+    p = 1000 / ps.shape[0]
+    test_x, test_y = test_x[ps<p], test_y[ps<p]
     return(train_x, train_y, test_x, test_y, train_y_var)
 
 
@@ -117,6 +127,7 @@ class ModelsTests(unittest.TestCase):
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
+        
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
@@ -128,7 +139,7 @@ class ModelsTests(unittest.TestCase):
         model = EpiK(kernel, likelihood_type='Gaussian',
                      output_device=output_device)
         model.fit(train_x, train_y, y_var=train_y_var,
-                  n_iter=100, learning_rate=0.02)
+                  n_iter=100, learning_rate=0.01)
         
         train_ypred = model.predict(train_x).cpu().detach().numpy()
         test_ypred = model.predict(test_x).cpu().detach().numpy()
@@ -162,5 +173,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_smn1']
     unittest.main()
