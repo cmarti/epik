@@ -6,16 +6,17 @@ import pandas as pd
 import numpy as np
 
 from os.path import join
+from subprocess import check_call
+from tempfile import NamedTemporaryFile
 
+from scipy.stats.stats import pearsonr
 from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.kernel import SkewedVCKernel
 from epik.src.model import EpiK
-from scipy.stats.stats import pearsonr
 from epik.src.utils import seq_to_one_hot
-from subprocess import check_call
 
 
 def get_smn1_data(n, seed=0):
@@ -173,29 +174,35 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_bin(self):
+        bin_fpath = join(BIN_DIR, 'EpiK.py')
         data_fpath = join(TEST_DATA_DIR, 'smn1.train.csv')
         xpred_fpath = join(TEST_DATA_DIR, 'smn1.test.txt')
-        out_fpath = join(TEST_DATA_DIR, 'smn1.pred_test.csv')
-        bin_fpath = join(BIN_DIR, 'EpiK.py')
         
-        # Check help
-        cmd = [sys.executable, bin_fpath, '-h']
-        check_call(cmd)
+        with NamedTemporaryFile() as fhand:
+            out_fpath = fhand.name
         
-        # Model fitting
-        cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath, '-n', '50']
-        check_call(cmd)
-        
-        # Predict test sequences
-        cmd = cmd.extend(['-p', xpred_fpath])
-        check_call(cmd)
-        
-        # Predict test sequences with variable ps
-        cmd = cmd.extend(['--train_p'])
-        check_call(cmd)
+            # Check help
+            cmd = [sys.executable, bin_fpath, '-h']
+            check_call(cmd)
+            
+            # Model fitting
+            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath, '-n', '50']
+            check_call(cmd)
+            
+            # Predict test sequences
+            cmd.extend(['-p', xpred_fpath])
+            check_call(cmd)
+            
+            # Predict test sequences with variable ps
+            cmd.extend(['--train_p'])
+            check_call(cmd)
+            
+            # Predict test sequences with variable ps using GPU
+            cmd.extend(['--gpu'])
+            check_call(cmd)
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin']
     unittest.main()
 
