@@ -17,7 +17,7 @@ def main():
         include_package_data=True,
         entry_points={
             'console_scripts': [
-                'epik = bin.epik:main',
+                'EpiK = bin.EpiK:main',
             ]},
         install_requires=['numpy', 'pandas', 'sklearn',
                           'torch', 'gpytorch', 'tqdm'],
