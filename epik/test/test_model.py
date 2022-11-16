@@ -10,25 +10,25 @@ from os.path import join
 from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
-from epik.src.settings import TEST_DATA_DIR
+from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.kernel import SkewedVCKernel
 from epik.src.model import EpiK
 from scipy.stats.stats import pearsonr
 from epik.src.utils import seq_to_one_hot
+from subprocess import check_call
 
 
 def get_smn1_data(n, seed=0):
     np.random.seed(seed)
     data = pd.read_csv(join(TEST_DATA_DIR, 'smn1data.csv'),
                            header=None, index_col=0, names=['m', 'std'])
+    data['var'] = data['std'].values ** 2
     data = data.loc[[x[3] == 'U' for x in data.index], :]
     data.index = [x[:3] + x[4:] for x in data.index]
     
     alleles = ['A', 'C', 'G', 'U']
     X, y = seq_to_one_hot(data.index.values, alleles=alleles), data['m'].values
-    ymean, ystd = y.mean(), y.std()
-    y = (y -ymean) / ystd
-    y_var = (data['std'].values / ystd) ** 2
+    y_var = data['var']
     
     ps = np.random.uniform(size=data.shape[0])
     p = n / data.shape[0]
@@ -43,6 +43,7 @@ def get_smn1_data(n, seed=0):
     ps = np.random.uniform(size=test_x.shape[0])
     p = 1000 / ps.shape[0]
     test_x, test_y = test_x[ps<p], test_y[ps<p]
+    
     return(train_x, train_y, test_x, test_y, train_y_var)
 
 
@@ -170,8 +171,31 @@ class ModelsTests(unittest.TestCase):
         test_rho = pearsonr(test_ypred, test_y)[0]
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
+    
+    def test_epik_bin(self):
+        data_fpath = join(TEST_DATA_DIR, 'smn1.train.csv')
+        xpred_fpath = join(TEST_DATA_DIR, 'smn1.test.txt')
+        out_fpath = join(TEST_DATA_DIR, 'smn1.pred_test.csv')
+        bin_fpath = join(BIN_DIR, 'EpiK.py')
+        
+        # Check help
+        cmd = [sys.executable, bin_fpath, '-h']
+        check_call(cmd)
+        
+        # Model fitting
+        cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath, '-n', '50']
+        check_call(cmd)
+        
+        # Predict test sequences
+        cmd = cmd.extend(['-p', xpred_fpath])
+        check_call(cmd)
+        
+        # Predict test sequences with variable ps
+        cmd = cmd.extend(['--train_p'])
+        check_call(cmd)
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_smn1']
+    import sys;sys.argv = ['', 'ModelsTests']
     unittest.main()
+
