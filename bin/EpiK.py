@@ -108,6 +108,19 @@ def main():
               n_iter=n_iter, learning_rate=learning_rate,
               partition_size=partition_size)
     
+    # Write output parameters
+    if kernel == 'VC':
+        ps, lambdas = kernel.p, kernel.lambdas
+        if gpu:
+            ps, lambdas = ps.cpu(), lambdas.cpu()
+        ps = pd.DataFrame(ps.detach().numpy(), columns=alleles)
+        
+        prefix = '.'.join(out_fpath.split('.')[:-1])
+        ps.to_csv('{}.p.csv'.format(prefix))
+        with open('{}.lambdas.csv'.format(prefix), 'w') as fhand:
+            for l in lambdas:
+                fhand.write('{}\n'.format(l))
+    
     # Predict phenotype in new sequences 
     if pred_seqs.shape[0] > 0:
         log.write('Obtain phenotypic predictions')
