@@ -112,15 +112,20 @@ def main():
               partition_size=partition_size)
     
     # Write output parameters
-    if kernel == 'VC':
+    if hasattr(kernel, 'p'):
         ps, lambdas = kernel.p, kernel.lambdas
         if gpu:
             ps, lambdas = ps.cpu(), lambdas.cpu()
-        ps = pd.DataFrame(ps.detach().numpy(), columns=alleles)
-        
+        ps = pd.DataFrame(ps.detach().numpy(), columns=np.append(alleles, '*'))
         prefix = '.'.join(out_fpath.split('.')[:-1])
         ps.to_csv('{}.p.csv'.format(prefix))
-        with open('{}.lambdas.csv'.format(prefix), 'w') as fhand:
+    
+    if hasattr(kernel, 'lambdas'):
+        lambdas =  kernel.lambdas
+        if gpu:
+            lambdas = lambdas.cpu()    
+        prefix = '.'.join(out_fpath.split('.')[:-1])
+        with open('{}.lambdas.txt'.format(prefix), 'w') as fhand:
             for l in lambdas:
                 fhand.write('{}\n'.format(l))
     
