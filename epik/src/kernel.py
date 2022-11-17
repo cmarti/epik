@@ -143,16 +143,18 @@ class SkewedVCKernel(SequenceKernel):
     def log_p(self, value):
         return self._set_log_p(value)
     
-    def _forward(self, x1, x2, lambdas, log_p):
+    def _forward(self, x1, x2, lambdas, log_p, diag=False):
         log_p = self.normalize_log_p(log_p)
         log_p_flat = torch.flatten(log_p[:, :-1])
         c_ki = torch.matmul(self.coeffs, lambdas)
 
         # Init first power
         M = torch.diag(log_p_flat)
-        kernel = c_ki[0] * torch.exp(-torch.matmul(torch.matmul(x1, M), x2.T))
-        kernel[torch.matmul(x1, x2.T) < self.l] = 0
-        torch.cuda.empty_cache()
+        if diag:
+            kernel = c_ki[0] * torch.exp(-(torch.matmul(x1, M) * x2).sum(1))
+        else:
+            kernel = c_ki[0] * torch.exp(-torch.matmul(torch.matmul(x1, M), x2.T))
+            kernel[torch.matmul(x1, x2.T) < self.l] = 0
         
         # Add the remaining powers        
         for power in range(1, self.s):
@@ -160,12 +162,15 @@ class SkewedVCKernel(SequenceKernel):
                                        torch.zeros_like(log_p_flat)], 1)
             log_factors = torch.logsumexp(log_factors, 1)
             M = torch.diag(log_factors)
-            kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + torch.matmul(torch.matmul(x1, M), x2.T))
-        torch.cuda.empty_cache()
+            if diag:
+                kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + (torch.matmul(x1, M) * x2).sum(1))
+            else:
+                kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + torch.matmul(torch.matmul(x1, M), x2.T))
         return(kernel)
-
+    
     def forward(self, x1, x2, diag=False, **params):
-        kernel = self._forward(x1, x2, lambdas=self.lambdas, log_p=self.log_p)
+        kernel = self._forward(x1, x2, lambdas=self.lambdas, log_p=self.log_p,
+                               diag=diag)
         return(kernel)
 
 

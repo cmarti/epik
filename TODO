@@ -1,4 +1,5 @@
 - Implement regular VC kernel
 - Implement VC kernel with exponential decay variant: use generating function
 - Create binary for sending jobs to cluster 
-- Implement option to load directly all kernel parameters and store them easily in the kernel class: read and write params
+- Implement option to load directly all kernel parameters and store them easily in the kernel class: read and write 
+- Add kernels: Linear, Matern, RQ
