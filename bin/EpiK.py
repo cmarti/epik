@@ -97,7 +97,7 @@ def main():
     elif kernel == 'RQ':
         kernel = ScaleKernel(RQKernel())
     elif kernel == 'linear':
-        kernel = ScaleKernel(LinearKernel)
+        kernel = ScaleKernel(LinearKernel())
     elif kernel == 'VC':
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length,
