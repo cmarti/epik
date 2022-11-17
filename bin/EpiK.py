@@ -7,6 +7,9 @@ import torch
 
 from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
+from gpytorch.kernels.matern_kernel import MaternKernel
+from gpytorch.kernels.rq_kernel import RQKernel
+from gpytorch.kernels.linear_kernel import LinearKernel
 
 from epik.src.kernel import SkewedVCKernel
 from epik.src.model import EpiK
@@ -26,7 +29,7 @@ def main():
 
     options_group = parser.add_argument_group('Kernel options')
     options_group.add_argument('-k', '--kernel', default='VC',
-                               help='Kernel function to use (VC, Diploid, RBF)')
+                               help='Kernel function to use (VC, Diploid, RBF, RQ, matern, linear)')
     help_msg = 'Standard deviation of deviations of variance compoments from exponential decay'
     options_group.add_argument('--tau', default=0.2, type=float, help=help_msg)
     options_group.add_argument('--train_p', default=False, action='store_true',
@@ -89,6 +92,12 @@ def main():
     # Get kernel
     if kernel == 'RBF':
         kernel = ScaleKernel(RBFKernel())
+    elif kernel == 'matern':
+        kernel = ScaleKernel(MaternKernel())
+    elif kernel == 'RQ':
+        kernel = ScaleKernel(RQKernel())
+    elif kernel == 'linear':
+        kernel = ScaleKernel(LinearKernel)
     elif kernel == 'VC':
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length,
