@@ -35,6 +35,8 @@ def main():
     comp_group = parser.add_argument_group('Computational options')
     comp_group.add_argument('--gpu', default=False, action='store_true',
                             help='Use GPU-acceleration')
+    comp_group.add_argument('-m', '--n_devices', default=1, type=int,
+                            help='Number of GPUs to use')
     comp_group.add_argument('-s', '--partition_size', default=None, type=int,
                             help='Use kernel partitioning on GPU of this size')
     comp_group.add_argument('-n', '--n_iter', default=200, type=int,
@@ -56,6 +58,7 @@ def main():
     tau = parsed_args.tau
     
     gpu = parsed_args.gpu
+    n_devices = parsed_args.n_devices
     n_iter = parsed_args.n_iter
     learning_rate = parsed_args.learning_rate
     partition_size = parsed_args.partition_size
@@ -100,7 +103,7 @@ def main():
     # Create model
     output_device = torch.device('cuda:0') if gpu else None
     model = EpiK(kernel, likelihood_type='Gaussian',
-                 output_device=output_device, n_devices=1)
+                 output_device=output_device, n_devices=n_devices)
 
     # Fit by evidence maximization
     log.write('Estimate variance components by maximizing the evidence')
