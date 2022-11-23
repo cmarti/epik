@@ -7,7 +7,7 @@ from torch.nn import Parameter
 from gpytorch.kernels.kernel import Kernel
 from gpytorch.priors.torch_priors import NormalPrior
 
-from epik.src.utils import to_device
+from epik.src.utils import to_device, get_tensor
 from gpytorch.constraints.constraints import LessThan
 
 
@@ -46,7 +46,7 @@ class SequenceKernel(Kernel):
                 B[power, k] = norm_factor * (-1) ** (power) * p
         return(B)
     
-    def get_theta_to_log_lda_matrix(self):
+    def get_log_lda_to_theta_matrix(self):
         matrix = torch.zeros((self.l, self.l))
         matrix[0, 0] = 1
         matrix[1, 0] = -1
@@ -55,16 +55,25 @@ class SequenceKernel(Kernel):
             matrix[i, i-2] = -1
             matrix[i, i-1] = 2
             matrix[i, i] = -1
-        return(torch.inverse(matrix))
+        return(matrix) 
+    
+    def get_theta_to_log_lda_matrix(self):
+        return(torch.inverse(self.get_log_lda_to_theta_matrix()))
 
 
 class SkewedVCKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, train_p=True, tau=0.2,
+    def __init__(self, n_alleles, seq_length, tau=0.2,
+                 train_p=True, train_lambdas=True,
+                 starting_p=None, starting_log_lambdas=None,
                  **kwargs):
         
         super().__init__(n_alleles, seq_length, **kwargs)
         
         self.train_p = train_p
+        self.train_lambdas = train_lambdas
+        self.starting_p = starting_p 
+        self.starting_log_lambdas = starting_log_lambdas
+        
         self.define_aux_variables()
         self.define_kernel_params()
         self.define_priors(tau)
@@ -76,6 +85,8 @@ class SkewedVCKernel(SequenceKernel):
     def define_aux_variables(self):
         self.q_powers = torch.pow(self.q, torch.arange(self.s))
         self.coeffs = Parameter(self.calc_polynomial_coeffs(), requires_grad=False)
+        self.log_lda_to_theta_m = Parameter(self.get_log_lda_to_theta_matrix(),
+                                            requires_grad=False)
         self.theta_to_log_lda_m = Parameter(self.get_theta_to_log_lda_matrix(),
                                             requires_grad=False)
         
@@ -88,12 +99,19 @@ class SkewedVCKernel(SequenceKernel):
     def define_kernel_params(self):
         constraints = {}
         
-        log_p0 = torch.zeros(*self.batch_shape, self.l, self.alpha+1)
-        params = {'raw_log_p': Parameter(log_p0, requires_grad=self.train_p)}
+        if self.starting_p is None:
+            starting_logp = torch.zeros(*self.batch_shape, self.l, self.alpha+1)
+        else:
+            starting_logp = get_tensor(torch.log(self.starting_p))
+        params = {'raw_log_p': Parameter(starting_logp, requires_grad=self.train_p)}
         
-        raw_theta0 = torch.zeros(self.l)
-        raw_theta0[0:2] = -1
-        params['raw_theta'] = Parameter(raw_theta0)
+        if self.starting_log_lambdas is None:
+            raw_theta0 = torch.zeros(self.l)
+            raw_theta0[0:2] = -1
+        else:
+            raw_theta0 = torch.matmul(self.log_lda_to_theta_m,
+                                      get_tensor(self.starting_log_lambdas))
+        params['raw_theta'] = Parameter(raw_theta0, requires_grad=self.train_lambdas)
         
         self.register_params(params=params, constraints=constraints)
     
