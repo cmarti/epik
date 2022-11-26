@@ -43,13 +43,50 @@ class KernelsTests(unittest.TestCase):
         # k=2
         lambdas = torch.tensor([0, 0, 1], dtype=torch.float32)
         cov = kernel._forward(x, x, lambdas, log_p).numpy()
-        k1 = np.array([[1, -1, -1, 1],
+        k2 = np.array([[1, -1, -1, 1],
                        [-1, 1, 1, -1],
                        [-1, 1, 1, -1],
                        [1, -1, -1, 1]], dtype=np.float32)
-        assert(np.abs(cov - k1).mean() < 1e-4)
+        assert(np.abs(cov - k2).mean() < 1e-4)
+    
+        # Longer seqs
+        kernel = SkewedVCKernel(n_alleles=2, seq_length=5)
+        log_p = torch.log(torch.tensor([[0.5, 0.5],
+                                        [0.5, 0.5],
+                                        [0.5, 0.5],
+                                        [0.5, 0.5],
+                                        [0.5, 0.5],
+                                        [0.5, 0.5]], dtype=torch.float32))
+        x = torch.tensor([[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+                          [0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+                          [0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0],
+                          [0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0],
+                          [0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0],
+                          [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0],
+                          [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1]], dtype=torch.float32)
+
+        lambdas = torch.tensor([0, 1, 0, 0, 0, 0], dtype=torch.float32)
+        cov = kernel._forward(x[:1], x[1:], lambdas, log_p).numpy()
+        assert(np.allclose(cov[0][:-1] - cov[0][1:], 2, atol=0.01))
         
-        
+        # More than 2 alleles
+        kernel = SkewedVCKernel(n_alleles=3, seq_length=2)
+        log_p = torch.log(torch.tensor([[0.33, 0.33, 0.33],
+                                        [0.33, 0.33, 0.33]], dtype=torch.float32))
+        x = torch.tensor([[1, 0, 0, 1, 0, 0],
+                          [0, 1, 0, 1, 0, 0],
+                          [0, 0, 1, 1, 0, 0],
+                          [1, 0, 0, 0, 1, 0],
+                          [0, 1, 0, 0, 1, 0],
+                          [0, 0, 1, 0, 1, 0],
+                          [1, 0, 0, 0, 0, 1],
+                          [0, 1, 0, 0, 0, 1],
+                          [0, 0, 1, 0, 0, 1]], dtype=torch.float32)
+
+        lambdas = torch.tensor([0, 1, 0], dtype=torch.float32)
+        cov = kernel._forward(x[:1], x, lambdas, log_p).numpy()
+        k1 = np.array([4, 1, 1, 1, -2, -2, 1, -2, -2])
+        assert(np.abs(cov[0] - k1).mean() < 1e-4)
         
 if __name__ == '__main__':
     import sys;sys.argv = ['', 'KernelsTests']
