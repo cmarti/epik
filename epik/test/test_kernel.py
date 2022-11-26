@@ -101,6 +101,17 @@ class KernelsTests(unittest.TestCase):
         cov = kernel._forward(x, x, lambdas, log_p, diag=False)
         var = kernel._forward(x, x, lambdas, log_p, diag=True)
         assert(np.allclose(cov.numpy().diagonal(), var.numpy()))
+        
+    def test_kernel_params(self):
+        kernel = SkewedVCKernel(n_alleles=2, seq_length=2,
+                                train_p=False, train_lambdas=False,
+                                starting_log_lambdas=[0, -10])
+        x = torch.tensor([[1, 0, 1, 0],
+                          [0, 1, 1, 0],
+                          [1, 0, 0, 1],
+                          [0, 1, 0, 1]], dtype=torch.float32)
+        cov = kernel.forward(x[:1], x)
+        assert(np.allclose(cov[0], [4, 1, 1, -2], atol=0.01))
 
         
 if __name__ == '__main__':

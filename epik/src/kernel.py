@@ -124,14 +124,6 @@ class SkewedVCKernel(SequenceKernel):
                             lambda module: module.raw_theta[0])
 
     @property
-    def log_lda_alpha(self):
-        return(self.raw_log_lda_alpha)
-    
-    @property
-    def log_lda_beta(self):
-        return(self.raw_log_lda_beta_constraint.transform(self.raw_log_lda_beta))
-
-    @property
     def log_lda(self):
         return(torch.matmul(self.theta_to_log_lda_m, self.raw_theta))
     
