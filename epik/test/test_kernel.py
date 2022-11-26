@@ -19,8 +19,8 @@ class KernelsTests(unittest.TestCase):
     
     def test_skewed_vc_kernel(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
-        log_p = torch.log(torch.tensor([[0.5, 0.5],
-                                        [0.5, 0.5]], dtype=torch.float32))
+        log_p = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
+                                        [0.5, 0.5, 0.00001]], dtype=torch.float32))
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
@@ -51,12 +51,12 @@ class KernelsTests(unittest.TestCase):
     
         # Longer seqs
         kernel = SkewedVCKernel(n_alleles=2, seq_length=5)
-        log_p = torch.log(torch.tensor([[0.5, 0.5],
-                                        [0.5, 0.5],
-                                        [0.5, 0.5],
-                                        [0.5, 0.5],
-                                        [0.5, 0.5],
-                                        [0.5, 0.5]], dtype=torch.float32))
+        log_p = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
+                                        [0.5, 0.5, 0.00001],
+                                        [0.5, 0.5, 0.00001],
+                                        [0.5, 0.5, 0.00001],
+                                        [0.5, 0.5, 0.00001],
+                                        [0.5, 0.5, 0.00001]], dtype=torch.float32))
         x = torch.tensor([[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
                           [0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
                           [0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0],
@@ -71,8 +71,8 @@ class KernelsTests(unittest.TestCase):
         
         # More than 2 alleles
         kernel = SkewedVCKernel(n_alleles=3, seq_length=2)
-        log_p = torch.log(torch.tensor([[0.33, 0.33, 0.33],
-                                        [0.33, 0.33, 0.33]], dtype=torch.float32))
+        log_p = torch.log(torch.tensor([[0.33, 0.33, 0.33, 0.00001],
+                                        [0.33, 0.33, 0.33, 0.00001]], dtype=torch.float32))
         x = torch.tensor([[1, 0, 0, 1, 0, 0],
                           [0, 1, 0, 1, 0, 0],
                           [0, 0, 1, 1, 0, 0],
@@ -87,6 +87,21 @@ class KernelsTests(unittest.TestCase):
         cov = kernel._forward(x[:1], x, lambdas, log_p).numpy()
         k1 = np.array([4, 1, 1, 1, -2, -2, 1, -2, -2])
         assert(np.abs(cov[0] - k1).mean() < 1e-4)
+        
+    def test_skewed_vc_kernel_diag(self):
+        kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
+        log_p = torch.log(torch.tensor([[0.45, 0.45, 0.1],
+                                        [0.45, 0.45, 0.1]], dtype=torch.float32))
+        x = torch.tensor([[1, 0, 1, 0],
+                          [0, 1, 1, 0],
+                          [1, 0, 0, 1],
+                          [0, 1, 0, 1]], dtype=torch.float32)
+
+        lambdas = torch.tensor([1, 0.5, 0.1], dtype=torch.float32)
+        cov = kernel._forward(x, x, lambdas, log_p, diag=False)
+        var = kernel._forward(x, x, lambdas, log_p, diag=True)
+        assert(np.allclose(cov.numpy().diagonal(), var.numpy()))
+
         
 if __name__ == '__main__':
     import sys;sys.argv = ['', 'KernelsTests']

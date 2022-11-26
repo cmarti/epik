@@ -1,38 +1,50 @@
 #!/usr/bin/env python
 import unittest
 
+import torch
 import pandas as pd
 import numpy as np
-import torch
 
 from os.path import join
+from subprocess import check_call
+from tempfile import NamedTemporaryFile
 
+from scipy.stats.stats import pearsonr
 from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
-from epik.src.settings import TEST_DATA_DIR
+from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.kernel import SkewedVCKernel
 from epik.src.model import EpiK
-from scipy.stats.stats import pearsonr
-from epik.src.utils import seq_to_one_hot
+from epik.src.utils import seq_to_one_hot, get_tensor
 
 
 def get_smn1_data(n, seed=0):
     np.random.seed(seed)
     data = pd.read_csv(join(TEST_DATA_DIR, 'smn1data.csv'),
                            header=None, index_col=0, names=['m', 'std'])
+    data['var'] = data['std'].values ** 2
     data = data.loc[[x[3] == 'U' for x in data.index], :]
     data.index = [x[:3] + x[4:] for x in data.index]
     
-    p = n / data.shape[0]
-    ps = np.random.uniform(size=data.shape[0])
-    test = data.loc[ps < p, :]
-    train = data.loc[ps > (1 - p), :]
-    
     alleles = ['A', 'C', 'G', 'U']
-    train_x, train_y = seq_to_one_hot(train.index.values, alleles=alleles), train['m'].values
-    test_x, test_y = seq_to_one_hot(test.index.values, alleles=alleles), test['m'].values
-    train_y_var = (train['std'] ** 2).values
+    X, y = seq_to_one_hot(data.index.values, alleles=alleles), data['m'].values
+    y_var = data['var']
+    
+    ps = np.random.uniform(size=data.shape[0])
+    p = n / data.shape[0]
+    
+    train = ps < p
+    train_x, train_y = X[train, :], y[train]
+    train_y_var = y_var[train] 
+
+    test = ps > (1 - p)
+    test_x, test_y = X[test, :], y[test]
+    
+    ps = np.random.uniform(size=test_x.shape[0])
+    p = 1000 / ps.shape[0]
+    test_x, test_y = test_x[ps<p], test_y[ps<p]
+    
     return(train_x, train_y, test_x, test_y, train_y_var)
 
 
@@ -117,6 +129,26 @@ class ModelsTests(unittest.TestCase):
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+    
+    def test_epik_smn1_prediction(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
+        
+        starting_log_lambdas = get_tensor([-1.01, -2.02, -3.04, -4.07, -5.11, -6.16, -7.22])
+        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, tau=1,
+                                train_p=False, train_lambdas=False,
+                                starting_log_lambdas=starting_log_lambdas)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        model.fit(train_x, train_y, y_var=train_y_var, n_iter=0)
+        
+        train_ypred = model.predict(train_x).detach().numpy()
+        test_ypred = model.predict(test_x).detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
@@ -128,7 +160,7 @@ class ModelsTests(unittest.TestCase):
         model = EpiK(kernel, likelihood_type='Gaussian',
                      output_device=output_device)
         model.fit(train_x, train_y, y_var=train_y_var,
-                  n_iter=100, learning_rate=0.02)
+                  n_iter=100, learning_rate=0.01)
         
         train_ypred = model.predict(train_x).cpu().detach().numpy()
         test_ypred = model.predict(test_x).cpu().detach().numpy()
@@ -159,8 +191,37 @@ class ModelsTests(unittest.TestCase):
         test_rho = pearsonr(test_ypred, test_y)[0]
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
+    
+    def test_epik_bin(self):
+        bin_fpath = join(BIN_DIR, 'EpiK.py')
+        data_fpath = join(TEST_DATA_DIR, 'smn1.train.csv')
+        xpred_fpath = join(TEST_DATA_DIR, 'smn1.test.txt')
+        
+        with NamedTemporaryFile() as fhand:
+            out_fpath = fhand.name
+        
+            # Check help
+            cmd = [sys.executable, bin_fpath, '-h']
+            check_call(cmd)
+            
+            # Model fitting
+            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath, '-n', '50']
+            check_call(cmd)
+            
+            # Predict test sequences
+            cmd.extend(['-p', xpred_fpath])
+            check_call(cmd)
+            
+            # Predict test sequences with variable ps
+            cmd.extend(['--train_p'])
+            check_call(cmd)
+            
+            # Predict test sequences with variable ps using GPU
+            cmd.extend(['--gpu'])
+            check_call(cmd)
         
         
 if __name__ == '__main__':
     import sys;sys.argv = ['', 'ModelsTests']
     unittest.main()
+

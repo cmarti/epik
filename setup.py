@@ -16,7 +16,9 @@ def main():
         packages=find_packages(),
         include_package_data=True,
         entry_points={
-            'console_scripts': []},
+            'console_scripts': [
+                'EpiK = bin.EpiK:main',
+            ]},
         install_requires=['numpy', 'pandas', 'sklearn',
                           'torch', 'gpytorch', 'tqdm'],
         platforms='ALL',
