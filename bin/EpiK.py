@@ -11,7 +11,7 @@ from gpytorch.kernels.matern_kernel import MaternKernel
 from gpytorch.kernels.rq_kernel import RQKernel
 from gpytorch.kernels.linear_kernel import LinearKernel
 
-from epik.src.kernel import SkewedVCKernel
+from epik.src.kernel import SkewedVCKernel, VCKernel
 from epik.src.model import EpiK
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 
@@ -100,8 +100,11 @@ def main():
         kernel = ScaleKernel(LinearKernel())
     elif kernel == 'VC':
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
+        kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length, tau=tau)
+    elif kernel == 'sVC':
+        n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length,
-                                train_p=train_p, tau=tau)
+                                train_p=train_p, tau=tau, q=0.5)
     elif kernel == 'Diploid':
         msg = 'Diploid kernel Not implemented yet'
         raise ValueError(msg)
