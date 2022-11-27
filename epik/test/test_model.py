@@ -15,7 +15,7 @@ from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
-from epik.src.kernel import SkewedVCKernel
+from epik.src.kernel import SkewedVCKernel, VCKernel
 from epik.src.model import EpiK
 from epik.src.utils import seq_to_one_hot, get_tensor
 
@@ -117,10 +117,27 @@ class ModelsTests(unittest.TestCase):
         assert(train_rho > 0.7)
         assert(test_rho > 0.6)
     
-    def test_epik_smn1(self):
+    def test_epik_skewed_vc_smn1(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         
         kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=1)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        model.fit(train_x, train_y, y_var=train_y_var,
+                  n_iter=100, learning_rate=0.02)
+        
+        train_ypred = model.predict(train_x).detach().numpy()
+        test_ypred = model.predict(test_x).detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+        
+    def test_epik_vc_smn1(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        
+        kernel = VCKernel(n_alleles=4, seq_length=7, tau=0.2)
         model = EpiK(kernel, likelihood_type='Gaussian')
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.02)
@@ -149,6 +166,8 @@ class ModelsTests(unittest.TestCase):
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        print(train_rho, test_rho)
         
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
