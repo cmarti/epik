@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 
-import torch.nn.functional as F
 from itertools import combinations
 
 from torch.nn import Parameter
@@ -79,12 +78,7 @@ class VCKernel(SequenceKernel):
         self.define_kernel_params()
         self.define_priors(tau)
 
-    def calc_eigenvalues(self):
-        lambdas = self.alpha * torch.arange(self.s)
-        return(lambdas)
-
     def define_aux_variables(self):
-        self.coeffs = Parameter(self.calc_polynomial_coeffs(), requires_grad=False)
         self.log_lda_to_theta_m = Parameter(self.get_log_lda_to_theta_matrix(),
                                             requires_grad=False)
         self.theta_to_log_lda_m = Parameter(self.get_theta_to_log_lda_matrix(),
@@ -190,9 +184,12 @@ class SkewedVCKernel(SequenceKernel):
         constraints = {}
         
         if self.starting_p is None:
-            starting_logp = torch.zeros(*self.batch_shape, self.l, self.alpha+1)
+            starting_logp = np.zeros((self.l, self.alpha + 1))
+            starting_logp[:, -1] = -10
+            starting_logp = get_tensor(starting_logp)
         else:
             starting_logp = get_tensor(torch.log(self.starting_p))
+            starting_logp[:, -1] = -10.
         params = {'raw_log_p': Parameter(starting_logp, requires_grad=self.train_p)}
         
         if self.starting_log_lambdas is None:
@@ -274,127 +271,6 @@ class SkewedVCKernel(SequenceKernel):
                                diag=diag)
         return(kernel)
     
-
-class JuannanKernel(SequenceKernel):
-    is_stationary = True
-    def __init__(self, alpha, l, train_p=True, q=0.7,
-                log_lda_prior=None, log_lda_constraint=None, 
-                log_p_prior=None, log_p_constraint=None,
-                starting_log_lda=None, train_lambdas=True,
-                starting_p=None, starting_log_lambdas=None, tau=0.2,
-                **kwargs):
-        super().__init__(alpha, l, q=q, **kwargs)
-        
-        # register the raw parameter
-        self.train_p = train_p
-        self.train_lambdas = train_lambdas
-        self.starting_p = starting_p 
-        self.starting_log_lambdas = starting_log_lambdas
-        
-        self.define_aux_variables()
-        self.define_kernel_params()
-        self.define_priors(tau)
-    
-    def calc_eigenvalues(self):
-        lambdas = get_tensor(np.array([self.q**k for k in range(self.s)]))
-        return(lambdas)
-
-    def define_aux_variables(self):
-        self.odds = torch.nn.Parameter(torch.tensor([self.q**t/(1 - self.q**t) for t in range(1, self.s)]), requires_grad=False)
-        self.scaling_factors = torch.tensor([(1 - self.q**t)**self.l for t in range(self.l+1)])
-        self.scaling_factors[0] = 1
-        self.scaling_factors = torch.nn.Parameter(self.scaling_factors, requires_grad=False)
-        
-        
-        self.q_powers = torch.pow(self.q, torch.arange(self.s))
-        self.coeffs = Parameter(self.calc_polynomial_coeffs(), requires_grad=False)
-        self.log_lda_to_theta_m = Parameter(self.get_log_lda_to_theta_matrix(),
-                                            requires_grad=False)
-        self.theta_to_log_lda_m = Parameter(self.get_theta_to_log_lda_matrix(),
-                                            requires_grad=False)
-        
-        lsf = self.l * torch.log(1 - self.q_powers)
-        self.log_scaling_factors = Parameter(lsf, requires_grad=False)
-        
-        log_odds = torch.log(self.q_powers) - torch.log(1 - self.q_powers)
-        self.log_odds = Parameter(log_odds, requires_grad=False)
-    
-    def define_kernel_params(self):
-        constraints = {}
-        
-        if self.starting_p is None:
-            starting_logp = torch.zeros(*self.batch_shape, self.l, self.alpha+1)
-        else:
-            starting_logp = get_tensor(torch.log(self.starting_p))
-        params = {'raw_log_p': Parameter(starting_logp, requires_grad=self.train_p)}
-        
-        if self.starting_log_lambdas is None:
-            raw_theta0 = torch.zeros(self.l)
-            raw_theta0[0:2] = -1
-        else:
-            raw_theta0 = torch.matmul(self.log_lda_to_theta_m,
-                                      get_tensor(self.starting_log_lambdas))
-        params['raw_theta'] = Parameter(raw_theta0, requires_grad=self.train_lambdas)
-        
-        self.register_params(params=params, constraints=constraints)
-    
-    def define_priors(self, tau):
-        self.register_prior("raw_theta_prior", NormalPrior(0, tau),
-                            lambda module: module.raw_theta[2:])
-        self.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
-                            lambda module: module.raw_theta[1])
-        self.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
-                            lambda module: module.raw_theta[0])
-
-    @property
-    def log_lda(self):
-        return(torch.matmul(self.theta_to_log_lda_m, self.raw_theta))
-    
-    @property
-    def lambdas(self):
-        lambdas = to_device(torch.zeros(self.s), 
-                            output_device=self.log_lda.get_device())
-        lambdas[1:] = torch.exp(self.log_lda)
-        return(lambdas)
-    
-    @property
-    def log_p(self):
-        return(self.raw_log_p)
-
-    def normalize_log_p(self, log_p):
-        return(log_p - torch.logsumexp(log_p, 1).unsqueeze(1))
-    
-    @property
-    def p(self):
-        return(torch.exp(self.normalize_log_p(self.log_p)))
-
-    def forward(self, x1, x2, diag=False, **params):
-        # construct masks used for calculate rates
-        masks = torch.mul(torch.unsqueeze(x1, 1), torch.unsqueeze(x2, 0))
-        ps = torch.softmax(self.log_p, axis=1)[:, :-1]
-        
-        pi = x2*(torch.flatten(ps))
-        pi[pi==0.] = 1
-        pi = torch.prod(pi, 1)
-        Dpi = torch.diag(pi)        
-
-        rates = self.odds.unsqueeze(1).unsqueeze(-1)  + torch.unsqueeze(ps, 0)
-        rates = rates/ps
-        rates = torch.flatten(rates, start_dim=1)
-        log_rates = torch.log(rates)
-        
-        out = torch.mul(masks.unsqueeze(2), log_rates)
-        out = torch.flatten(out, start_dim=3)
-
-        powers_nz = torch.exp(torch.sum(out, -1))
-        power_0 = F.relu(torch.sum(masks, -1) - self.l + 1).matmul(torch.linalg.inv(Dpi))
-        powers = torch.cat([power_0.unsqueeze(-1), powers_nz], dim=-1)
-        powers = powers*self.scaling_factors
-        
-        weights = torch.matmul(self.coeffs, self.lambdas)
-        k = torch.sum(torch.mul(powers, weights), -1)
-        return k
-
 
 class DiploidKernel(SequenceKernel):
     def __init__(self, seq_length, **kwargs):

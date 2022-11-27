@@ -4,7 +4,8 @@ import unittest
 import numpy as np
 import torch
 
-from epik.src.kernel import SkewedVCKernel
+from epik.src.kernel import SkewedVCKernel,  VCKernel
+from epik.src.utils import seq_to_one_hot, get_tensor
 
 
 class KernelsTests(unittest.TestCase):
@@ -16,6 +17,36 @@ class KernelsTests(unittest.TestCase):
         B = kernel.coeffs
         P = np.array(torch.matmul(B, V))
         assert(np.allclose(P, np.eye(3), atol=1e-4))
+    
+    def test_vc_kernel(self):
+        kernel = VCKernel(n_alleles=2, seq_length=2)
+        x = torch.tensor([[1, 0, 1, 0],
+                          [0, 1, 1, 0],
+                          [1, 0, 0, 1],
+                          [0, 1, 0, 1]], dtype=torch.float32)
+
+        # k=0        
+        lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
+        cov = kernel._forward(x, x, lambdas)
+        assert(np.allclose(cov, 1))
+        
+        # k=1        
+        lambdas = torch.tensor([0, 1, 0], dtype=torch.float32)
+        cov = kernel._forward(x, x, lambdas).numpy()
+        k1 = np.array([[2, 0, 0, -2],
+                       [0, 2, -2, 0],
+                       [0, -2, 2, 0],
+                       [-2, 0, 0, 2]], dtype=np.float32)
+        assert(np.abs(cov - k1).mean() < 1e-4)
+        
+        # k=2
+        lambdas = torch.tensor([0, 0, 1], dtype=torch.float32)
+        cov = kernel._forward(x, x, lambdas).numpy()
+        k2 = np.array([[1, -1, -1, 1],
+                       [-1, 1, 1, -1],
+                       [-1, 1, 1, -1],
+                       [1, -1, -1, 1]], dtype=np.float32)
+        assert(np.abs(cov - k2).mean() < 1e-4)
     
     def test_skewed_vc_kernel(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
@@ -110,8 +141,30 @@ class KernelsTests(unittest.TestCase):
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
                           [0, 1, 0, 1]], dtype=torch.float32)
-        cov = kernel.forward(x[:1], x)
-        assert(np.allclose(cov[0], [4, 1, 1, -2], atol=0.01))
+        cov = kernel.forward(x, x)
+        assert(np.allclose(cov[0], [2, 0, 0, -2], atol=0.01))
+        
+    def test_vc_kernels_variable_lengths(self):
+        alleles = ['A', 'B']
+        alpha = len(alleles)
+        for l in range(2, 8):
+            seqs = np.array(['A' * i + 'B' * (l-i) for i in range(l)])
+            train_x = seq_to_one_hot(seqs, alleles=alleles)
+            for i in range(l):
+                starting_log_lambdas = -10 * np.ones(l)
+                starting_log_lambdas[i] = 0
+                starting_log_lambdas = get_tensor(starting_log_lambdas)
+             
+                ker = SkewedVCKernel(alpha, l, q=0.7, tau=.1,
+                                     starting_log_lambdas=starting_log_lambdas)
+                cov1 = ker.forward(train_x, train_x).detach().numpy()
+                
+                ker = VCKernel(alpha, l, tau=.1,
+                               starting_log_lambdas=starting_log_lambdas)
+                cov2 = ker.forward(train_x, train_x).detach().numpy()
+                
+                mae = np.abs(cov1 - cov2).mean()
+                assert(np.allclose(mae, 0, atol=0.3))
 
         
 if __name__ == '__main__':
