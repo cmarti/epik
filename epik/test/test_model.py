@@ -120,7 +120,8 @@ class ModelsTests(unittest.TestCase):
     def test_epik_skewed_vc_smn1(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         
-        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=1)
+        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True,
+                                q=0.5, tau=1)
         model = EpiK(kernel, likelihood_type='Gaussian')
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.02)
@@ -166,8 +167,6 @@ class ModelsTests(unittest.TestCase):
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
-        
-        print(train_rho, test_rho)
         
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
