@@ -29,11 +29,11 @@ def main():
 
     options_group = parser.add_argument_group('Kernel options')
     options_group.add_argument('-k', '--kernel', default='VC',
-                               help='Kernel function to use (VC, Diploid, RBF, RQ, matern, linear)')
+                               help='Kernel function to use (VC, sVC, Diploid, RBF, RQ, matern, linear)')
     help_msg = 'Standard deviation of deviations of variance compoments from exponential decay'
     options_group.add_argument('--tau', default=0.2, type=float, help=help_msg)
     options_group.add_argument('--train_p', default=False, action='store_true',
-                               help='Allow different probabilities across sites and alleles in VC prior')
+                               help='Allow different probabilities across sites and alleles in sVC prior')
     
     comp_group = parser.add_argument_group('Computational options')
     comp_group.add_argument('--gpu', default=False, action='store_true',
