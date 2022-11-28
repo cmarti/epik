@@ -145,26 +145,26 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(cov[0], [2, 0, 0, -2], atol=0.01))
         
     def test_vc_kernels_variable_lengths(self):
-        alleles = ['A', 'B']
-        alpha = len(alleles)
-        for l in range(2, 8):
-            seqs = np.array(['A' * i + 'B' * (l-i) for i in range(l)])
-            train_x = seq_to_one_hot(seqs, alleles=alleles)
-            for i in range(l):
-                starting_log_lambdas = -10 * np.ones(l)
-                starting_log_lambdas[i] = 0
-                starting_log_lambdas = get_tensor(starting_log_lambdas)
-             
-                ker = SkewedVCKernel(alpha, l, q=0.7, tau=.1,
-                                     starting_log_lambdas=starting_log_lambdas)
-                cov1 = ker.forward(train_x, train_x).detach().numpy()
-                
-                ker = VCKernel(alpha, l, tau=.1,
-                               starting_log_lambdas=starting_log_lambdas)
-                cov2 = ker.forward(train_x, train_x).detach().numpy()
-                
-                mae = np.abs(cov1 - cov2).mean()
-                assert(np.allclose(mae, 0, atol=0.3))
+        for alleles in [['A', 'B'], ['A', 'B', 'C']]:
+            alpha = len(alleles)
+            for l in range(2, 8):
+                seqs = np.array(['A' * i + 'B' * (l-i) for i in range(l)])
+                train_x = seq_to_one_hot(seqs, alleles=alleles)
+                for i in range(l):
+                    starting_log_lambdas = -10 * np.ones(l)
+                    starting_log_lambdas[i] = 0
+                    starting_log_lambdas = get_tensor(starting_log_lambdas)
+                 
+                    ker = SkewedVCKernel(alpha, l, q=0.7, tau=.1,
+                                         starting_log_lambdas=starting_log_lambdas)
+                    cov1 = ker.forward(train_x, train_x).detach().numpy()
+                    
+                    ker = VCKernel(alpha, l, tau=.1,
+                                   starting_log_lambdas=starting_log_lambdas)
+                    cov2 = ker.forward(train_x, train_x).detach().numpy()
+                    
+                    mae = np.abs(cov1 - cov2).mean()
+                    assert(np.allclose(mae, 0, atol=1))
 
         
 if __name__ == '__main__':
