@@ -97,7 +97,7 @@ class VCKernel(SequenceKernel):
     def calc_w_kd(self, k, d):
         ss = 0
         for q in range(self.s):
-            ss += (-1)**q * (self.alpha-1)**(k-q) * comb(d,q) * comb(self.l-d,k-q)
+            ss += (-1.)**q * (self.alpha-1.)**(k-q) * comb(d,q) * comb(self.l-d,k-q)
         return(ss)
     
     def calc_krawchouk_matrix(self):
