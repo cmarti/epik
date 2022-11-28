@@ -63,6 +63,15 @@ class SequenceKernel(Kernel):
     
     def get_theta_to_log_lda_matrix(self):
         return(torch.inverse(self.get_log_lda_to_theta_matrix()))
+    
+    def inner_product(self, x1, x2, metric=None):
+        if metric is None:
+            return(torch.matmul(x1, x2.T))
+        else:
+            return(torch.matmul(torch.matmul(x1, metric), x2.T))
+
+    def calc_hamming_distance(self, x1, x2):
+        return(self.l - self.inner_product(x1, x2))
 
 
 class VCKernel(SequenceKernel):
@@ -137,7 +146,8 @@ class VCKernel(SequenceKernel):
 
     def _forward(self, x1, x2, lambdas, diag=False):
         w_d = torch.matmul(self.krawchouk_matrix, lambdas)
-        hamming_dist = (self.l - torch.matmul(x1, x2.T)).to(dtype=torch.long)
+        hamming_dist = self.calc_hamming_distance(x1.to(dtype=torch.long),
+                                                  x2.to(dtype=torch.long))
         kernel = w_d[hamming_dist]
         return(kernel)
     
@@ -251,7 +261,7 @@ class SkewedVCKernel(SequenceKernel):
         if diag:
             kernel = c_ki[0] * torch.exp(-(torch.matmul(x1, M) * x2).sum(1))
         else:
-            kernel = c_ki[0] * torch.exp(-torch.matmul(torch.matmul(x1, M), x2.T))
+            kernel = c_ki[0] * torch.exp(-self.inner_product(x1, x2, M))
             kernel[torch.matmul(x1, x2.T) < self.l] = 0
         
         # Add the remaining powers        
@@ -260,10 +270,13 @@ class SkewedVCKernel(SequenceKernel):
                                        torch.zeros_like(log_p_flat)], 1)
             log_factors = torch.logsumexp(log_factors, 1)
             M = torch.diag(log_factors)
+            
             if diag:
-                kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + (torch.matmul(x1, M) * x2).sum(1))
+                m = (torch.matmul(x1, M) * x2).sum(1)
             else:
-                kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + torch.matmul(torch.matmul(x1, M), x2.T))
+                m = self.inner_product(x1, x2, M)
+                
+            kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + m)
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):

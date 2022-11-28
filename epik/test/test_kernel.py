@@ -2,10 +2,13 @@
 import unittest
 
 import numpy as np
+import matplotlib.pyplot as plt
 import torch
 
 from epik.src.kernel import SkewedVCKernel,  VCKernel
 from epik.src.utils import seq_to_one_hot, get_tensor
+from epik.src.settings import TEST_DATA_DIR
+from os.path import join
 
 
 class KernelsTests(unittest.TestCase):
@@ -165,7 +168,39 @@ class KernelsTests(unittest.TestCase):
                     
                     mae = np.abs(cov1 - cov2).mean()
                     assert(np.allclose(mae, 0, atol=1))
-
+                    
+    def test_plot_vc_cov_d_function(self):
+        fig, axes = plt.subplots(1, 1, figsize=(5, 4))
+        
+        alleles = ['A', 'B']
+        alpha = len(alleles)
+        for l in range(2, 8):
+            seqs = np.array(['A' * i + 'B' * (l-i) for i in range(l)])
+            train_x = seq_to_one_hot(seqs, alleles=alleles)
+            
+            i = 0
+            starting_log_lambdas = -10 * np.ones(l)
+            starting_log_lambdas[i] = 0
+            starting_log_lambdas = get_tensor(starting_log_lambdas)
+         
+            ker = SkewedVCKernel(alpha, l, q=0.7, tau=.1,
+                                 starting_log_lambdas=starting_log_lambdas)
+            cov1 = ker.forward(train_x, train_x).detach().numpy()
+            
+            ker = VCKernel(alpha, l, tau=.1,
+                           starting_log_lambdas=starting_log_lambdas)
+            cov2 = ker.forward(train_x, train_x).detach().numpy()
+            
+            mae = np.abs(cov1 - cov2).mean()
+            
+            axes.plot(cov1[0], label='sVC({})'.format(l))
+            axes.plot(cov2[0], label='VC({})'.format(l), linestyle='--')
+            assert(np.allclose(mae, 0, atol=1))
+            
+        axes.legend()
+        axes.set(xlabel='Hamming distance', ylabel='Additive covariance')
+        fig.savefig(join(TEST_DATA_DIR, 'cov_dist.png'))
+        
         
 if __name__ == '__main__':
     import sys;sys.argv = ['', 'KernelsTests']
