@@ -92,7 +92,8 @@ class VCKernel(SequenceKernel):
                                             requires_grad=False)
         self.theta_to_log_lda_m = Parameter(self.get_theta_to_log_lda_matrix(),
                                             requires_grad=False)
-        self.krawchouk_matrix = self.calc_krawchouk_matrix()
+        self.krawchouk_matrix = Parameter(self.calc_krawchouk_matrix(),
+                                          requires_grad=False)
     
     def calc_w_kd(self, k, d):
         ss = 0
@@ -146,8 +147,7 @@ class VCKernel(SequenceKernel):
 
     def _forward(self, x1, x2, lambdas, diag=False):
         w_d = torch.matmul(self.krawchouk_matrix, lambdas)
-        hamming_dist = self.calc_hamming_distance(x1.to(dtype=torch.long),
-                                                  x2.to(dtype=torch.long))
+        hamming_dist = self.calc_hamming_distance(x1, x2).to(dtype=torch.long)
         kernel = w_d[hamming_dist]
         return(kernel)
     

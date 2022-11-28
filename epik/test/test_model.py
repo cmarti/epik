@@ -171,11 +171,29 @@ class ModelsTests(unittest.TestCase):
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
-    def test_epik_smn1_gpu(self):
+    def test_epik_smn1_skewed_vc_gpu(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         output_device = torch.device('cuda:0')
         
         kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True, tau=0.2)
+        model = EpiK(kernel, likelihood_type='Gaussian',
+                     output_device=output_device)
+        model.fit(train_x, train_y, y_var=train_y_var,
+                  n_iter=100, learning_rate=0.01)
+        
+        train_ypred = model.predict(train_x).cpu().detach().numpy()
+        test_ypred = model.predict(test_x).cpu().detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+    
+    def test_epik_smn1_vc_gpu(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
+        output_device = torch.device('cuda:0')
+        
+        kernel = VCKernel(n_alleles=4, seq_length=7, tau=0.2)
         model = EpiK(kernel, likelihood_type='Gaussian',
                      output_device=output_device)
         model.fit(train_x, train_y, y_var=train_y_var,
@@ -232,7 +250,7 @@ class ModelsTests(unittest.TestCase):
             check_call(cmd)
             
             # Predict test sequences with variable ps
-            cmd.extend(['--train_p'])
+            cmd.extend(['-k', 'sVC', '--train_p'])
             check_call(cmd)
             
             # Predict test sequences with variable ps using GPU
