@@ -90,7 +90,11 @@ def main():
     alleles = np.unique(np.hstack(config['alphabet']))
     X = seq_to_one_hot(seqs, alleles=alleles)
     y = data.values[:, 0]
-    y_var = data.values[:, 1] if data.shape[1] > 1 else None
+    if data.shape[1] > 1:
+        y_var = data.values[:, 1]
+        y_var[y_var < 0.0001] = 0.0001
+    else:
+        y_var =  None
       
     # Get kernel
     if kernel == 'RBF':
