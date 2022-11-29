@@ -11,7 +11,7 @@ from gpytorch.kernels.matern_kernel import MaternKernel
 from gpytorch.kernels.rq_kernel import RQKernel
 from gpytorch.kernels.linear_kernel import LinearKernel
 
-from epik.src.kernel import SkewedVCKernel, VCKernel
+from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel
 from epik.src.model import EpiK
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 
@@ -29,7 +29,7 @@ def main():
 
     options_group = parser.add_argument_group('Kernel options')
     options_group.add_argument('-k', '--kernel', default='VC',
-                               help='Kernel function to use (VC, sVC, Diploid, RBF, RQ, matern, linear)')
+                               help='Kernel function to use (VC, sVC, Exponential, Diploid, RBF, RQ, matern, linear)')
     help_msg = 'Standard deviation of deviations of variance compoments from exponential decay'
     options_group.add_argument('--tau', default=0.2, type=float, help=help_msg)
     options_group.add_argument('--q', default=None, type=float,
@@ -105,6 +105,11 @@ def main():
         kernel = ScaleKernel(RQKernel())
     elif kernel == 'linear':
         kernel = ScaleKernel(LinearKernel())
+    elif kernel == 'Exponential':
+        n_alleles, seq_length = np.max(config['n_alleles']), config['length']
+        kernel = ScaleKernel(ExponentialKernel(n_alleles=n_alleles,
+                                               seq_length=seq_length,
+                                               train_p=train_p))
     elif kernel == 'VC':
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length, tau=tau)

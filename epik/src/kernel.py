@@ -8,7 +8,7 @@ from gpytorch.kernels.kernel import Kernel
 from gpytorch.priors.torch_priors import NormalPrior
 
 from epik.src.utils import to_device, get_tensor
-from gpytorch.constraints.constraints import LessThan
+from gpytorch.constraints.constraints import LessThan, GreaterThan
 from scipy.special._basic import comb
 
 
@@ -64,14 +64,82 @@ class SequenceKernel(Kernel):
     def get_theta_to_log_lda_matrix(self):
         return(torch.inverse(self.get_log_lda_to_theta_matrix()))
     
-    def inner_product(self, x1, x2, metric=None):
+    def inner_product(self, x1, x2, metric=None, diag=False):
         if metric is None:
-            return(torch.matmul(x1, x2.T))
+            metric = torch.eye(x2.shape[1], dtype=x2.dtype, device=x2.device)
+            
+        if diag:
+            min_size = min(x1.shape[0], x2.shape[0])
+            return((torch.matmul(x1[:min_size, :], metric) * x2[:min_size, :]).sum(1))
         else:
-            return(torch.matmul(torch.matmul(x1, metric), x2.T))
+            return(torch.matmul(x1, torch.matmul(metric, x2.T)))
 
     def calc_hamming_distance(self, x1, x2):
         return(self.l - self.inner_product(x1, x2))
+
+
+class ExponentialKernel(SequenceKernel):
+    def __init__(self, n_alleles, seq_length,
+                 train_p=True, starting_p=None,
+                 starting_lengthscale=1.,
+                 **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        
+        self.train_p = train_p
+        self.starting_p = starting_p
+        self.starting_lengthscale = starting_lengthscale 
+        self.logn = seq_length * np.log(n_alleles)
+        
+        self.define_kernel_params()
+
+    def define_kernel_params(self):
+        if self.starting_p is None:
+            starting_logp = np.zeros((self.l, self.alpha + 1))
+            starting_logp[:, -1] = -10
+            starting_logp = get_tensor(starting_logp)
+        else:
+            starting_logp = get_tensor(torch.log(self.starting_p))
+            starting_logp[:, -1] = -10.
+        params = {'raw_log_p': Parameter(starting_logp, requires_grad=self.train_p),
+                  'raw_lengthscale': Parameter(get_tensor([self.starting_lengthscale]), requires_grad=True)}
+        constraints = {'raw_lengthscale': GreaterThan(0.)}
+        
+        self.register_params(params=params, constraints=constraints)
+    
+    @property
+    def log_p(self):
+        return(self.raw_log_p)
+    
+    @property
+    def lengthscale(self):
+        return(self.raw_lengthscale)
+
+    def normalize_log_p(self, log_p):
+        return(log_p - torch.logsumexp(log_p, 1).unsqueeze(1))
+    
+    @property
+    def p(self):
+        return(torch.exp(self.normalize_log_p(self.log_p)))
+
+    @log_p.setter
+    def log_p(self, value):
+        return self._set_log_p(value)
+    
+    @lengthscale.setter
+    def lengthscale(self, value):
+        return self._set_lengthscale(value)
+    
+    def _forward(self, x1, x2, lengthscale, log_p, diag=False):
+        log_p = self.normalize_log_p(log_p)
+        log_p_flat = torch.flatten(log_p[:, :-1])
+        M = torch.diag(log_p_flat)
+        kernel = torch.exp(-lengthscale * self.inner_product(x1, x2, M, diag=diag)-self.logn)
+        return(kernel)
+    
+    def forward(self, x1, x2, diag=False, **params):
+        kernel = self._forward(x1, x2, lengthscale=self.lengthscale, log_p=self.log_p,
+                               diag=diag)
+        return(kernel)
 
 
 class VCKernel(SequenceKernel):
@@ -254,7 +322,6 @@ class SkewedVCKernel(SequenceKernel):
         log_p = self.normalize_log_p(log_p)
         log_p_flat = torch.flatten(log_p[:, :-1])
         c_ki = torch.matmul(self.coeffs, lambdas)
-#         print(c_ki, 'c_ki')
 
         # Init first power
         M = torch.diag(log_p_flat)
@@ -270,11 +337,7 @@ class SkewedVCKernel(SequenceKernel):
                                        torch.zeros_like(log_p_flat)], 1)
             log_factors = torch.logsumexp(log_factors, 1)
             M = torch.diag(log_factors)
-            
-            if diag:
-                m = (torch.matmul(x1, M) * x2).sum(1)
-            else:
-                m = self.inner_product(x1, x2, M)
+            m = self.inner_product(x1, x2, M, diag=diag)
                 
             kernel += c_ki[power] * torch.exp(self.log_scaling_factors[power] + m)
         return(kernel)

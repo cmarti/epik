@@ -15,7 +15,7 @@ from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
-from epik.src.kernel import SkewedVCKernel, VCKernel
+from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel
 from epik.src.model import EpiK
 from epik.src.utils import seq_to_one_hot, get_tensor
 
@@ -206,6 +206,26 @@ class ModelsTests(unittest.TestCase):
         test_rho = pearsonr(test_ypred, test_y)[0]
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
+    
+    def test_epik_smn1_exponential_gpu(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
+        output_device = torch.device('cuda:0')
+        
+        kernel = ScaleKernel(ExponentialKernel(n_alleles=4, seq_length=7,
+                                               train_p=True))
+        model = EpiK(kernel, likelihood_type='Gaussian',
+                     output_device=output_device)
+        model.fit(train_x, train_y, y_var=train_y_var,
+                  n_iter=100, learning_rate=0.05)
+        
+        train_ypred = model.predict(train_x).cpu().detach().numpy()
+        test_ypred = model.predict(test_x).cpu().detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.75)
     
     def test_epik_smn1_gpu_partition(self):
         partition_size = 100
