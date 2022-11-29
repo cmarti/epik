@@ -2,4 +2,5 @@
 - Implement VC kernel with exponential decay variant: use generating function
 - Create binary for sending jobs to cluster 
 - Implement option to load directly all kernel parameters and store them easily in the kernel class: read and write 
-- Add kernels: Linear, Matern, RQ
+- Build exponential kernel with hamming distance: shoudl correspond to exponential decay
+- Create test for GPU kernel: calculations seem different from the ones on cpu
