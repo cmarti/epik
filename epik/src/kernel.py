@@ -10,6 +10,7 @@ from gpytorch.priors.torch_priors import NormalPrior
 from epik.src.utils import to_device, get_tensor
 from gpytorch.constraints.constraints import LessThan, GreaterThan
 from scipy.special._basic import comb
+from scipy.special._logsumexp import logsumexp
 
 
 class SequenceKernel(Kernel):
@@ -22,6 +23,7 @@ class SequenceKernel(Kernel):
         if q is None:
             q = (self.l - 1) / self.l
         self.q = q
+        self.logq = np.log(q)
 
         super().__init__(**kwargs)
     
@@ -36,18 +38,18 @@ class SequenceKernel(Kernel):
     def calc_polynomial_coeffs(self):
         lambdas = self.calc_eigenvalues()
         
-        B = torch.zeros((self.s, self.s))
-        idx = torch.arange(self.s)
+        B = np.zeros((self.s, self.s))
+        idx = np.arange(self.s)
         for k in idx:
             k_idx = idx != k
             k_lambdas = lambdas[k_idx]
-            norm_factor = 1 / torch.prod(k_lambdas - lambdas[k])
-    
-            for power in idx:
-                p = torch.tensor([np.product(v)
-                                  for v in combinations(k_lambdas, self.l - power)]).sum()
-                B[power, k] = norm_factor * (-1) ** (power) * p
+            norm_factor = 1 / np.prod(k_lambdas - lambdas[k])
         
+            for power in idx:
+                lambda_combs = list(combinations(k_lambdas, self.l - power))
+                p = np.sum([np.prod(v) for v in lambda_combs])
+                B[power, k] = (-1) ** (power) * p * norm_factor
+
         return(B)
     
     def get_log_lda_to_theta_matrix(self):
@@ -132,8 +134,10 @@ class ExponentialKernel(SequenceKernel):
     def _forward(self, x1, x2, lengthscale, log_p, diag=False):
         log_p = self.normalize_log_p(log_p)
         log_p_flat = torch.flatten(log_p[:, :-1])
-        M = torch.diag(log_p_flat)
-        kernel = torch.exp(-lengthscale * self.inner_product(x1, x2, M, diag=diag)-self.logn)
+        log_factors = torch.stack([-np.log(self.alpha)-log_p_flat, torch.zeros_like(log_p_flat)], 1)
+        log_factors = torch.logsumexp(log_factors, 1)
+        M = torch.diag(log_factors)
+        kernel = torch.exp(-self.logn + lengthscale * self.inner_product(x1, x2, M, diag=diag))
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
@@ -241,22 +245,28 @@ class SkewedVCKernel(SequenceKernel):
         self.define_priors(tau)
 
     def calc_eigenvalues(self):
-        lambdas = self.q ** torch.arange(self.s)
+        k = np.arange(self.s)
+        lambdas = np.exp(k * self.logq) 
         return(lambdas)
 
     def define_aux_variables(self):
-        self.q_powers = torch.pow(self.q, torch.arange(self.s))
-        self.coeffs = Parameter(self.calc_polynomial_coeffs(), requires_grad=False)
+        # Lambdas related parameters
+        coeffs = self.calc_polynomial_coeffs()
+        self.coeffs = Parameter(get_tensor(coeffs), requires_grad=False)
         self.log_lda_to_theta_m = Parameter(self.get_log_lda_to_theta_matrix(),
                                             requires_grad=False)
         self.theta_to_log_lda_m = Parameter(self.get_theta_to_log_lda_matrix(),
                                             requires_grad=False)
+
+        # p related parameters
+        ks = np.arange(self.s)
+        log_q_powers = self.logq * ks
+        log_1mq_powers = np.append([-np.inf], np.log(1 - np.exp(log_q_powers[1:])))
+        lsf = self.l * log_1mq_powers
+        self.log_scaling_factors = Parameter(get_tensor(lsf), requires_grad=False)
         
-        lsf = self.l * torch.log(1 - self.q_powers)
-        self.log_scaling_factors = Parameter(lsf, requires_grad=False)
-        
-        log_odds = torch.log(self.q_powers) - torch.log(1 - self.q_powers)
-        self.log_odds = Parameter(log_odds, requires_grad=False)
+        log_odds = log_q_powers - log_1mq_powers
+        self.log_odds = Parameter(get_tensor(log_odds), requires_grad=False)
     
     def define_kernel_params(self):
         constraints = {}
@@ -319,9 +329,11 @@ class SkewedVCKernel(SequenceKernel):
         return self._set_log_p(value)
     
     def _forward(self, x1, x2, lambdas, log_p, diag=False):
+        coeffs = self.coeffs.to(dtype=lambdas.dtype)
+        c_ki = torch.matmul(coeffs, lambdas)
+        
         log_p = self.normalize_log_p(log_p)
         log_p_flat = torch.flatten(log_p[:, :-1])
-        c_ki = torch.matmul(self.coeffs, lambdas)
 
         # Init first power
         M = torch.diag(log_p_flat)
@@ -329,7 +341,7 @@ class SkewedVCKernel(SequenceKernel):
             kernel = c_ki[0] * torch.exp(-(torch.matmul(x1, M) * x2).sum(1))
         else:
             kernel = c_ki[0] * torch.exp(-self.inner_product(x1, x2, M))
-            kernel[torch.matmul(x1, x2.T) < self.l] = 0
+            kernel *= torch.matmul(x1, x2.T) == self.l
         
         # Add the remaining powers        
         for power in range(1, self.s):

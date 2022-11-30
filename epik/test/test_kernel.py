@@ -14,11 +14,11 @@ from os.path import join
 class KernelsTests(unittest.TestCase):
     def test_calc_polynomial_coeffs(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
-        lambdas = kernel.calc_eigenvalues()
+        lambdas = get_tensor(kernel.calc_eigenvalues())
         V = torch.stack([torch.pow(lambdas, i) for i in range(3)], 1)
 
         B = kernel.coeffs
-        P = np.array(torch.matmul(B, V))
+        P = torch.matmul(B, V).numpy()
         assert(np.allclose(P, np.eye(3), atol=1e-4))
     
     def test_vc_kernel(self):
@@ -52,7 +52,8 @@ class KernelsTests(unittest.TestCase):
         assert(np.abs(cov - k2).mean() < 1e-4)
     
     def test_exponential_kernel(self):
-        kernel = ExponentialKernel(n_alleles=2, seq_length=2)
+        kernel = ExponentialKernel(n_alleles=2, seq_length=2, 
+                                   starting_lengthscale=1)
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
@@ -260,12 +261,12 @@ class KernelsTests(unittest.TestCase):
                     starting_log_lambdas = get_tensor(starting_log_lambdas)
                  
                     # CPU
-                    ker = SkewedVCKernel(alpha, l, q=0.7, tau=.1,
-                                         starting_log_lambdas=starting_log_lambdas)
-                    cov1 = ker.forward(train_x, train_x).detach().numpy()
-                    
                     ker = VCKernel(alpha, l, tau=.1,
                                    starting_log_lambdas=starting_log_lambdas)
+                    cov1 = ker.forward(train_x, train_x).detach().numpy()
+                    
+                    ker = SkewedVCKernel(alpha, l, q=0.7, tau=.1,
+                                         starting_log_lambdas=starting_log_lambdas)                    
                     cov2 = ker.forward(train_x, train_x).detach().numpy()
                     
                     # GPU
