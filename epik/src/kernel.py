@@ -134,10 +134,12 @@ class ExponentialKernel(SequenceKernel):
     def _forward(self, x1, x2, lengthscale, log_p, diag=False):
         log_p = self.normalize_log_p(log_p)
         log_p_flat = torch.flatten(log_p[:, :-1])
-        log_factors = torch.stack([-np.log(self.alpha)-log_p_flat, torch.zeros_like(log_p_flat)], 1)
+        log_factors = torch.stack([-log_p_flat, torch.zeros_like(log_p_flat)], 1)
         log_factors = torch.logsumexp(log_factors, 1)
         M = torch.diag(log_factors)
-        kernel = torch.exp(-self.logn + lengthscale * self.inner_product(x1, x2, M, diag=diag))
+        similarity = self.inner_product(x1, x2, M, diag=diag)
+        m = self.l * np.log(1 + self.alpha)
+        kernel = torch.exp(lengthscale/np.log2(self.alpha+1) * (similarity - m))
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):

@@ -64,6 +64,50 @@ class KernelsTests(unittest.TestCase):
                       [0.5, 0.25, 1., 0.5],
                       [0.25, 0.5, 0.5, 1.]])
         assert(np.allclose(cov, k, atol=1e-3))
+        
+        # Different length scale
+        kernel = ExponentialKernel(n_alleles=2, seq_length=2, 
+                                   starting_lengthscale=2)
+        cov = kernel.forward(x, x).detach().numpy()
+        k = np.array([[1., 0.25, 0.25, 0.0625],
+                      [0.25, 1., 0.0625, 0.25],
+                      [0.25, 0.0625, 1., 0.25],
+                      [0.0625, 0.25, 0.25, 1.]])
+        assert(np.allclose(cov, k, atol=1e-3))
+    
+        # Increasing length    
+        kernel = ExponentialKernel(n_alleles=2, seq_length=3, 
+                                   starting_lengthscale=1)
+        x = torch.tensor([[1, 0, 1, 0, 1, 0],
+                          [0, 1, 1, 0, 1, 0],
+                          [1, 0, 0, 1, 1, 0],
+                          [0, 1, 0, 1, 1, 0],
+                          [1, 0, 1, 0, 0, 1],
+                          [0, 1, 1, 0, 0, 1],
+                          [1, 0, 0, 1, 0, 1],
+                          [0, 1, 0, 1, 0, 1]], dtype=torch.float32)
+        cov = kernel.forward(x, x).detach().numpy()
+        k0 = np.array([1., 0.5, 0.5, 0.25, 0.5, 0.25, 0.25, 0.125])
+        assert(np.allclose(cov[0], k0, atol=1e-3))
+        
+        # Increasing alleles
+        kernel = ExponentialKernel(n_alleles=3, seq_length=2, 
+                                   starting_lengthscale=1)
+        x = torch.tensor([[1, 0, 0, 1, 0, 0],
+                          [0, 1, 0, 1, 0, 0],
+                          [0, 0, 1, 1, 0, 0],
+                          [1, 0, 0, 0, 1, 0],
+                          [0, 1, 0, 0, 1, 0],
+                          [0, 0, 1, 0, 1, 0],
+                          [1, 0, 0, 0, 0, 1],
+                          [0, 1, 0, 0, 0, 1],
+                          [0, 0, 1, 0, 0, 1]], dtype=torch.float32)
+        cov = kernel.forward(x, x).detach().numpy()
+        k0 = np.array([1., 0.5, 0.5,
+                       0.5, 0.25, 0.25,
+                       0.5, 0.25, 0.25])
+        assert(np.allclose(cov[0], k0, atol=1e-3))
+        
     
     def test_skewed_vc_kernel(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
