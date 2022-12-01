@@ -13,7 +13,8 @@ from gpytorch.kernels.linear_kernel import LinearKernel
 
 from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel
 from epik.src.model import EpiK
-from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
+from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot,\
+    get_tensor
 
         
 def main():
@@ -114,9 +115,14 @@ def main():
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length, tau=tau)
     elif kernel == 'sVC':
+        X = X.to(torch.float64)
+        y = get_tensor(y, torch.float64)
+        if y_var is not None:
+            y_var = get_tensor(y_var, torch.float64)
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length,
-                                train_p=train_p, tau=tau, q=q)
+                                train_p=train_p, tau=tau, q=q,
+                                dtype=torch.float64)
     elif kernel == 'Diploid':
         msg = 'Diploid kernel Not implemented yet'
         raise ValueError(msg)
