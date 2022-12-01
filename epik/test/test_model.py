@@ -211,9 +211,8 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         output_device = torch.device('cuda:0')
         
-        kernel = ScaleKernel(ExponentialKernel(n_alleles=4, seq_length=7,
-                                               train_p=True))
-        model = EpiK(kernel, likelihood_type='Gaussian',
+        kernel = ExponentialKernel(n_alleles=4, seq_length=7, train_p=True)
+        model = EpiK(ScaleKernel(kernel), likelihood_type='Gaussian',
                      output_device=output_device)
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.05)
@@ -224,6 +223,7 @@ class ModelsTests(unittest.TestCase):
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
 
+        assert(test_ypred.shape[0] == test_x.shape[0])
         assert(train_rho > 0.9)
         assert(test_rho > 0.75)
     
@@ -279,6 +279,6 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_smn1_exponential_gpu']
     unittest.main()
 
