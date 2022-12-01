@@ -41,6 +41,8 @@ def main():
     comp_group = parser.add_argument_group('Computational options')
     comp_group.add_argument('--gpu', default=False, action='store_true',
                             help='Use GPU-acceleration')
+    comp_group.add_argument('--use_float64', default=False, action='store_true',
+                            help='Use float64 data type (recommended for sVC kernel)')
     comp_group.add_argument('-m', '--n_devices', default=1, type=int,
                             help='Number of GPUs to use')
     comp_group.add_argument('-s', '--partition_size', default=None, type=int,
@@ -69,6 +71,7 @@ def main():
     n_iter = parsed_args.n_iter
     learning_rate = parsed_args.learning_rate
     partition_size = parsed_args.partition_size
+    use_float64 = parsed_args.use_float64
 
     pred_fpath = parsed_args.pred
     out_fpath = parsed_args.output
@@ -96,6 +99,15 @@ def main():
         y_var[y_var < 0.0001] = 0.0001
     else:
         y_var =  None
+    
+    if use_float64:
+        X = get_tensor(X, torch.float64)
+        y = get_tensor(y, torch.float64)
+        if y_var is not None:
+            y_var = get_tensor(y_var, torch.float64)
+        dtype = torch.float64
+    else:
+        dtype = torch.float32
       
     # Get kernel
     if kernel == 'RBF':
@@ -110,19 +122,17 @@ def main():
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = ScaleKernel(ExponentialKernel(n_alleles=n_alleles,
                                                seq_length=seq_length,
-                                               train_p=train_p))
+                                               train_p=train_p,
+                                               dtype=dtype))
     elif kernel == 'VC':
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
-        kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length, tau=tau)
+        kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length, tau=tau,
+                          dtype=dtype)
     elif kernel == 'sVC':
-        X = X.to(torch.float64)
-        y = get_tensor(y, torch.float64)
-        if y_var is not None:
-            y_var = get_tensor(y_var, torch.float64)
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length,
                                 train_p=train_p, tau=tau, q=q,
-                                dtype=torch.float64)
+                                dtype=dtype)
     elif kernel == 'Diploid':
         msg = 'Diploid kernel Not implemented yet'
         raise ValueError(msg)
@@ -132,7 +142,7 @@ def main():
     
     # Create model
     output_device = torch.device('cuda:0') if gpu else None
-    model = EpiK(kernel, likelihood_type='Gaussian',
+    model = EpiK(kernel, likelihood_type='Gaussian', dtype=dtype,
                  output_device=output_device, n_devices=n_devices)
 
     # Fit by evidence maximization

@@ -284,7 +284,7 @@ class SkewedVCKernel(SequenceKernel):
         params = {'raw_log_p': Parameter(starting_logp, requires_grad=self.train_p)}
         
         if self.starting_log_lambdas is None:
-            raw_theta0 = torch.zeros(self.l)
+            raw_theta0 = torch.zeros(self.l).to(self.fdtype)
             raw_theta0[0:2] = -1
         else:
             raw_theta0 = torch.matmul(self.log_lda_to_theta_m,

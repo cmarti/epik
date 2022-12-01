@@ -32,6 +32,8 @@ def to_device(tensor, output_device=None):
 def get_tensor(ndarray, dtype=torch.float32, device=None):
     if not torch.is_tensor(ndarray):
         ndarray = torch.tensor(ndarray, dtype=dtype)
+    if ndarray.dtype != dtype:
+        ndarray = ndarray.to(dtype=dtype)
     return(to_device(ndarray, output_device=device))
 
 

@@ -20,7 +20,7 @@ from epik.src.model import EpiK
 from epik.src.utils import seq_to_one_hot, get_tensor
 
 
-def get_smn1_data(n, seed=0):
+def get_smn1_data(n, seed=0, dtype=None):
     np.random.seed(seed)
     data = pd.read_csv(join(TEST_DATA_DIR, 'smn1data.csv'),
                            header=None, index_col=0, names=['m', 'std'])
@@ -46,7 +46,11 @@ def get_smn1_data(n, seed=0):
     p = 1000 / ps.shape[0]
     test_x, test_y = test_x[ps<p], test_y[ps<p]
     
-    return(train_x, train_y, test_x, test_y, train_y_var)
+    output = [train_x, train_y, test_x, test_y, train_y_var]
+    if dtype is not None:
+        print('a')
+        output = [get_tensor(a, dtype=dtype) for a in output]
+    return(output)
 
 
 class ModelsTests(unittest.TestCase):
@@ -118,11 +122,11 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_skewed_vc_smn1(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
-        
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000,
+                                                                      dtype=torch.float64)
         kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True,
                                 q=0.5, tau=1)
-        model = EpiK(kernel, likelihood_type='Gaussian')
+        model = EpiK(kernel, likelihood_type='Gaussian', dtype=torch.float64)
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.02)
         
@@ -270,7 +274,7 @@ class ModelsTests(unittest.TestCase):
             check_call(cmd)
             
             # Predict test sequences with variable ps
-            cmd.extend(['-k', 'sVC', '--train_p'])
+            cmd.extend(['-k', 'sVC', '--train_p', '--use_float64'])
             check_call(cmd)
             
             # Predict test sequences with variable ps using GPU
@@ -279,6 +283,6 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_smn1_exponential_gpu']
+    import sys;sys.argv = ['', 'ModelsTests']
     unittest.main()
 
