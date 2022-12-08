@@ -4,3 +4,6 @@
 - Implement option to load directly all kernel parameters and store them easily in the kernel class: read and write 
 - Build exponential kernel with hamming distance: shoudl correspond to exponential decay
 - Create test for GPU kernel: calculations seem different from the ones on cpu
+- Implement prior enforcing decay of the lambdas to avoid quadratic shapes in lambdas on longer sequences
+- Try to decouple priors from kernels to have a more independent development of different priors on lambdas
+- implemente method to take all hyperparameters from the set of kernels in Epik (even in the presence of ScaleKernel or constant module)
