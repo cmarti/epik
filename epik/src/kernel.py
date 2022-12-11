@@ -1,5 +1,5 @@
 import numpy as np
-import torch
+import torch as torch
 
 from itertools import combinations
 
@@ -150,12 +150,12 @@ class ExponentialKernel(SequenceKernel):
 
 class VCKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, tau=0.2,
-                 train_lambdas=True, starting_log_lambdas=None,
+                 train_lambdas=True, log_lambdas0=None,
                  **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         
         self.train_lambdas = train_lambdas
-        self.starting_log_lambdas = starting_log_lambdas
+        self.log_lambdas0 = log_lambdas0
         
         self.define_aux_variables()
         self.define_kernel_params()
@@ -183,12 +183,12 @@ class VCKernel(SequenceKernel):
         return(get_tensor(w_kd))
     
     def define_kernel_params(self):
-        if self.starting_log_lambdas is None:
+        if self.log_lambdas0 is None:
             raw_theta0 = torch.zeros(self.l)
             raw_theta0[0:2] = -1
         else:
             raw_theta0 = torch.matmul(self.log_lda_to_theta_m,
-                                      get_tensor(self.starting_log_lambdas))
+                                      get_tensor(self.log_lambdas0))
         params = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train_lambdas)}
         self.register_params(params=params, constraints={})
     
@@ -233,19 +233,16 @@ class VCKernel(SequenceKernel):
 class SkewedVCKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, q=None, tau=0.2,
                  train_p=True, train_lambdas=True,
-                 starting_p=None, starting_log_lambdas=None,
-                 dtype=torch.float64,
+                 starting_p=None, log_lambdas0=None,
+                 dtype=torch.float64, lambdas_prior='monotonic_decay',
                  **kwargs):
         super().__init__(n_alleles, seq_length, q=q, dtype=dtype, **kwargs)
         
-        self.train_p = train_p
-        self.train_lambdas = train_lambdas
-        self.starting_p = starting_p 
-        self.starting_log_lambdas = starting_log_lambdas
-        
         self.define_aux_variables()
-        self.define_kernel_params()
-        self.define_priors(tau)
+        self.define_lambdas(tau=tau, lambdas_prior=lambdas_prior,
+                            train_lambdas=train_lambdas,
+                            log_lambdas0=log_lambdas0)
+        self.define_ps(starting_p=starting_p, train_p=train_p) 
 
     def calc_eigenvalues(self):
         k = np.arange(self.s)
@@ -271,39 +268,89 @@ class SkewedVCKernel(SequenceKernel):
         log_odds = log_q_powers - log_1mq_powers
         self.log_odds = Parameter(get_tensor(log_odds, dtype=self.fdtype), requires_grad=False)
     
-    def define_kernel_params(self):
-        constraints = {}
-        
-        if self.starting_p is None:
+    def define_ps(self, train_p, starting_p=None):
+        if starting_p is None:
             starting_logp = np.zeros((self.l, self.alpha + 1))
             starting_logp[:, -1] = -10
             starting_logp = get_tensor(starting_logp, dtype=self.fdtype)
         else:
-            starting_logp = get_tensor(torch.log(self.starting_p), dtype=self.fdtype)
+            starting_logp = get_tensor(torch.log(starting_p), dtype=self.fdtype)
             starting_logp[:, -1] = -10.
-        params = {'raw_log_p': Parameter(starting_logp, requires_grad=self.train_p)}
+            
+        params = {'raw_log_p': Parameter(starting_logp, requires_grad=train_p)}
+        self.register_params(params=params, constraints={})
         
-        if self.starting_log_lambdas is None:
+    def define_lambdas_2nd_order(self):
+        # Set parametrization based on the 2nd order differences
+        if self.log_lambdas0 is None:
             raw_theta0 = torch.zeros(self.l).to(self.fdtype)
             raw_theta0[0:2] = -1
         else:
             raw_theta0 = torch.matmul(self.log_lda_to_theta_m,
-                                      get_tensor(self.starting_log_lambdas, dtype=self.fdtype))
-        params['raw_theta'] = Parameter(raw_theta0, requires_grad=self.train_lambdas)
-        
-        self.register_params(params=params, constraints=constraints)
-    
-    def define_priors(self, tau):
-        self.register_prior("raw_theta_prior", NormalPrior(0, tau),
+                                      get_tensor(self.log_lambdas0, dtype=self.fdtype))
+        params = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train_lambdas)}
+        self.register_params(params=params)
+
+        # Define prior    
+        self.register_prior("raw_theta_prior", NormalPrior(0, self.tau),
                             lambda module: module.raw_theta[2:])
         self.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
                             lambda module: module.raw_theta[1])
         self.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
                             lambda module: module.raw_theta[0])
+    
+    def define_lambdas_monotonic_decay(self):
+        # Set parametrization based on monotonic differences
+        raw_theta0 = torch.zeros(self.s).to(self.fdtype)
+        if self.log_lambdas0 is None:
+            raw_theta0[0] = 0
+            raw_theta0[0] = np.log(2) # natural rate of decay
+        else:
+            raw_theta0[0] = self.log_lambdas0[0]
+            delta = self.log_lambdas0[:-1] - self.log_lambdas0[1:] + 1e-6
+            if (delta < 0).sum() > 0:
+                raise ValueError('log lambdas must decay monotonically')
+            logdelta = torch.log(delta)
+            raw_theta0[1] = logdelta.mean()
+            raw_theta0[2:] = logdelta - raw_theta0[1]
+        params = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train_lambdas)}
+        self.register_params(params=params)
+        
+        # Define prior
+        self.register_prior("raw_theta_prior", NormalPrior(0, self.tau),
+                            lambda module: module.raw_theta[2:])
+    
+    def define_lambdas(self, tau, lambdas_prior,
+                       train_lambdas=True, log_lambdas0=None):
+        self.tau = tau
+        self.train_lambdas = train_lambdas
+        self.log_lambdas0 = None if log_lambdas0 is None else get_tensor(log_lambdas0, dtype=self.fdtype)
+         
+        if lambdas_prior == 'monotonic_decay': 
+            self.define_lambdas_monotonic_decay()
+            self.theta_to_log_lambdas = self.theta_to_log_lambdas_monotonic_decay
+        elif lambdas_prior == '2nd_order_diff':
+            self.define_lambdas_2nd_order()
+            self.theta_to_log_lambdas = self.theta_to_log_lambdas_2nd_order_diff
+        else:
+            msg = 'Prior on lambdas not recognized: {}'.format(lambdas_prior)
+            msg += '. Try one of ["monotonic_decay", "2nd_order_diff"]'
+            raise ValueError(msg)
+     
+    def theta_to_log_lambdas_monotonic_decay(self):
+        v = self.raw_theta
+        z = torch.zeros(1).to(dtype=v.dtype, device=v.device)
+        delta_log_lambdas = torch.cat((z, torch.exp(v[1] + v[2:])))
+        log_lambdas = self.raw_theta[0] - torch.cumsum(delta_log_lambdas, dim=0)
+        return(log_lambdas)
+    
+    def theta_to_log_lambdas_2nd_order_diff(self):
+        log_lambdas = torch.matmul(self.theta_to_log_lda_m, self.raw_theta)
+        return(log_lambdas) 
 
     @property
     def log_lambdas(self):
-        log_lambdas = torch.matmul(self.theta_to_log_lda_m, self.raw_theta)
+        log_lambdas = self.theta_to_log_lambdas()
         log_lambdas = torch.cat((get_tensor([-10.], dtype=log_lambdas.dtype,
                                             device=log_lambdas.device), log_lambdas))
         return(log_lambdas)
