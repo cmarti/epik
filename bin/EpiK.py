@@ -37,6 +37,8 @@ def main():
                                help='Probability of leaving under the discrete time chain in sVC prior (l-1)/l')
     options_group.add_argument('--train_p', default=False, action='store_true',
                                help='Allow different probabilities across sites and alleles in sVC prior')
+    options_group.add_argument('--lprior', default='monotonic_decay',
+                               help='Type of prior on log(lambdas) {monotonic_decay, 2nd_order_diff}')
     
     comp_group = parser.add_argument_group('Computational options')
     comp_group.add_argument('--gpu', default=False, action='store_true',
@@ -65,6 +67,7 @@ def main():
     train_p = parsed_args.train_p
     tau = parsed_args.tau
     q = parsed_args.q
+    lambdas_prior = parsed_args.lprior
     
     gpu = parsed_args.gpu
     n_devices = parsed_args.n_devices
@@ -132,7 +135,7 @@ def main():
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length,
                                 train_p=train_p, tau=tau, q=q,
-                                dtype=dtype)
+                                dtype=dtype, lambdas_prior=lambdas_prior)
     elif kernel == 'Diploid':
         msg = 'Diploid kernel Not implemented yet'
         raise ValueError(msg)
