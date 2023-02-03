@@ -99,3 +99,24 @@ def guess_space_configuration(seqs):
               'n_alleles': [len(alleles[i]) for i in range(length)],
               'alphabet': [[a for a in alleles[i].keys()] for i in range(length)]}
     return(config)
+
+
+def split_training_test(X, y, y_var, ptrain=0.8, dtype=None):
+    ps = np.random.uniform(size=X.shape[0])
+    train = ps < ptrain
+    train_x, train_y = X[train, :], y[train]
+    train_y_var = y_var[train] 
+
+    test = ps > (1 - ptrain)
+    test_x, test_y = X[test, :], y[test]
+    
+    output = [train_x, train_y, test_x, test_y, train_y_var]
+    if dtype is not None:
+        output = [get_tensor(a, dtype=dtype) for a in output]
+    return(output)
+
+
+def ps_to_variances(ps):
+    v = 1 / ps
+    v = (v.T / v.sum(1)).T
+    return(v)

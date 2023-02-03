@@ -17,7 +17,9 @@ from gpytorch.kernels.scale_kernel import ScaleKernel
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel
 from epik.src.model import EpiK
-from epik.src.utils import seq_to_one_hot, get_tensor
+from epik.src.utils import seq_to_one_hot, get_tensor, split_training_test,\
+    ps_to_variances
+from gpmap.src.inference import VCregression
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -125,7 +127,7 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000,
                                                                       dtype=torch.float64)
         kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True,
-                                q=0.5, tau=1)
+                                q=0.5, tau=1, lambdas_prior='monotonic_decay')
         model = EpiK(kernel, likelihood_type='Gaussian', dtype=torch.float64)
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=100, learning_rate=0.02)
@@ -280,9 +282,54 @@ class ModelsTests(unittest.TestCase):
             # Predict test sequences with variable ps using GPU
             cmd.extend(['--gpu'])
             check_call(cmd)
+            
+    
+    def test_recover_p(self):
+        np.random.seed(0)
+        vc = VCregression()
+        l = 5
+        ps = np.vstack([[0.25, 0.025, 0.025, 0.5]] * 4).T
+        l = ps.shape[0]
+        vc.init(l, 4, ps=ps)
+        lambdas = np.append([0], 1e7 * 10. ** (-np.arange(l)))
+        data = vc.simulate(lambdas=lambdas, sigma=0, p_missing=0)
+        seqs, y, y_var = data.index.values, data['y'].values, data['var'].values
+        sigma = 0.01 * y.std()
+        y = np.random.normal(y, sigma)
+        print(y, sigma)
+        y_var = sigma * np.ones(y.shape[0])
+        
+        X = seq_to_one_hot(seqs, alleles=['0', '1', '2', '3'])
+        train_x, train_y, test_x, test_y, train_y_var = split_training_test(X, y, y_var, dtype=torch.float64)
+        
+        # Train skewed
+        kernel1 = SkewedVCKernel(n_alleles=4, seq_length=l, tau=0.2, train_p=True,
+                                # starting_p=get_tensor(ps, dtype=torch.float64),
+                                dtype=torch.float64
+                                )
+        model = EpiK(kernel1, likelihood_type='Gaussian', dtype=torch.float64)
+        model.fit(train_x, train_y, y_var=train_y_var, n_iter=150, learning_rate=0.01)
+        test_ypred = model.predict(test_x).detach().numpy()
+        test_rho1 = pearsonr(test_ypred, test_y)[0]
+        
+        # Train
+        kernel2 = SkewedVCKernel(n_alleles=4, seq_length=l, tau=0.2, train_p=False,
+                                 dtype=torch.float64)
+        model = EpiK(kernel2, likelihood_type='Gaussian', dtype=torch.float64)
+        model.fit(train_x, train_y, y_var=train_y_var, n_iter=150, learning_rate=0.02)
+        test_ypred = model.predict(test_x).detach().numpy()
+        test_rho2 = pearsonr(test_ypred, test_y)[0]
+        
+
+        print(test_rho1, test_rho2)        
+        print(kernel1.p)
+        print(kernel1.lambdas.detach().numpy())
+        print(kernel2.lambdas.detach().numpy())
+        # print(ps_to_variances(ps))
+        # print(ps_to_variances(kernel.p.detach().numpy))
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests']
+    import sys;sys.argv = ['', 'ModelsTests.test_recover_p']
     unittest.main()
 
