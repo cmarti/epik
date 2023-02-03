@@ -234,7 +234,7 @@ class SkewedVCKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, q=None, tau=0.2,
                  train_p=True, train_lambdas=True,
                  starting_p=None, log_lambdas0=None,
-                 dtype=torch.float64, lambdas_prior='monotonic_decay',
+                 dtype=torch.float32, lambdas_prior='monotonic_decay',
                  **kwargs):
         super().__init__(n_alleles, seq_length, q=q, dtype=dtype, **kwargs)
         
@@ -412,6 +412,48 @@ class SkewedVCKernel(SequenceKernel):
                                diag=diag)
         return(kernel)
     
+
+class SiteProductKernel(SequenceKernel):
+    def __init__(self, n_alleles, seq_length,
+                 dtype=torch.float32, **kwargs):
+        super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
+        
+        self.define_params()
+
+    def define_params(self):
+        params = {'raw_w': Parameter(torch.zeros(self.l), requires_grad=True),
+                  'raw_b': Parameter(torch.zeros(1), requires_grad=True),
+                  'raw_a': Parameter(torch.log(torch.ones(1)), requires_grad=True)}
+        self.register_params(params=params, constraints={})
+        
+    @property
+    def beta(self):
+        beta = torch.exp(self.raw_b)
+        return(beta)
+    
+    @property
+    def a(self):
+        return(self.raw_a)
+    
+    @property
+    def w(self):
+        return(self.raw_w)
+
+    def _forward(self, x1, x2, a, beta, w, diag=False):
+        # TODO: make sure diag works here
+        ebeta = torch.exp(-beta + a)
+        log_factors = torch.log(1 + torch.exp(-beta + a + w))
+        log_factors = torch.flatten(torch.stack([log_factors] * self.alpha, axis=0).T)
+        M = torch.diag(log_factors)
+        m = self.inner_product(x1, x2, M, diag=diag)
+        
+        distance = self.l - self.inner_product(x1, x2, diag=diag)
+        kernel = torch.exp(m) * (1 - ebeta) ** distance 
+        return(kernel)
+    
+    def forward(self, x1, x2, diag=False, **params):
+        return(self._forward(x1, x2, a=self.a, beta=self.beta, w=self.w, diag=diag))
+
 
 class DiploidKernel(SequenceKernel):
     def __init__(self, seq_length, **kwargs):
