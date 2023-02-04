@@ -15,11 +15,12 @@ from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
-from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel
+from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel,\
+    SiteProductKernel
 from epik.src.model import EpiK
-from epik.src.utils import seq_to_one_hot, get_tensor, split_training_test,\
-    ps_to_variances
-from gpmap.src.inference import VCregression
+from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
+                            ps_to_variances)
+# from gpmap.src.inference import VCregression
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -155,6 +156,47 @@ class ModelsTests(unittest.TestCase):
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
         
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+    
+    def test_epik_site_kernel_smn1(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        
+        kernel = SiteProductKernel(n_alleles=4, seq_length=7)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        model.fit(train_x, train_y, y_var=train_y_var,
+                  n_iter=200, learning_rate=0.05)
+        
+        train_ypred = model.predict(train_x).detach().numpy()
+        test_ypred = model.predict(test_x).detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        w = kernel.w.detach().numpy()
+        assert(w[0] < w[1])
+        assert(w[-1] < w[-2])
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+    
+    def test_epik_site_kernel_smn1_gpu(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        output_device = torch.device('cuda:0')
+        
+        kernel = SiteProductKernel(n_alleles=4, seq_length=7)
+        model = EpiK(kernel, likelihood_type='Gaussian', output_device=output_device)
+        model.fit(train_x, train_y, y_var=train_y_var,
+                  n_iter=200, learning_rate=0.05)
+        
+        train_ypred = model.predict(train_x).detach().numpy()
+        test_ypred = model.predict(test_x).detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        w = kernel.w.detach().numpy()
+        assert(w[0] < w[1])
+        assert(w[-1] < w[-2])
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
@@ -330,6 +372,6 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_recover_p']
+    import sys;sys.argv = ['', 'ModelsTests']
     unittest.main()
 
