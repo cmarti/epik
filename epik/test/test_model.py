@@ -180,7 +180,7 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_site_kernel_smn1_gpu(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1500)
         output_device = torch.device('cuda:0')
         
         kernel = SiteProductKernel(n_alleles=4, seq_length=7)
@@ -188,13 +188,14 @@ class ModelsTests(unittest.TestCase):
         model.fit(train_x, train_y, y_var=train_y_var,
                   n_iter=200, learning_rate=0.05)
         
-        train_ypred = model.predict(train_x).detach().numpy()
-        test_ypred = model.predict(test_x).detach().numpy()
+        train_ypred = model.predict(train_x).detach().cpu().numpy()
+        test_ypred = model.predict(test_x).detach().cpu().numpy()
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
         
-        w = kernel.w.detach().numpy()
+        w = kernel.w.detach().cpu().numpy()
+        print(w, train_rho, test_rho)
         assert(w[0] < w[1])
         assert(w[-1] < w[-2])
         assert(train_rho > 0.9)
@@ -326,41 +327,40 @@ class ModelsTests(unittest.TestCase):
             check_call(cmd)
             
     def test_recover_site_weights(self):
-        w = np.array([-3, 0, 0, 0, -2])
-        p = np.exp(w) / (1 + np.exp(w))
-        p = 0.25 * np.ones(5)
-#         p[0] = 0.1
-        l = w.shape[0]
-        a = 4
-        ps = np.vstack([p] * a).T
+        ws = np.array([0.5, 0.9, 0.9, 0.9, 0.1])
+        l, a = ws.shape[0], 5
+        ps = np.array([[1-w] + [w/(a-1)]*(a-1) for w in ws])
+        logit = -np.log(ps / (1-ps))
         lambdas = np.exp(np.append([-10], -5*np.arange(l)))
-        print(lambdas, ps)
-
         vc = VCregression()
-        vc.init(l, 4, ps=ps)
+        vc.init(l, a, ps=ps)
+        
+        # Data
         data = vc.simulate(lambdas=lambdas, sigma=0, p_missing=0)
-        print(data)
-        x = seq_to_one_hot(data.index.values) 
+        data = data.loc[['0' not in x for x in data.index.values], :]
+        x = seq_to_one_hot(data.index.values, alleles=['0', '1', '2', '3', '4']) 
         y = data['y'].values
         y = (y - y.mean())/ y.std()
-        print(y)
-        sigma = 0.05
+        sigma = 0.1
         y_obs = np.random.normal(y, sigma)
         y_var = sigma**2 * np.ones(y.shape[0])
         
-        kernel = SiteProductKernel(n_alleles=4, seq_length=l)
+        # Model fit
+        kernel = SiteProductKernel(n_alleles=a, seq_length=l)
         model = EpiK(kernel, likelihood_type='Gaussian')
         model.fit(x, y_obs, y_var=y_var, n_iter=200, learning_rate=0.05)
         
         ypred = model.predict(x).detach().numpy()
+        w_hat = kernel.w.detach().numpy()
+        
         rho1 = pearsonr(ypred, y)[0]
         rho2 = pearsonr(ypred, y_obs)[0]
-        
-        w_hat = kernel.w.detach().numpy()
-        print(w, w_hat, rho1, rho2)
-        assert(w[0] < w[1])
-        assert(w[-1] < w[-2])
-        assert(rho > 0.9)
+        rho3 = pearsonr(logit[:, 1], w_hat)[0]
+        assert(w_hat[0] > w_hat[1])
+        assert(w_hat[-1] > w_hat[-2])
+        assert(rho1 > 0.9)
+        assert(rho2 > 0.9)
+        assert(rho3 > 0.9)
 
     def test_recover_p(self):
         np.random.seed(0)
@@ -410,4 +410,3 @@ class ModelsTests(unittest.TestCase):
 if __name__ == '__main__':
     import sys;sys.argv = ['', 'ModelsTests.test_recover_site_weights']
     unittest.main()
-
