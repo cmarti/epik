@@ -408,5 +408,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_recover_site_weights']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_site_kernel_smn1']
     unittest.main()

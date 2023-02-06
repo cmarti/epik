@@ -419,39 +419,37 @@ class SiteProductKernel(SequenceKernel):
         super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
         
         self.define_params()
+        p = 1 / (n_alleles - 1.)
+        print(p)
+        self.min_w = np.log((1-p) / p)
 
     def define_params(self):
         params = {'raw_w': Parameter(torch.zeros(self.l), requires_grad=True),
-                  'raw_b': Parameter(torch.zeros(1), requires_grad=True),
-                  'raw_a': Parameter(torch.log(torch.ones(1)), requires_grad=True)}
+                  'raw_b': Parameter(torch.zeros(1), requires_grad=True)}
         self.register_params(params=params, constraints={})
         
     @property
     def beta(self):
-        beta = torch.exp(self.raw_b)
-        return(beta)
-    
-    @property
-    def a(self):
-        return(self.raw_a)
+        return(self.raw_b)
     
     @property
     def w(self):
-        return(self.raw_w)
+        return(self.min_w * torch.exp(self.raw_w))
 
-    def _forward(self, x1, x2, a, beta, w, diag=False):
+    def _forward(self, x1, x2, beta, w, diag=False):
         # TODO: make sure diag works here
-        log_factors = torch.log(1 + torch.exp(-beta + a + w))
+        log_factors = torch.log(1 + torch.exp(beta + w))
         log_factors = torch.flatten(torch.stack([log_factors] * self.alpha, axis=0).T)
         M = torch.diag(log_factors)
         m = self.inner_product(x1, x2, M, diag=diag)
         
+        # 1 - e^{beta} avoids log because it can be negative
         distance = self.l - self.inner_product(x1, x2, diag=diag)
-        kernel = torch.exp(m) * (1 - torch.exp(-beta + a)) ** distance 
+        kernel = torch.exp(m) * (1 - torch.exp(beta)) ** distance 
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, a=self.a, beta=self.beta, w=self.w, diag=diag))
+        return(self._forward(x1, x2, beta=self.beta, w=self.w, diag=diag))
 
 
 class DiploidKernel(SequenceKernel):

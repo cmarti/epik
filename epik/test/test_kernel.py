@@ -56,10 +56,9 @@ class KernelsTests(unittest.TestCase):
         kernel = SiteProductKernel(n_alleles=2, seq_length=1)
         x = torch.tensor([[1, 0],
                           [0, 1]], dtype=torch.float32)
-        w = torch.tensor([0], dtype=torch.float32)
+        w = torch.tensor([1], dtype=torch.float32)
         beta = torch.tensor([1], dtype=torch.float32)
-        a = torch.tensor([2], dtype=torch.float32)
-        cov = kernel._forward(x, x, a=a, beta=beta, w=w)
+        cov = kernel._forward(x, x, beta=beta, w=w)
         print(cov)
         
         kernel = SiteProductKernel(n_alleles=2, seq_length=2)
@@ -67,10 +66,9 @@ class KernelsTests(unittest.TestCase):
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
                           [0, 1, 0, 1]], dtype=torch.float32)
-        w = torch.tensor([0, 0], dtype=torch.float32)
+        w = torch.tensor([1, 1], dtype=torch.float32)
         beta = torch.tensor([1], dtype=torch.float32)
-        a = torch.tensor([2], dtype=torch.float32)
-        cov = kernel._forward(x, x, a=a, beta=beta, w=w)
+        cov = kernel._forward(x, x, beta=beta, w=w)
         print(cov)
 
     
