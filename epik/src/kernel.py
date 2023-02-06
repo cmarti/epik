@@ -419,22 +419,29 @@ class SiteProductKernel(SequenceKernel):
         super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
         
         self.define_params()
-        p = 1 / (n_alleles - 1.)
-        print(p)
-        self.min_w = np.log((1-p) / p)
+        # # Limits to keep eigenspaces
+        # p = 1. / n_alleles
+        # self.min_w = np.log((1-p) / p)
 
     def define_params(self):
         params = {'raw_w': Parameter(torch.zeros(self.l), requires_grad=True),
-                  'raw_b': Parameter(torch.zeros(1), requires_grad=True)}
+                  'raw_b': Parameter(torch.zeros(1), requires_grad=True)
+                  # 'raw_a': Parameter(torch.zeros(1), requires_grad=True)
+                  }
         self.register_params(params=params, constraints={})
         
     @property
     def beta(self):
         return(self.raw_b)
     
+    # @property
+    # def a(self):
+    #     return(self.raw_a)
+    
     @property
     def w(self):
-        return(self.min_w * torch.exp(self.raw_w))
+        # return(self.min_w + torch.exp(self.raw_w))
+        return(self.raw_w)
 
     def _forward(self, x1, x2, beta, w, diag=False):
         # TODO: make sure diag works here
@@ -449,7 +456,9 @@ class SiteProductKernel(SequenceKernel):
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, beta=self.beta, w=self.w, diag=diag))
+        return(self._forward(x1, x2, beta=self.beta, w=self.w,
+                             # a=self.a,
+                             diag=diag))
 
 
 class DiploidKernel(SequenceKernel):

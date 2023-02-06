@@ -327,10 +327,10 @@ class ModelsTests(unittest.TestCase):
             check_call(cmd)
             
     def test_recover_site_weights(self):
-        ws = np.array([0.5, 0.9, 0.9, 0.9, 0.1])
+        ws = np.array([0.5, 0.9, 0.05, 0.9, 0.1])
         l, a = ws.shape[0], 5
         ps = np.array([[1-w] + [w/(a-1)]*(a-1) for w in ws])
-        logit = -np.log(ps / (1-ps))
+        logit = np.log((1-ps) / ps)
         lambdas = np.exp(np.append([-10], -5*np.arange(l)))
         vc = VCregression()
         vc.init(l, a, ps=ps)
@@ -356,6 +356,7 @@ class ModelsTests(unittest.TestCase):
         rho1 = pearsonr(ypred, y)[0]
         rho2 = pearsonr(ypred, y_obs)[0]
         rho3 = pearsonr(logit[:, 1], w_hat)[0]
+        print(w_hat, logit[:, 1])
         assert(w_hat[0] > w_hat[1])
         assert(w_hat[-1] > w_hat[-2])
         assert(rho1 > 0.9)
@@ -408,5 +409,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_site_kernel_smn1']
+    import sys;sys.argv = ['', 'ModelsTests.test_recover_site_weights']
     unittest.main()
