@@ -441,14 +441,13 @@ class SiteProductKernel(SequenceKernel):
 
     def _forward(self, x1, x2, a, beta, w, diag=False):
         # TODO: make sure diag works here
-        ebeta = torch.exp(-beta + a)
         log_factors = torch.log(1 + torch.exp(-beta + a + w))
         log_factors = torch.flatten(torch.stack([log_factors] * self.alpha, axis=0).T)
         M = torch.diag(log_factors)
         m = self.inner_product(x1, x2, M, diag=diag)
         
         distance = self.l - self.inner_product(x1, x2, diag=diag)
-        kernel = torch.exp(m) * (1 - ebeta) ** distance 
+        kernel = torch.exp(m) * (1 - torch.exp(-beta + a)) ** distance 
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):

@@ -20,7 +20,7 @@ from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel,\
 from epik.src.model import EpiK
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             ps_to_variances)
-# from gpmap.src.inference import VCregression
+from gpmap.src.inference import VCregression
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -325,7 +325,43 @@ class ModelsTests(unittest.TestCase):
             cmd.extend(['--gpu'])
             check_call(cmd)
             
-    
+    def test_recover_site_weights(self):
+        w = np.array([-3, 0, 0, 0, -2])
+        p = np.exp(w) / (1 + np.exp(w))
+        p = 0.25 * np.ones(5)
+#         p[0] = 0.1
+        l = w.shape[0]
+        a = 4
+        ps = np.vstack([p] * a).T
+        lambdas = np.exp(np.append([-10], -5*np.arange(l)))
+        print(lambdas, ps)
+
+        vc = VCregression()
+        vc.init(l, 4, ps=ps)
+        data = vc.simulate(lambdas=lambdas, sigma=0, p_missing=0)
+        print(data)
+        x = seq_to_one_hot(data.index.values) 
+        y = data['y'].values
+        y = (y - y.mean())/ y.std()
+        print(y)
+        sigma = 0.05
+        y_obs = np.random.normal(y, sigma)
+        y_var = sigma**2 * np.ones(y.shape[0])
+        
+        kernel = SiteProductKernel(n_alleles=4, seq_length=l)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        model.fit(x, y_obs, y_var=y_var, n_iter=200, learning_rate=0.05)
+        
+        ypred = model.predict(x).detach().numpy()
+        rho1 = pearsonr(ypred, y)[0]
+        rho2 = pearsonr(ypred, y_obs)[0]
+        
+        w_hat = kernel.w.detach().numpy()
+        print(w, w_hat, rho1, rho2)
+        assert(w[0] < w[1])
+        assert(w[-1] < w[-2])
+        assert(rho > 0.9)
+
     def test_recover_p(self):
         np.random.seed(0)
         vc = VCregression()
@@ -372,6 +408,6 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests']
+    import sys;sys.argv = ['', 'ModelsTests.test_recover_site_weights']
     unittest.main()
 
