@@ -2,14 +2,12 @@ import numpy as np
 import torch as torch
 
 from itertools import combinations
-
+from scipy.special._basic import comb
 from torch.nn import Parameter
 from gpytorch.kernels.kernel import Kernel
-from gpytorch.priors.torch_priors import NormalPrior
-
-from epik.src.utils import to_device, get_tensor
 from gpytorch.constraints.constraints import LessThan
-from scipy.special._basic import comb
+
+from epik.src.utils import get_tensor
 
 
 class SequenceKernel(Kernel):
@@ -64,23 +62,15 @@ class HaploidKernel(SequenceKernel):
 
 
 class VCKernel(HaploidKernel):
-    def __init__(self, n_alleles, seq_length, tau=0.2,
-                 train_lambdas=True, log_lambdas0=None,
+    def __init__(self, n_alleles, seq_length, lambdas_prior,
                  **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         
-        self.train_lambdas = train_lambdas
-        self.log_lambdas0 = log_lambdas0
-        
         self.define_aux_variables()
-        self.define_kernel_params()
-        self.define_priors(tau)
+        self.lambdas_prior = lambdas_prior
+        self.lambdas_prior.set(self)
 
     def define_aux_variables(self):
-        self.log_lda_to_theta_m = Parameter(self.get_log_lda_to_theta_matrix(),
-                                            requires_grad=False)
-        self.theta_to_log_lda_m = Parameter(self.get_theta_to_log_lda_matrix(),
-                                            requires_grad=False)
         self.krawchouk_matrix = Parameter(self.calc_krawchouk_matrix(),
                                           requires_grad=False)
     
@@ -97,100 +87,25 @@ class VCKernel(HaploidKernel):
                 w_kd[d, k] = self.calc_w_kd(k, d)
         return(get_tensor(w_kd))
     
-    def define_kernel_params(self):
-        if self.log_lambdas0 is None:
-            raw_theta0 = torch.zeros(self.l)
-            raw_theta0[0:2] = -1
-        else:
-            raw_theta0 = torch.matmul(self.log_lda_to_theta_m,
-                                      get_tensor(self.log_lambdas0))
-        params = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train_lambdas)}
-        self.register_params(params=params, constraints={})
-    
-    def define_priors(self, tau):
-        self.register_prior("raw_theta_prior", NormalPrior(0, tau),
-                            lambda module: module.raw_theta[2:])
-        self.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
-                            lambda module: module.raw_theta[1])
-        self.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
-                            lambda module: module.raw_theta[0])
-
-    @property
-    def log_lda(self):
-        return(torch.matmul(self.theta_to_log_lda_m, self.raw_theta))
-    
     @property
     def lambdas(self):
-        lambdas = to_device(torch.zeros(self.s), 
-                            output_device=self.log_lda.get_device())
-        lambdas[1:] = torch.exp(self.log_lda)
+        log_lambdas = self.lambdas_prior.theta_to_log_lambdas(self.raw_theta)
+        log_lambdas = torch.cat((get_tensor([-10.], dtype=log_lambdas.dtype,
+                                            device=log_lambdas.device), log_lambdas))
+        lambdas = torch.exp(log_lambdas)
         return(lambdas)
     
-    @property
-    def logp(self):
-        return(self.raw_logp)
-
-    @log_lda.setter
-    def log_lda(self, value):
-        return self._set_log_lda(value)
-
     def _forward(self, x1, x2, lambdas, diag=False):
         w_d = torch.matmul(self.krawchouk_matrix, lambdas)
         hamming_dist = self.calc_hamming_distance(x1, x2).to(dtype=torch.long)
-        kernel = w_d[hamming_dist]
+        kernel = w_d[0] * (hamming_dist == 0)
+        for d in range(1, self.s):
+            kernel += w_d[d] * (hamming_dist == d)
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
         kernel = self._forward(x1, x2, lambdas=self.lambdas, diag=diag)
         return(kernel)
-
-
-class SiteProductKernel(HaploidKernel):
-    def __init__(self, n_alleles, seq_length,
-                 dtype=torch.float32, **kwargs):
-        super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
-        
-        self.define_params()
-        # # Limits to keep eigenspaces
-        # p = 1. / n_alleles
-        # self.min_w = np.log((1-p) / p)
-
-    def define_params(self):
-        params = {'raw_w': Parameter(torch.zeros(self.l), requires_grad=True),
-                  'raw_b': Parameter(torch.zeros(1), requires_grad=True)
-                  # 'raw_a': Parameter(torch.zeros(1), requires_grad=True)
-                  }
-        self.register_params(params=params, constraints={})
-        
-    @property
-    def beta(self):
-        return(self.raw_b)
-    
-    # @property
-    # def a(self):
-    #     return(self.raw_a)
-    
-    @property
-    def w(self):
-        # return(self.min_w + torch.exp(self.raw_w))
-        return(self.raw_w)
-
-    def _forward(self, x1, x2, beta, w, diag=False):
-        # TODO: make sure diag works here
-        log_factors = torch.log(1 + torch.exp(beta + w))
-        log_factors = torch.flatten(torch.stack([log_factors] * self.alpha, axis=0).T)
-        M = torch.diag(log_factors)
-        m = self.inner_product(x1, x2, M, diag=diag)
-        
-        # 1 - e^{beta} avoids log because it can be negative
-        distance = self.l - self.inner_product(x1, x2, diag=diag)
-        kernel = torch.exp(m) * (1 - torch.exp(beta)) ** distance 
-        return(kernel)
-    
-    def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, beta=self.beta, w=self.w,
-                             # a=self.a,
-                             diag=diag))
 
 
 class SkewedVCKernel(HaploidKernel):
@@ -269,7 +184,45 @@ class SkewedVCKernel(HaploidKernel):
         kernel = self._forward(x1, x2, lambdas=self.lambdas, logp=self.logp,
                                diag=diag)
         return(kernel)
+
+
+class SiteProductKernel(HaploidKernel):
+    def __init__(self, n_alleles, seq_length, p_prior,
+                 dtype=torch.float32, **kwargs):
+        super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
+        
+        self.define_params()
+        self.p_prior = p_prior
+        self.p_prior.set(self)
+
+    def define_params(self):
+        params = {'raw_theta': Parameter(torch.zeros(2), requires_grad=True)}
+        self.register_params(params=params, constraints={})
+        
+    @property
+    def beta(self):
+        logp = self.p_prior.resize_logp(self.raw_logp)
+        norm_logp = self.p_prior.normalize_logp(logp)
+        beta = self.p_prior.norm_logp_to_beta(norm_logp)
+        return(beta)
     
+    @property
+    def theta(self):
+        return(self.raw_theta)
+
+    def _forward(self, x1, x2, theta, beta, diag=False):
+        # TODO: make sure diag works here
+        log_factors = torch.flatten(torch.log(torch.exp(theta[0]) + torch.exp(theta[1] + beta[:, :-1])))
+        M = torch.diag(log_factors)
+        m = self.inner_product(x1, x2, M, diag=diag)
+        
+        distance = self.l - self.inner_product(x1, x2, diag=diag)
+        kernel = torch.exp(m) * (torch.exp(theta[0]) - torch.exp(theta[1])) ** distance # 1-et can be negative: avoid log
+        return(kernel)
+    
+    def forward(self, x1, x2, diag=False, **params):
+        return(self._forward(x1, x2, t=self.t, beta=self.beta, diag=diag))
+
 
 class DiploidKernel(SequenceKernel):
     def __init__(self, seq_length, **kwargs):

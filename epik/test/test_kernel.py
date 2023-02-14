@@ -23,7 +23,10 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(P, np.eye(3), atol=1e-4))
         
     def test_vc_kernel(self):
-        kernel = VCKernel(n_alleles=2, seq_length=2)
+        l, a = 2, 2
+        lambdas_prior = LambdasExpDecayPrior(l)
+        kernel = VCKernel(n_alleles=a, seq_length=l,
+                          lambdas_prior=lambdas_prior)
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
@@ -53,22 +56,27 @@ class KernelsTests(unittest.TestCase):
         assert(np.abs(cov - k2).mean() < 1e-4)
         
     def test_site_product_kernel(self):
-        kernel = SiteProductKernel(n_alleles=2, seq_length=1)
+        l, a = 1, 2
+        p_prior = AllelesProbPrior(l, a) 
+        kernel = SiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
         x = torch.tensor([[1, 0],
                           [0, 1]], dtype=torch.float32)
-        w = torch.tensor([1], dtype=torch.float32)
-        beta = torch.tensor([1], dtype=torch.float32)
-        cov = kernel._forward(x, x, beta=beta, w=w)
+        beta = torch.tensor([[1, 1, 0]], dtype=torch.float32)
+        theta = torch.tensor([0, 1], dtype=torch.float32)
+        cov = kernel._forward(x, x, theta=theta, beta=beta)
         print(cov)
         
-        kernel = SiteProductKernel(n_alleles=2, seq_length=2)
+        l, a = 2, 2
+        p_prior = AllelesProbPrior(l, a) 
+        kernel = SiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
                           [0, 1, 0, 1]], dtype=torch.float32)
-        w = torch.tensor([1, 1], dtype=torch.float32)
-        beta = torch.tensor([1], dtype=torch.float32)
-        cov = kernel._forward(x, x, beta=beta, w=w)
+        beta = torch.tensor([[1, 1, 0],
+                             [1, 1, 0]], dtype=torch.float32)
+        theta = torch.tensor([0, 0.5], dtype=torch.float32)
+        cov = kernel._forward(x, x, theta=theta, beta=beta)
         print(cov)
         
     def test_skewed_vc_lambdas_parametrizations(self):
@@ -426,5 +434,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_skewed_vc_kernel']
+    import sys;sys.argv = ['', 'KernelsTests.test_site_product_kernel']
     unittest.main()
