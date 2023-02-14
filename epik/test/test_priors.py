@@ -2,13 +2,9 @@
 import unittest
 
 import numpy as np
-import matplotlib.pyplot as plt
 import torch
 
-from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
-from epik.src.utils import seq_to_one_hot, get_tensor
-from epik.src.settings import TEST_DATA_DIR
-from os.path import join
+from epik.src.priors import AllelesProbPrior
 
 
 class PriorTests(unittest.TestCase):
