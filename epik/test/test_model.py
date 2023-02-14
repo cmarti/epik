@@ -15,12 +15,12 @@ from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
-from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel,\
-    SiteProductKernel
+from epik.src.kernel import SkewedVCKernel, VCKernel, SiteProductKernel
 from epik.src.model import EpiK
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             ps_to_variances)
 from gpmap.src.inference import VCregression
+from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -66,37 +66,24 @@ class ModelsTests(unittest.TestCase):
         model.fit(X, y, n_iter=100)
         ypred = model.predict(X)
         assert(pearsonr(ypred, y)[0] > 0.9)
-        
-    def test_epik_basic_loo(self):
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, train_p=False)
-        model = EpiK(kernel, likelihood_type='Gaussian')
-        
-        train_X = seq_to_one_hot(np.array(['AA', 'AB', 'BA']), alleles=['A', 'B'])
-        test_X = seq_to_one_hot(np.array(['BB']), alleles=['A', 'B'])
-        train_y = np.array([0.2, 1.1, 0.5])
-        test_y = [1.5]
-        model.fit(train_X, train_y, n_iter=100)
-        
-        test_predy = model.predict(test_X)
-        print(test_y, test_predy)
-        
-        train_predy = model.predict(train_X)
-        train_rho = pearsonr(train_predy, train_y)[0]
-        print(train_predy, train_y, train_rho)
-        assert(train_rho > 0.9)
     
-    def test_epik_basic_gpu(self):
-        output_device = torch.device('cuda:0') 
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
-        model = EpiK(kernel, likelihood_type='Gaussian',
-                     output_device=output_device)
+    def test_epik_vc_smn1(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        l, a = 7, 4
         
-        X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
-        y = torch.tensor([0.2, 1.1, 0.5, 1.5])
-        model.fit(X, y, n_iter=100)
-        ypred = model.predict(X)
-        assert(ypred.shape[0] == 4)
-        assert(pearsonr(ypred.cpu().numpy(), y.cpu().numpy())[0] > 0.9)
+        lambdas_prior = LambdasExpDecayPrior(seq_length=l, tau=0.2)
+        kernel = VCKernel(n_alleles=a, seq_length=l, lambdas_prior=lambdas_prior)
+        model = EpiK(kernel)
+        model.fit(train_x, train_y, y_var=train_y_var, n_iter=100, learning_rate=0.02)
+        
+        train_ypred = model.predict(train_x).detach().numpy()
+        test_ypred = model.predict(test_x).detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
         
     def test_epik_basic_RBF(self):
         kernel = ScaleKernel(RBFKernel())
@@ -125,30 +112,16 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_skewed_vc_smn1(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000,
-                                                                      dtype=torch.float64)
-        kernel = SkewedVCKernel(n_alleles=4, seq_length=7, train_p=True,
-                                q=0.5, tau=1, lambdas_prior='monotonic_decay')
-        model = EpiK(kernel, likelihood_type='Gaussian', dtype=torch.float64)
-        model.fit(train_x, train_y, y_var=train_y_var,
-                  n_iter=100, learning_rate=0.02)
-        
-        train_ypred = model.predict(train_x).detach().numpy()
-        test_ypred = model.predict(test_x).detach().numpy()
-        
-        train_rho = pearsonr(train_ypred, train_y)[0]
-        test_rho = pearsonr(test_ypred, test_y)[0]
-        
-        assert(train_rho > 0.9)
-        assert(test_rho > 0.6)
-        
-    def test_epik_vc_smn1(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        l, a = 7, 4
         
-        kernel = VCKernel(n_alleles=4, seq_length=7, tau=0.2)
-        model = EpiK(kernel, likelihood_type='Gaussian')
+        lambdas_prior = LambdasExpDecayPrior(seq_length=l, tau=0.2)
+        p_prior = AllelesProbPrior(seq_length=l, n_alleles=a)
+        kernel = SkewedVCKernel(n_alleles=a, seq_length=l, q=0.7,
+                                lambdas_prior=lambdas_prior, p_prior=p_prior)
+        model = EpiK(kernel)
         model.fit(train_x, train_y, y_var=train_y_var,
-                  n_iter=100, learning_rate=0.02)
+                  n_iter=100, learning_rate=0.05)
         
         train_ypred = model.predict(train_x).detach().numpy()
         test_ypred = model.predict(test_x).detach().numpy()
@@ -157,15 +130,17 @@ class ModelsTests(unittest.TestCase):
         test_rho = pearsonr(test_ypred, test_y)[0]
         
         assert(train_rho > 0.9)
-        assert(test_rho > 0.6)
-    
+        assert(test_rho > 0.7)
+        
     def test_epik_site_kernel_smn1(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        l, a = 7, 4
         
-        kernel = SiteProductKernel(n_alleles=4, seq_length=7)
-        model = EpiK(kernel, likelihood_type='Gaussian')
+        p_prior = AllelesProbPrior(seq_length=l, n_alleles=a, alleles_equal=True)
+        kernel = SiteProductKernel(n_alleles=4, seq_length=7, p_prior=p_prior)
+        model = EpiK(kernel)
         model.fit(train_x, train_y, y_var=train_y_var,
-                  n_iter=200, learning_rate=0.05)
+                  n_iter=100, learning_rate=0.05)
         
         train_ypred = model.predict(train_x).detach().numpy()
         test_ypred = model.predict(test_x).detach().numpy()
@@ -173,7 +148,8 @@ class ModelsTests(unittest.TestCase):
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
         
-        w = kernel.w.detach().numpy()
+        w = kernel.beta.detach().numpy()
+        print(test_rho, w, kernel.raw_logp)
         assert(w[0] < w[1])
         assert(w[-1] < w[-2])
         assert(train_rho > 0.9)
@@ -409,5 +385,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_recover_site_weights']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_site_kernel_smn1']
     unittest.main()

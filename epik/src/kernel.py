@@ -181,7 +181,7 @@ class SkewedVCKernel(HaploidKernel):
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
-        kernel = self._forward(x1, x2, lambdas=self.lambdas, logp=self.logp,
+        kernel = self._forward(x1, x2, lambdas=self.lambdas, norm_logp=self.logp,
                                diag=diag)
         return(kernel)
 
@@ -221,7 +221,7 @@ class SiteProductKernel(HaploidKernel):
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, t=self.t, beta=self.beta, diag=diag))
+        return(self._forward(x1, x2, theta=self.theta, beta=self.beta, diag=diag))
 
 
 class DiploidKernel(SequenceKernel):
