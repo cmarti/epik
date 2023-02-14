@@ -5,8 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
-from epik.src.kernel import (SkewedVCKernel,  VCKernel, ExponentialKernel,
-                             SiteProductKernel, LambdasExpDecayPrior, AllelesProbPrior)
+from epik.src.kernel import SkewedVCKernel,  VCKernel, SiteProductKernel
+from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
 from epik.src.utils import seq_to_one_hot, get_tensor
 from epik.src.settings import TEST_DATA_DIR
 from os.path import join
@@ -21,18 +21,6 @@ class KernelsTests(unittest.TestCase):
         B = kernel.coeffs
         P = torch.matmul(B, V).numpy()
         assert(np.allclose(P, np.eye(3), atol=1e-4))
-    
-    def test_exp_decay_lambdas_prior(self):
-        l = 5
-        prior = LambdasExpDecayPrior(l, tau=0.2, train=False)
-        log_lambdas = -torch.arange(l).to(dtype=torch.float)
-        theta = prior.log_lambdas_to_theta(log_lambdas).detach()
-        exp_theta = np.zeros(l)
-        exp_theta[1] = -1
-        assert(np.allclose(theta.numpy(), exp_theta))
-        
-        log_lambdas_star = prior.theta_to_log_lambdas(theta).detach().numpy()
-        assert(np.allclose(log_lambdas, log_lambdas_star))
         
     def test_vc_kernel(self):
         kernel = VCKernel(n_alleles=2, seq_length=2)
@@ -82,64 +70,6 @@ class KernelsTests(unittest.TestCase):
         beta = torch.tensor([1], dtype=torch.float32)
         cov = kernel._forward(x, x, beta=beta, w=w)
         print(cov)
-
-    
-    def test_exponential_kernel(self):
-        kernel = ExponentialKernel(n_alleles=2, seq_length=2, 
-                                   starting_lengthscale=1)
-        x = torch.tensor([[1, 0, 1, 0],
-                          [0, 1, 1, 0],
-                          [1, 0, 0, 1],
-                          [0, 1, 0, 1]], dtype=torch.float32)
-        cov = kernel.forward(x, x).detach().numpy()
-        k = np.array([[1., 0.5, 0.5, 0.25],
-                      [0.5, 1., 0.25, 0.5],
-                      [0.5, 0.25, 1., 0.5],
-                      [0.25, 0.5, 0.5, 1.]])
-        assert(np.allclose(cov, k, atol=1e-3))
-        
-        # Different length scale
-        kernel = ExponentialKernel(n_alleles=2, seq_length=2, 
-                                   starting_lengthscale=2)
-        cov = kernel.forward(x, x).detach().numpy()
-        k = np.array([[1., 0.25, 0.25, 0.0625],
-                      [0.25, 1., 0.0625, 0.25],
-                      [0.25, 0.0625, 1., 0.25],
-                      [0.0625, 0.25, 0.25, 1.]])
-        assert(np.allclose(cov, k, atol=1e-3))
-    
-        # Increasing length    
-        kernel = ExponentialKernel(n_alleles=2, seq_length=3, 
-                                   starting_lengthscale=1)
-        x = torch.tensor([[1, 0, 1, 0, 1, 0],
-                          [0, 1, 1, 0, 1, 0],
-                          [1, 0, 0, 1, 1, 0],
-                          [0, 1, 0, 1, 1, 0],
-                          [1, 0, 1, 0, 0, 1],
-                          [0, 1, 1, 0, 0, 1],
-                          [1, 0, 0, 1, 0, 1],
-                          [0, 1, 0, 1, 0, 1]], dtype=torch.float32)
-        cov = kernel.forward(x, x).detach().numpy()
-        k0 = np.array([1., 0.5, 0.5, 0.25, 0.5, 0.25, 0.25, 0.125])
-        assert(np.allclose(cov[0], k0, atol=1e-3))
-        
-        # Increasing alleles
-        kernel = ExponentialKernel(n_alleles=3, seq_length=2, 
-                                   starting_lengthscale=1)
-        x = torch.tensor([[1, 0, 0, 1, 0, 0],
-                          [0, 1, 0, 1, 0, 0],
-                          [0, 0, 1, 1, 0, 0],
-                          [1, 0, 0, 0, 1, 0],
-                          [0, 1, 0, 0, 1, 0],
-                          [0, 0, 1, 0, 1, 0],
-                          [1, 0, 0, 0, 0, 1],
-                          [0, 1, 0, 0, 0, 1],
-                          [0, 0, 1, 0, 0, 1]], dtype=torch.float32)
-        cov = kernel.forward(x, x).detach().numpy()
-        k0 = np.array([1., 0.5, 0.5,
-                       0.5, 0.25, 0.25,
-                       0.5, 0.25, 0.25])
-        assert(np.allclose(cov[0], k0, atol=1e-3))
         
     def test_skewed_vc_lambdas_parametrizations(self):
         x = torch.tensor([[1, 0, 1, 0],
@@ -151,23 +81,23 @@ class KernelsTests(unittest.TestCase):
         lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
                                 lambdas_prior='monotonic_decay')
-        cov = kernel._forward(x, x, lambdas, kernel.log_p)
+        cov = kernel._forward(x, x, lambdas, kernel.logp)
         assert(np.allclose(cov.detach().numpy(), 1))
         
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
                                 lambdas_prior='2nd_order_diff')
-        cov = kernel._forward(x, x, lambdas, kernel.log_p)
+        cov = kernel._forward(x, x, lambdas, kernel.logp)
         assert(np.allclose(cov.detach().numpy(), 1))
         
         # Arbitrary lambdas
         lambdas = torch.tensor([1, 0.2, 0.05], dtype=torch.float32)
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
                                 lambdas_prior='monotonic_decay')
-        cov1 = kernel._forward(x, x, lambdas, kernel.log_p).detach().numpy()
+        cov1 = kernel._forward(x, x, lambdas, kernel.logp).detach().numpy()
         
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
                                 lambdas_prior='2nd_order_diff')
-        cov2 = kernel._forward(x, x, lambdas, kernel.log_p).detach().numpy()
+        cov2 = kernel._forward(x, x, lambdas, kernel.logp).detach().numpy()
         assert(np.allclose(cov1, cov2))
         
         # With initialized lambdas to ensure transformation to the right thetas
@@ -189,7 +119,7 @@ class KernelsTests(unittest.TestCase):
                                 dtype=torch.float32)
         
         logp = torch.tensor([[0, 0, -10], [0, 0, -10]], dtype=torch.float32)
-        logp = p_prior.normalize_log_p(logp)
+        logp = p_prior.normalize_logp(logp)
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
@@ -226,7 +156,7 @@ class KernelsTests(unittest.TestCase):
                                 dtype=torch.float32)
         
         logp = torch.tensor([[0, 0, -10]] * l, dtype=torch.float32)
-        logp = p_prior.normalize_log_p(logp)
+        logp = p_prior.normalize_logp(logp)
         x = torch.tensor([[1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
                           [0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
                           [0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 0],
@@ -246,7 +176,7 @@ class KernelsTests(unittest.TestCase):
         kernel = SkewedVCKernel(a, l, lambdas_prior, p_prior,
                                 dtype=torch.float32)
         logp = torch.tensor([[0, 0, 0, -10]] * l, dtype=torch.float32)
-        logp = p_prior.normalize_log_p(logp)
+        logp = p_prior.normalize_logp(logp)
         x = torch.tensor([[1, 0, 0, 1, 0, 0],
                           [0, 1, 0, 1, 0, 0],
                           [0, 0, 1, 1, 0, 0],
@@ -265,7 +195,7 @@ class KernelsTests(unittest.TestCase):
     def test_skewed_vc_kernel_different_qs(self):
         for q in np.linspace(0.1, 0.9, 11):
             kernel = SkewedVCKernel(n_alleles=2, seq_length=2, q=q, dtype=torch.float32)
-            log_p = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
+            logp = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
                                             [0.5, 0.5, 0.00001]], dtype=torch.float32))
             x = torch.tensor([[1, 0, 1, 0],
                               [0, 1, 1, 0],
@@ -274,12 +204,12 @@ class KernelsTests(unittest.TestCase):
     
             # k=0        
             lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
-            cov = kernel._forward(x, x, lambdas, log_p).numpy()
+            cov = kernel._forward(x, x, lambdas, logp).numpy()
             assert(np.allclose(cov, 1, atol=1e-4))
             
             # k=1        
             lambdas = torch.tensor([0, 1, 0], dtype=torch.float32)
-            cov = kernel._forward(x, x, lambdas, log_p).numpy()
+            cov = kernel._forward(x, x, lambdas, logp).numpy()
             k1 = np.array([[2, 0, 0, -2],
                            [0, 2, -2, 0],
                            [0, -2, 2, 0],
@@ -288,7 +218,7 @@ class KernelsTests(unittest.TestCase):
             
             # k=2
             lambdas = torch.tensor([0, 0, 1], dtype=torch.float32)
-            cov = kernel._forward(x, x, lambdas, log_p).numpy()
+            cov = kernel._forward(x, x, lambdas, logp).numpy()
             k2 = np.array([[1, -1, -1, 1],
                            [-1, 1, 1, -1],
                            [-1, 1, 1, -1],
@@ -298,7 +228,7 @@ class KernelsTests(unittest.TestCase):
     def test_skewed_vc_kernel_gpu(self):
         gpu = torch.device('cuda:0')
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32).to(gpu)
-        log_p = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
+        logp = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
                                         [0.5, 0.5, 0.00001]], dtype=torch.float32)).to(gpu)
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
@@ -308,12 +238,12 @@ class KernelsTests(unittest.TestCase):
 
         # k=0        
         lambdas = torch.tensor([1, 0, 0], dtype=torch.float32).to(gpu)
-        cov = kernel._forward(xgpu, xgpu, lambdas, log_p).cpu().numpy()
+        cov = kernel._forward(xgpu, xgpu, lambdas, logp).cpu().numpy()
         assert(np.allclose(cov, 1))
         
         # k=1        
         lambdas = torch.tensor([0, 1, 0], dtype=torch.float32).to(gpu)
-        cov = kernel._forward(xgpu, xgpu, lambdas, log_p).cpu().numpy()
+        cov = kernel._forward(xgpu, xgpu, lambdas, logp).cpu().numpy()
         k1 = np.array([[2, 0, 0, -2],
                        [0, 2, -2, 0],
                        [0, -2, 2, 0],
@@ -322,7 +252,7 @@ class KernelsTests(unittest.TestCase):
         
         # k=2
         lambdas = torch.tensor([0, 0, 1], dtype=torch.float32).to(gpu)
-        cov = kernel._forward(xgpu, xgpu, lambdas, log_p).cpu().numpy()
+        cov = kernel._forward(xgpu, xgpu, lambdas, logp).cpu().numpy()
         k2 = np.array([[1, -1, -1, 1],
                        [-1, 1, 1, -1],
                        [-1, 1, 1, -1],
@@ -330,20 +260,20 @@ class KernelsTests(unittest.TestCase):
         assert(np.abs(cov - k2).mean() < 1e-4)
         
         # Test now with the public method
-        log_p = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
+        logp = torch.log(torch.tensor([[0.5, 0.5, 0.00001],
                                         [0.5, 0.5, 0.00001]], dtype=torch.float32))
         log_lambdas = torch.tensor([0, -10], dtype=torch.float32)
 
         for q in np.linspace(0.1, 0.9, 11):
             kernel = SkewedVCKernel(n_alleles=2, seq_length=2, q=q,
                                     log_lambdas0=log_lambdas,
-                                    starting_p=torch.exp(log_p),
+                                    starting_p=torch.exp(logp),
                                     dtype=torch.float32).to(gpu)
             cov_gpu = kernel.forward(xgpu, xgpu).detach().cpu().numpy()
             
             kernel = SkewedVCKernel(n_alleles=2, seq_length=2, q=q,
                                     log_lambdas0=log_lambdas,
-                                    starting_p=torch.exp(log_p),
+                                    starting_p=torch.exp(logp),
                                     dtype=torch.float32)
             cov_cpu = kernel.forward(x, x).detach().numpy()
             assert(np.allclose(cov_gpu, cov_cpu, atol=1e-3))
@@ -351,7 +281,7 @@ class KernelsTests(unittest.TestCase):
         
     def test_skewed_vc_kernel_diag(self):
         kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32)
-        log_p = torch.log(torch.tensor([[0.45, 0.45, 0.1],
+        logp = torch.log(torch.tensor([[0.45, 0.45, 0.1],
                                         [0.45, 0.45, 0.1]], dtype=torch.float32))
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
@@ -359,8 +289,8 @@ class KernelsTests(unittest.TestCase):
                           [0, 1, 0, 1]], dtype=torch.float32)
 
         lambdas = torch.tensor([1, 0.5, 0.1], dtype=torch.float32)
-        cov = kernel._forward(x, x, lambdas, log_p, diag=False)
-        var = kernel._forward(x, x, lambdas, log_p, diag=True)
+        cov = kernel._forward(x, x, lambdas, logp, diag=False)
+        var = kernel._forward(x, x, lambdas, logp, diag=True)
         assert(np.allclose(cov.numpy().diagonal(), var.numpy()))
         
     def test_kernel_params(self):

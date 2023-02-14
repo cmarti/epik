@@ -127,8 +127,8 @@ class VCKernel(HaploidKernel):
         return(lambdas)
     
     @property
-    def log_p(self):
-        return(self.raw_log_p)
+    def logp(self):
+        return(self.raw_logp)
 
     @log_lda.setter
     def log_lda(self, value):
@@ -235,7 +235,7 @@ class SkewedVCKernel(HaploidKernel):
     
     @property
     def logp(self):
-        logp = self.p_prior.normalize_log_p(self.raw_logp)
+        logp = self.p_prior.normalize_logp(self.p_prior.resize_logp(self.raw_logp))
         return(logp)
     
     def _forward(self, x1, x2, lambdas, norm_logp, diag=False):
@@ -266,7 +266,7 @@ class SkewedVCKernel(HaploidKernel):
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
-        kernel = self._forward(x1, x2, lambdas=self.lambdas, log_p=self.logp,
+        kernel = self._forward(x1, x2, lambdas=self.lambdas, logp=self.logp,
                                diag=diag)
         return(kernel)
     
