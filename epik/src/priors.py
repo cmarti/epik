@@ -114,12 +114,30 @@ class LambdasMonotonicDecayPrior(KernelParamPrior):
                               lambda module: module.raw_theta[2:])
         
 class AllelesProbPrior(KernelParamPrior):
-    def __init__(self, seq_length, n_alleles, eta=None, beta0=None, train=True):
+    def __init__(self, seq_length, n_alleles, eta=None, beta0=None, train=True,
+                 sites_equal=False, alleles_equal=False):
         super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train)
         self.eta = eta
+        self.sites_equal = sites_equal
+        self.alleles_equal = alleles_equal
+        self.calc_shape()
         self.beta0 = beta0
         
-    def normalize_log_p(self, logp):
+    def calc_shape(self):
+        nrows = 1 if self.sites_equal else self.l
+        ncols = 1 if self.alleles_equal else self.alpha + 1
+        self.shape = (nrows, ncols)
+
+    def resize_logp(self, logp):
+        if self.alleles_equal:
+            ones = torch.zeros((1, self.alpha+1))
+            logp = torch.matmul(logp, ones)
+        if self.sites_equal:
+            ones = torch.zeros((self.l, 1))
+            logp = torch.matmul(ones, logp)
+        return(logp)
+        
+    def normalize_logp(self, logp):
         return(logp - torch.logsumexp(logp, 1).unsqueeze(1))
     
     def norm_logp_to_beta(self, logp):
@@ -132,7 +150,7 @@ class AllelesProbPrior(KernelParamPrior):
 
     def get_logp0(self):
         if self.beta0 is None:
-            raw_logp0 = torch.zeros((self.l, self.alpha + 1))
+            raw_logp0 = torch.zeros(self.shape)
         else:
             raw_logp0 = self.beta_to_logp(self.beta0)
         return(raw_logp0)
