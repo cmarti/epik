@@ -129,12 +129,16 @@ class AllelesProbPrior(KernelParamPrior):
         self.shape = (nrows, ncols)
 
     def resize_logp(self, logp):
-        if self.alleles_equal:
-            ones = torch.zeros((1, self.alpha+1))
-            logp = torch.matmul(logp, ones)
         if self.sites_equal:
-            ones = torch.zeros((self.l, 1))
+            ones = torch.ones((self.l, 1))
             logp = torch.matmul(ones, logp)
+            
+        if self.alleles_equal:
+            log1mp = torch.log(1 - torch.exp(logp)) * torch.ones((self.l, 1))
+            logp = logp - np.log(self.alpha)
+            ones = torch.ones((1, self.alpha))
+            logp = torch.cat([torch.matmul(logp, ones), log1mp], 1)
+        
         return(logp)
         
     def normalize_logp(self, logp):
@@ -150,7 +154,7 @@ class AllelesProbPrior(KernelParamPrior):
 
     def get_logp0(self):
         if self.beta0 is None:
-            raw_logp0 = torch.zeros(self.shape)
+            raw_logp0 = torch.zeros(self.shape)-1e-6
         else:
             raw_logp0 = self.beta_to_logp(self.beta0)
         return(raw_logp0)

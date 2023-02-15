@@ -13,12 +13,12 @@ class PriorTests(unittest.TestCase):
             for l in range(2, 5):
                 prior = AllelesProbPrior(l, a)
                 logp = prior.get_logp0()
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp, -1e-6))
                 assert(logp.shape == (l, a+1))
                 
                 # Remains unchanged
                 logp = prior.resize_logp(logp)
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp, -1e-6))
                 assert(logp.shape == (l, a+1))
                 
                 # Normalize and get probabilities
@@ -37,33 +37,46 @@ class PriorTests(unittest.TestCase):
                 # Same weight across alleles
                 prior = AllelesProbPrior(l, a, alleles_equal=True)
                 logp = prior.get_logp0()
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp, -1e-6))
                 assert(logp.shape == (l, 1))
         
                 logp = prior.resize_logp(logp)
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp[:,:-1], -np.log(a), atol=1e-3))
                 assert(logp.shape == (l, a+1))
                 
                 # Same weight across sites
                 prior = AllelesProbPrior(l, a, sites_equal=True)
                 logp = prior.get_logp0()
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp, -1e-6))
                 assert(logp.shape == (1, a+1))
                 
                 logp = prior.resize_logp(logp)
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp, -1e-6))
                 assert(logp.shape == (l, a+1))
                 
                 # Same weight across sites and alleles
                 prior = AllelesProbPrior(l, a, sites_equal=True, alleles_equal=True)
                 logp = prior.get_logp0()
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp, -1e-6))
                 assert(logp.shape == (1, 1))
                 
                 logp = prior.resize_logp(logp)
-                assert(np.allclose(logp, 0))
+                assert(np.allclose(logp[:,:-1], -np.log(a), atol=1e-3))
                 assert(logp.shape == (l, a+1))
     
+    def test_alleles_prior_unequal_weights(self):
+        a, l = 2, 2
+        prior = AllelesProbPrior(l, a, alleles_equal=True)
+        logp = torch.tensor([[-1], [-2.]])
+        p = torch.exp(prior.normalize_logp(prior.resize_logp(logp))).numpy()
+        assert(np.unique(p).shape[0] > 1)
+        assert(np.allclose(p.sum(1), 1))
+        
+        prior = AllelesProbPrior(l, a, alleles_equal=True, sites_equal=True)
+        logp = torch.tensor([[-1.]])
+        p = torch.exp(prior.normalize_logp(prior.resize_logp(logp))).numpy()
+        assert(np.allclose(p.sum(1), 1))
+                
     def test_exp_decay_lambdas_prior(self):
         l = 5
         prior = LambdasExpDecayPrior(l, tau=0.2, train=False)
