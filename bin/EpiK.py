@@ -11,10 +11,11 @@ from gpytorch.kernels.matern_kernel import MaternKernel
 from gpytorch.kernels.rq_kernel import RQKernel
 from gpytorch.kernels.linear_kernel import LinearKernel
 
-from epik.src.kernel import SkewedVCKernel, VCKernel, ExponentialKernel
+from epik.src.kernel import SkewedVCKernel, VCKernel, SiteProductKernel
 from epik.src.model import EpiK
-from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot,\
-    get_tensor
+from epik.src.utils import (LogTrack, guess_space_configuration, seq_to_one_hot,
+                            get_tensor)
+from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
 
         
 def main():
@@ -30,7 +31,7 @@ def main():
 
     options_group = parser.add_argument_group('Kernel options')
     options_group.add_argument('-k', '--kernel', default='VC',
-                               help='Kernel function to use (VC, sVC, Exponential, Diploid, RBF, RQ, matern, linear)')
+                               help='Kernel function to use (VC, sVC, SiteProduct, Diploid, RBF, RQ, matern, linear)')
     help_msg = 'Standard deviation of deviations of variance compoments from exponential decay'
     options_group.add_argument('--tau', default=0.2, type=float, help=help_msg)
     options_group.add_argument('--q', default=None, type=float,
@@ -121,27 +122,28 @@ def main():
         kernel = ScaleKernel(RQKernel())
     elif kernel == 'linear':
         kernel = ScaleKernel(LinearKernel())
-    elif kernel == 'Exponential':
-        n_alleles, seq_length = np.max(config['n_alleles']), config['length']
-        kernel = ScaleKernel(ExponentialKernel(n_alleles=n_alleles,
-                                               seq_length=seq_length,
-                                               train_p=train_p,
-                                               dtype=dtype))
-    elif kernel == 'VC':
-        n_alleles, seq_length = np.max(config['n_alleles']), config['length']
-        kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length, tau=tau,
-                          dtype=dtype)
-    elif kernel == 'sVC':
-        n_alleles, seq_length = np.max(config['n_alleles']), config['length']
-        kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length,
-                                train_p=train_p, tau=tau, q=q,
-                                dtype=dtype, lambdas_prior=lambdas_prior)
-    elif kernel == 'Diploid':
-        msg = 'Diploid kernel Not implemented yet'
-        raise ValueError(msg)
     else:
-        msg = 'Unknown kernel provided: {}'.format(kernel)
-        raise ValueError(msg)
+        n_alleles, seq_length = np.max(config['n_alleles']), config['length']
+        p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=n_alleles,
+                                   train=train_p, dtype=dtype)
+        lambdas_prior = LambdasExpDecayPrior(seq_length=seq_length, tau=tau,
+                                             dtype=dtype)
+        if kernel == 'SiteProduct':
+            kernel = SiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
+                                       p_prior=p_prior, dtype=dtype)
+        elif kernel == 'VC':
+            kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length,
+                              lambdas_prior=lambdas_prior, dtype=dtype)
+        elif kernel == 'sVC':
+            kernel = SkewedVCKernel(n_alleles=n_alleles, seq_length=seq_length, 
+                                    lambdas_prior=lambdas_prior, p_prior=p_prior,
+                                    q=q, dtype=dtype)
+        elif kernel == 'Diploid':
+            msg = 'Diploid kernel Not implemented yet'
+            raise ValueError(msg)
+        else:
+            msg = 'Unknown kernel provided: {}'.format(kernel)
+            raise ValueError(msg)
     
     # Create model
     output_device = torch.device('cuda:0') if gpu else None
