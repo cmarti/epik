@@ -6,11 +6,12 @@ from gpytorch.priors.torch_priors import NormalPrior
 
 
 class KernelParamPrior(object):
-    def __init__(self, seq_length, n_alleles, train=True):
+    def __init__(self, seq_length, n_alleles, train=True, dtype=torch.float32):
         self.l = seq_length
         self.alpha = n_alleles
         self.s = seq_length + 1
         self.train = train
+        self.dtype = dtype
     
     def set(self, kernel):
         self.set_params(kernel)
@@ -18,14 +19,15 @@ class KernelParamPrior(object):
 
 
 class LambdasExpDecayPrior(KernelParamPrior):
-    def __init__(self, seq_length, tau=0.2, log_lambdas0=None, train=True):
-        super().__init__(seq_length=seq_length, n_alleles=None, train=train)
+    def __init__(self, seq_length, tau=0.2, log_lambdas0=None, train=True,
+                 dtype=torch.float32):
+        super().__init__(seq_length=seq_length, n_alleles=None, train=train,
+                         dtype=dtype)
         self.tau = tau
-        self.calc_log_lambdas_to_theta_matrix()
-        self.calc_theta_to_log_lambdas_matrix()
+        self.calc_log_lambdas_theta_matrices()
         self.log_lambdas0 = log_lambdas0
     
-    def calc_log_lambdas_to_theta_matrix(self):
+    def calc_log_lambdas_theta_matrices(self):
         matrix = torch.zeros((self.l, self.l))
         matrix[0, 0] = 1
         matrix[1, 0] = -1
@@ -35,16 +37,16 @@ class LambdasExpDecayPrior(KernelParamPrior):
             matrix[i, i-1] = 2
             matrix[i, i] = -1
         self.log_lambdas_to_theta_matrix = Parameter(matrix, requires_grad=False)
-    
-    def calc_theta_to_log_lambdas_matrix(self):
-        self.theta_to_log_lambdas_matrix = torch.inverse(self.log_lambdas_to_theta_matrix)
+        self.theta_to_log_lambdas_matrix = Parameter(torch.inverse(matrix), requires_grad=False)
         
-    def theta_to_log_lambdas(self, theta):
-        log_lambdas = torch.matmul(self.theta_to_log_lambdas_matrix, theta)
+    def theta_to_log_lambdas(self, theta, kernel=None):
+        obj = self if kernel is None else kernel
+        log_lambdas = torch.matmul(obj.theta_to_log_lambdas_matrix, theta)
         return(log_lambdas)
     
-    def log_lambdas_to_theta(self, log_lambdas):
-        theta = torch.matmul(self.log_lambdas_to_theta_matrix, log_lambdas)
+    def log_lambdas_to_theta(self, log_lambdas, kernel=None):
+        obj = self if kernel is None else kernel
+        theta = torch.matmul(obj.log_lambdas_to_theta_matrix, log_lambdas)
         return(theta)
 
     def get_theta0(self):
@@ -57,7 +59,10 @@ class LambdasExpDecayPrior(KernelParamPrior):
 
     def set_params(self, kernel):
         raw_theta0 = self.get_theta0()
-        theta = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train)}
+        theta = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train),
+                 'log_lambdas_to_theta_matrix': self.log_lambdas_to_theta_matrix,
+                 'theta_to_log_lambdas_matrix': self.theta_to_log_lambdas_matrix}
+        
         kernel.register_params(theta)
     
     def set_priors(self, kernel):
@@ -70,8 +75,10 @@ class LambdasExpDecayPrior(KernelParamPrior):
 
 
 class LambdasMonotonicDecayPrior(KernelParamPrior):
-    def __init__(self, seq_length, tau, log_lambdas0=None, train=True):
-        super().__init__(seq_length=seq_length, n_alleles=None, train=train)
+    def __init__(self, seq_length, tau, log_lambdas0=None, train=True,
+                 dtype=torch.float32):
+        super().__init__(seq_length=seq_length, n_alleles=None, train=train,
+                         dtype=dtype)
         self.tau = tau
         self.log_lambdas0 = log_lambdas0
     
@@ -115,8 +122,9 @@ class LambdasMonotonicDecayPrior(KernelParamPrior):
         
 class AllelesProbPrior(KernelParamPrior):
     def __init__(self, seq_length, n_alleles, eta=None, beta0=None, train=True,
-                 sites_equal=False, alleles_equal=False):
-        super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train)
+                 sites_equal=False, alleles_equal=False, dtype=torch.float32):
+        super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
+                         dtype=dtype)
         self.eta = eta
         self.sites_equal = sites_equal
         self.alleles_equal = alleles_equal
@@ -160,7 +168,7 @@ class AllelesProbPrior(KernelParamPrior):
         return(raw_logp0)
 
     def set_params(self, kernel):
-        raw_logp0 = self.get_logp0()
+        raw_logp0 = self.get_logp0().to(dtype=self.dtype)
         logp = {'raw_logp': Parameter(raw_logp0, requires_grad=self.train)}
         kernel.register_params(logp)
         

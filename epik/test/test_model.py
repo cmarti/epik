@@ -294,7 +294,7 @@ class ModelsTests(unittest.TestCase):
             check_call(cmd)
             
             # Predict test sequences with variable ps
-            cmd.extend(['-k', 'sVC', '--train_p', '--use_float64'])
+            cmd.extend(['-k', 'SiteProduct', '--train_p', '--use_float64'])
             check_call(cmd)
             
             # Predict test sequences with variable ps using GPU
@@ -384,5 +384,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_site_kernel_smn1']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin']
     unittest.main()

@@ -59,6 +59,14 @@ class HaploidKernel(SequenceKernel):
     
     def calc_hamming_distance(self, x1, x2):
         return(self.l - self.inner_product(x1, x2))
+    
+    @property
+    def lambdas(self):
+        log_lambdas = self.lambdas_prior.theta_to_log_lambdas(self.raw_theta, kernel=self)
+        log_lambdas = torch.cat((get_tensor([-10.], dtype=log_lambdas.dtype,
+                                            device=log_lambdas.device), log_lambdas))
+        lambdas = torch.exp(log_lambdas)
+        return(lambdas)
 
 
 class VCKernel(HaploidKernel):
@@ -86,14 +94,6 @@ class VCKernel(HaploidKernel):
             for d in range(self.s):
                 w_kd[d, k] = self.calc_w_kd(k, d)
         return(get_tensor(w_kd))
-    
-    @property
-    def lambdas(self):
-        log_lambdas = self.lambdas_prior.theta_to_log_lambdas(self.raw_theta)
-        log_lambdas = torch.cat((get_tensor([-10.], dtype=log_lambdas.dtype,
-                                            device=log_lambdas.device), log_lambdas))
-        lambdas = torch.exp(log_lambdas)
-        return(lambdas)
     
     def _forward(self, x1, x2, lambdas, diag=False):
         w_d = torch.matmul(self.krawchouk_matrix, lambdas)
@@ -140,14 +140,6 @@ class SkewedVCKernel(HaploidKernel):
         self.logq_powers = Parameter(get_tensor(log_q_powers, dtype=self.fdtype), requires_grad=False)
         self.log_1mq_powers = Parameter(get_tensor(log_1mq_powers, dtype=self.fdtype), requires_grad=False)
         
-    @property
-    def lambdas(self):
-        log_lambdas = self.lambdas_prior.theta_to_log_lambdas(self.raw_theta)
-        log_lambdas = torch.cat((get_tensor([-10.], dtype=log_lambdas.dtype,
-                                            device=log_lambdas.device), log_lambdas))
-        lambdas = torch.exp(log_lambdas)
-        return(lambdas)
-    
     @property
     def logp(self):
         logp = -torch.exp(self.raw_logp)
