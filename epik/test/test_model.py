@@ -148,8 +148,7 @@ class ModelsTests(unittest.TestCase):
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
         
-        w = kernel.beta.detach().numpy()
-        print(test_rho, w, kernel.raw_logp)
+        w = kernel.beta.detach().numpy()[:, 0]
         assert(w[0] < w[1])
         assert(w[-1] < w[-2])
         assert(train_rho > 0.9)

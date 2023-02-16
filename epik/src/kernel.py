@@ -150,7 +150,8 @@ class SkewedVCKernel(HaploidKernel):
     
     @property
     def logp(self):
-        logp = self.p_prior.normalize_logp(self.p_prior.resize_logp(self.raw_logp))
+        logp = -torch.exp(self.raw_logp)
+        logp = self.p_prior.normalize_logp(self.p_prior.resize_logp(logp))
         return(logp)
     
     def _forward(self, x1, x2, lambdas, norm_logp, diag=False):
@@ -201,7 +202,8 @@ class SiteProductKernel(HaploidKernel):
         
     @property
     def beta(self):
-        logp = self.p_prior.resize_logp(self.raw_logp)
+        logp = -torch.exp(self.raw_logp)
+        logp = self.p_prior.resize_logp(logp)
         norm_logp = self.p_prior.normalize_logp(logp)
         beta = self.p_prior.norm_logp_to_beta(norm_logp)
         return(beta)
