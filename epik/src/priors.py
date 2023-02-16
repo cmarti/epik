@@ -19,7 +19,7 @@ class KernelParamPrior(object):
 
 
 class LambdasExpDecayPrior(KernelParamPrior):
-    def __init__(self, seq_length, tau=0.2, log_lambdas0=None, train=True,
+    def __init__(self, seq_length, tau=None, log_lambdas0=None, train=True,
                  dtype=torch.float32):
         super().__init__(seq_length=seq_length, n_alleles=None, train=train,
                          dtype=dtype)
@@ -66,16 +66,17 @@ class LambdasExpDecayPrior(KernelParamPrior):
         kernel.register_params(theta)
     
     def set_priors(self, kernel):
-        kernel.register_prior("raw_theta_prior", NormalPrior(0, self.tau),
-                              lambda module: module.raw_theta[2:])
-        kernel.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
-                              lambda module: module.raw_theta[1])
-        kernel.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
-                              lambda module: module.raw_theta[0])
+        if self.tau is not None:
+            kernel.register_prior("raw_theta_prior", NormalPrior(0, self.tau),
+                                  lambda module: module.raw_theta[2:])
+            kernel.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
+                                  lambda module: module.raw_theta[1])
+            kernel.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
+                                  lambda module: module.raw_theta[0])
 
 
 class LambdasMonotonicDecayPrior(KernelParamPrior):
-    def __init__(self, seq_length, tau, log_lambdas0=None, train=True,
+    def __init__(self, seq_length, tau=None, log_lambdas0=None, train=True,
                  dtype=torch.float32):
         super().__init__(seq_length=seq_length, n_alleles=None, train=train,
                          dtype=dtype)
@@ -117,8 +118,9 @@ class LambdasMonotonicDecayPrior(KernelParamPrior):
         kernel.register_params(theta)
         
     def set_priors(self, kernel):
-        kernel.register_prior("raw_theta_prior", NormalPrior(0, self.tau),
-                              lambda module: module.raw_theta[2:])
+        if self.tau is not None:
+            kernel.register_prior("raw_theta_prior", NormalPrior(0, self.tau),
+                                  lambda module: module.raw_theta[2:])
         
 class AllelesProbPrior(KernelParamPrior):
     def __init__(self, seq_length, n_alleles, eta=None, beta0=None, train=True,
