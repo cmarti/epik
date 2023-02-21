@@ -3,6 +3,7 @@ import gc
 import torch
 import gpytorch
 
+from time import time
 from tqdm import tqdm
 from gpytorch.kernels.multi_device_kernel import MultiDeviceKernel
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
@@ -43,6 +44,7 @@ class EpiK(object):
         self.preconditioner_size = 100
     
     def optimize_partition_size(self, X, y, y_var=None, preconditioner_size=100):
+        # TODO: test method for multigpu settings
         '''
         Function to set up GPU settings like number of GPUs and the 
         partition size. Adapted from gpytorch website:
@@ -170,19 +172,22 @@ class EpiK(object):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
 
+        t0 = time()
         if partition_size is not None and preconditioner_size is not None:
             with gpytorch.beta_features.checkpoint_kernel(partition_size), \
              gpytorch.settings.max_preconditioner_size(preconditioner_size):
                 self._fit(X, y, mll, optimizer, n_iter)
         else:
             self._fit(X, y, mll, optimizer, n_iter)
+        self.fit_time = time() - t0
     
     def predict(self, pred_X, partition_size=None):
         self.set_evaluation_mode()
         
         if partition_size is None:
             partition_size = self.partition_size
-        
+
+        t0 = time()        
         if partition_size is None:
             with torch.no_grad(): #, gpytorch.settings.fast_pred_var():
                 f_preds = self.model(self.get_tensor(pred_X))
@@ -191,4 +196,5 @@ class EpiK(object):
                 f_preds = self.model(self.get_tensor(pred_X))
                 
         # TODO: error when asking for variance: f_preds.variance
+        self.pred_time = time() - t0
         return(f_preds.mean)

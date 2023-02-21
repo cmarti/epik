@@ -365,5 +365,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_vc_smn1']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin']
     unittest.main()

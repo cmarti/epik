@@ -151,6 +151,9 @@ def main():
     model.fit(X, y, y_var=y_var,
               n_iter=n_iter, learning_rate=learning_rate,
               partition_size=partition_size)
+
+    # Output file prefix    
+    prefix = '.'.join(out_fpath.split('.')[:-1])
     
     # Write output parameters
     if hasattr(kernel, 'p'):
@@ -158,14 +161,12 @@ def main():
         if gpu:
             ps, lambdas = ps.cpu(), lambdas.cpu()
         ps = pd.DataFrame(ps.detach().numpy(), columns=np.append(alleles, '*'))
-        prefix = '.'.join(out_fpath.split('.')[:-1])
         ps.to_csv('{}.p.csv'.format(prefix))
     
     if hasattr(kernel, 'lambdas'):
         lambdas =  kernel.lambdas
         if gpu:
             lambdas = lambdas.cpu()    
-        prefix = '.'.join(out_fpath.split('.')[:-1])
         with open('{}.lambdas.txt'.format(prefix), 'w') as fhand:
             for l in lambdas:
                 fhand.write('{}\n'.format(l))
@@ -179,6 +180,12 @@ def main():
             ypred = ypred.cpu()
         result = pd.DataFrame({'ypred': ypred.detach().numpy()}, index=pred_seqs)
         result.to_csv(out_fpath)
+
+    # Write execution time for tracking performance        
+    with open('{}.time.txt'.format(prefix), 'w') as fhand:
+        fhand.write('fit,{}\n'.format(model.fit_time))
+        if hasattr(model, 'pred_time'):
+            fhand.write('pred,{}\n'.format(model.pred_time))
     
     log.finish()
 
