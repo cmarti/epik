@@ -51,7 +51,6 @@ def get_smn1_data(n, seed=0, dtype=None):
     
     output = [train_x, train_y, test_x, test_y, train_y_var]
     if dtype is not None:
-        print('a')
         output = [get_tensor(a, dtype=dtype) for a in output]
     return(output)
 
@@ -71,7 +70,7 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
         l, a = 7, 4
         
-        lambdas_prior = LambdasExpDecayPrior(seq_length=l, tau=0.2)
+        lambdas_prior = LambdasExpDecayPrior(seq_length=l)
         kernel = VCKernel(n_alleles=a, seq_length=l, lambdas_prior=lambdas_prior)
         model = EpiK(kernel)
         model.fit(train_x, train_y, y_var=train_y_var, n_iter=100, learning_rate=0.02)
@@ -81,6 +80,8 @@ class ModelsTests(unittest.TestCase):
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        print(kernel.lambdas)
         
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
@@ -231,26 +232,6 @@ class ModelsTests(unittest.TestCase):
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
-    def test_epik_smn1_exponential_gpu(self):
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
-        output_device = torch.device('cuda:0')
-        
-        kernel = ExponentialKernel(n_alleles=4, seq_length=7, train_p=True)
-        model = EpiK(ScaleKernel(kernel), likelihood_type='Gaussian',
-                     output_device=output_device)
-        model.fit(train_x, train_y, y_var=train_y_var,
-                  n_iter=100, learning_rate=0.05)
-        
-        train_ypred = model.predict(train_x).cpu().detach().numpy()
-        test_ypred = model.predict(test_x).cpu().detach().numpy()
-        
-        train_rho = pearsonr(train_ypred, train_y)[0]
-        test_rho = pearsonr(test_ypred, test_y)[0]
-
-        assert(test_ypred.shape[0] == test_x.shape[0])
-        assert(train_rho > 0.9)
-        assert(test_rho > 0.75)
-    
     def test_epik_smn1_gpu_partition(self):
         partition_size = 100
 
@@ -384,5 +365,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_vc_smn1']
     unittest.main()

@@ -79,14 +79,14 @@ class PriorTests(unittest.TestCase):
                 
     def test_exp_decay_lambdas_prior(self):
         l = 5
-        prior = LambdasExpDecayPrior(l, tau=0.2, train=False)
+        prior = LambdasExpDecayPrior(l, train=False)
         log_lambdas = -torch.arange(l).to(dtype=torch.float)
         theta = prior.log_lambdas_to_theta(log_lambdas).detach()
         exp_theta = np.zeros(l)
         exp_theta[1] = -1
         assert(np.allclose(theta.numpy(), exp_theta))
-        
-        log_lambdas_star = prior.theta_to_log_lambdas(theta).detach().numpy()
+
+        log_lambdas_star = prior.theta_to_log_lambdas(theta, tau=1).detach().numpy()
         assert(np.allclose(log_lambdas, log_lambdas_star))
         
         

@@ -19,11 +19,10 @@ class KernelParamPrior(object):
 
 
 class LambdasExpDecayPrior(KernelParamPrior):
-    def __init__(self, seq_length, tau=None, log_lambdas0=None, train=True,
+    def __init__(self, seq_length, log_lambdas0=None, train=True,
                  dtype=torch.float32):
         super().__init__(seq_length=seq_length, n_alleles=None, train=train,
                          dtype=dtype)
-        self.tau = tau
         self.calc_log_lambdas_theta_matrices()
         self.log_lambdas0 = log_lambdas0
     
@@ -39,9 +38,10 @@ class LambdasExpDecayPrior(KernelParamPrior):
         self.log_lambdas_to_theta_matrix = Parameter(matrix, requires_grad=False)
         self.theta_to_log_lambdas_matrix = Parameter(torch.inverse(matrix), requires_grad=False)
         
-    def theta_to_log_lambdas(self, theta, kernel=None):
+    def theta_to_log_lambdas(self, theta, tau=None, kernel=None):
         obj = self if kernel is None else kernel
-        log_lambdas = torch.matmul(obj.theta_to_log_lambdas_matrix, theta)
+        tau = torch.exp(obj.raw_tau) if tau is None else tau 
+        log_lambdas = torch.matmul(obj.theta_to_log_lambdas_matrix, tau * theta)
         return(log_lambdas)
     
     def log_lambdas_to_theta(self, log_lambdas, kernel=None):
@@ -49,30 +49,35 @@ class LambdasExpDecayPrior(KernelParamPrior):
         theta = torch.matmul(obj.log_lambdas_to_theta_matrix, log_lambdas)
         return(theta)
 
-    def get_theta0(self):
+    def get_params0(self):
         if self.log_lambdas0 is None:
             raw_theta0 = torch.zeros(self.l)
             raw_theta0[0:2] = -1
+            raw_tau0 = torch.zeros(self.l)
         else:
             raw_theta0 = self.log_lambdas_to_theta(self.log_lambdas0)
-        return(raw_theta0)
+            raw_tau0 = torch.log(torch.std(raw_theta0[2:]))
+        return(raw_theta0, raw_tau0)
+
+    def get_tau0(self):
+        return(torch.zeros(1))
 
     def set_params(self, kernel):
-        raw_theta0 = self.get_theta0()
+        raw_theta0, raw_tau0 = self.get_params0()
         theta = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train),
+                 'raw_tau': Parameter(raw_tau0, requires_grad=self.train),
                  'log_lambdas_to_theta_matrix': self.log_lambdas_to_theta_matrix,
                  'theta_to_log_lambdas_matrix': self.theta_to_log_lambdas_matrix}
         
         kernel.register_params(theta)
     
     def set_priors(self, kernel):
-        if self.tau is not None:
-            kernel.register_prior("raw_theta_prior", NormalPrior(0, self.tau),
-                                  lambda module: module.raw_theta[2:])
-            kernel.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
-                                  lambda module: module.raw_theta[1])
-            kernel.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
-                                  lambda module: module.raw_theta[0])
+        kernel.register_prior("raw_theta_prior", NormalPrior(0, 1),
+                              lambda module: module.raw_theta[2:])
+        kernel.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
+                              lambda module: module.raw_theta[1])
+        kernel.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
+                              lambda module: module.raw_theta[0])
 
 
 class LambdasMonotonicDecayPrior(KernelParamPrior):
