@@ -41,7 +41,8 @@ class LambdasExpDecayPrior(KernelParamPrior):
     def theta_to_log_lambdas(self, theta, tau=None, kernel=None):
         obj = self if kernel is None else kernel
         tau = torch.exp(obj.raw_tau) if tau is None else tau 
-        log_lambdas = torch.matmul(obj.theta_to_log_lambdas_matrix, tau * theta)
+        theta[2:] = tau * theta[2:]
+        log_lambdas = torch.matmul(obj.theta_to_log_lambdas_matrix, theta)
         return(log_lambdas)
     
     def log_lambdas_to_theta(self, log_lambdas, kernel=None):
