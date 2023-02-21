@@ -74,10 +74,6 @@ class LambdasExpDecayPrior(KernelParamPrior):
     def set_priors(self, kernel):
         kernel.register_prior("raw_theta_prior", NormalPrior(0, 1),
                               lambda module: module.raw_theta[2:])
-        kernel.register_prior("raw_theta_prior1", NormalPrior(-1, 1),
-                              lambda module: module.raw_theta[1])
-        kernel.register_prior("raw_theta_prior0", NormalPrior(-1, 1),
-                              lambda module: module.raw_theta[0])
 
 
 class LambdasMonotonicDecayPrior(KernelParamPrior):
