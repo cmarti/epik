@@ -32,8 +32,6 @@ def main():
     options_group = parser.add_argument_group('Kernel options')
     options_group.add_argument('-k', '--kernel', default='VC',
                                help='Kernel function to use (VC, sVC, SiteProduct, Diploid, RBF, RQ, matern, linear)')
-    help_msg = 'Standard deviation of deviations of variance compoments from exponential decay'
-    options_group.add_argument('--tau', default=0.2, type=float, help=help_msg)
     options_group.add_argument('--q', default=None, type=float,
                                help='Probability of leaving under the discrete time chain in sVC prior (l-1)/l')
     options_group.add_argument('--train_p', default=False, action='store_true',
@@ -66,7 +64,6 @@ def main():
     
     kernel = parsed_args.kernel
     train_p = parsed_args.train_p
-    tau = parsed_args.tau
     q = parsed_args.q
     lambdas_prior = parsed_args.lprior
     
@@ -126,8 +123,7 @@ def main():
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=n_alleles,
                                    train=train_p, dtype=dtype)
-        lambdas_prior = LambdasExpDecayPrior(seq_length=seq_length, tau=tau,
-                                             dtype=dtype)
+        lambdas_prior = LambdasExpDecayPrior(seq_length=seq_length, dtype=dtype)
         if kernel == 'SiteProduct':
             kernel = SiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
                                        p_prior=p_prior, dtype=dtype)
