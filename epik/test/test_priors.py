@@ -4,7 +4,9 @@ import unittest
 import numpy as np
 import torch
 
-from epik.src.priors import AllelesProbPrior, LambdasExpDecayPrior
+from epik.src.priors import AllelesProbPrior, LambdasExpDecayPrior,\
+    LambdasDeltaPrior
+from scipy.special._basic import comb
 
 
 class PriorTests(unittest.TestCase):
@@ -88,6 +90,18 @@ class PriorTests(unittest.TestCase):
 
         log_lambdas_star = prior.theta_to_log_lambdas(theta, tau=1).detach().numpy()
         assert(np.allclose(log_lambdas, log_lambdas_star))
+        
+    def test_DP_prior(self):
+        l, a, P = 5, 4, 2
+        prior = LambdasDeltaPrior(l, a, P=P, train=False)
+        theta = torch.zeros(P)
+        
+        log_lambdas = prior.theta_to_log_lambdas(theta, log_tau=0).detach().numpy()
+        assert(np.allclose(log_lambdas[:P], 0))
+        
+        lk = -np.log(([comb(k, P) for k in range(P, l + 1)]))
+        log_lambdas = log_lambdas[P:] - log_lambdas[P]
+        assert(np.allclose(log_lambdas, lk))
         
         
 if __name__ == '__main__':

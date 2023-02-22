@@ -63,8 +63,6 @@ class HaploidKernel(SequenceKernel):
     @property
     def lambdas(self):
         log_lambdas = self.lambdas_prior.theta_to_log_lambdas(self.raw_theta, kernel=self)
-        log_lambdas = torch.cat((get_tensor([-10.], dtype=log_lambdas.dtype,
-                                            device=log_lambdas.device), log_lambdas))
         lambdas = torch.exp(log_lambdas)
         return(lambdas)
 
