@@ -114,7 +114,6 @@ class LambdasExpDecayPrior(KernelParamPrior):
             matrix[i, i-1] = 2
             matrix[i, i] = -1
         self.log_lambdas_to_theta_matrix = Parameter(matrix, requires_grad=False)
-        self.theta_to_log_lambdas_matrix = Parameter(torch.inverse(matrix), requires_grad=False)
         
     def theta_to_log_lambdas(self, theta, tau=None, kernel=None):
         obj = self if kernel is None else kernel
@@ -125,7 +124,7 @@ class LambdasExpDecayPrior(KernelParamPrior):
         
         log_lambdas = torch.zeros_like(theta)
         log_lambdas[0] = theta_scaled[0] 
-        log_lambdas[1:] = torch.matmul(obj.theta_to_log_lambdas_matrix, theta_scaled[1:])
+        log_lambdas[1:] = torch.linalg.solve(self.log_lambdas_to_theta_matrix, theta_scaled[1:])
         return(log_lambdas)
     
     def log_lambdas_to_theta(self, log_lambdas, kernel=None):
@@ -151,8 +150,7 @@ class LambdasExpDecayPrior(KernelParamPrior):
         raw_theta0, raw_tau0 = self.get_params0()
         theta = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train),
                  'raw_tau': Parameter(raw_tau0, requires_grad=self.train),
-                 'log_lambdas_to_theta_matrix': self.log_lambdas_to_theta_matrix,
-                 'theta_to_log_lambdas_matrix': self.theta_to_log_lambdas_matrix}
+                 'log_lambdas_to_theta_matrix': self.log_lambdas_to_theta_matrix}
         
         kernel.register_params(theta)
     
