@@ -13,10 +13,11 @@ from gpytorch.kernels.linear_kernel import LinearKernel
 
 from epik.src.kernel import SkewedVCKernel, VCKernel, SiteProductKernel
 from epik.src.model import EpiK
+from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
+                             LambdasFlatPrior, LambdasMonotonicDecayPrior,
+                             LambdasDeltaPrior)
 from epik.src.utils import (LogTrack, guess_space_configuration, seq_to_one_hot,
                             get_tensor)
-from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior,\
-    LambdasFlatPrior, LambdasMonotonicDecayPrior, LambdasDeltaPrior
 
         
 def main():
@@ -115,6 +116,7 @@ def main():
         dtype = torch.float32
       
     # Get kernel
+    log.write('Selected {} kernel'.format(kernel))
     if kernel == 'RBF':
         kernel = ScaleKernel(RBFKernel())
     elif kernel == 'matern':
@@ -128,6 +130,7 @@ def main():
         p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=n_alleles,
                                    train=train_p, dtype=dtype)
         
+        log.write('Use {} prior on lambdas'.format(lambdas_prior))
         if lambdas_prior is None:
             lambdas_prior = LambdasFlatPrior(seq_length=seq_length, dtype=dtype)
         elif lambdas_prior == 'delta':
@@ -158,6 +161,7 @@ def main():
             raise ValueError(msg)
     
     # Create model
+    log.write('Building model for gaussian process regression')
     output_device = torch.device('cuda:0') if gpu else None
     model = EpiK(kernel, likelihood_type='Gaussian', dtype=dtype,
                  output_device=output_device, n_devices=n_devices)
@@ -173,17 +177,21 @@ def main():
     
     # Write output parameters
     if hasattr(kernel, 'p'):
+        fpath = '{}.p.csv'.format(prefix)
+        log.write('Writing inferred p to {}'.format(fpath))
         ps, lambdas = kernel.p, kernel.lambdas
         if gpu:
             ps, lambdas = ps.cpu(), lambdas.cpu()
         ps = pd.DataFrame(ps.detach().numpy(), columns=np.append(alleles, '*'))
-        ps.to_csv('{}.p.csv'.format(prefix))
+        ps.to_csv(fpath)
     
     if hasattr(kernel, 'lambdas'):
+        fpath = '{}.lambdas.txt'.format(prefix)
+        log.write('Writing inferred lambdas to {}'.format(fpath))
         lambdas =  kernel.lambdas
         if gpu:
             lambdas = lambdas.cpu()    
-        with open('{}.lambdas.txt'.format(prefix), 'w') as fhand:
+        with open(fpath, 'w') as fhand:
             for l in lambdas:
                 fhand.write('{}\n'.format(l))
     
@@ -195,10 +203,13 @@ def main():
         if gpu:
             ypred = ypred.cpu()
         result = pd.DataFrame({'ypred': ypred.detach().numpy()}, index=pred_seqs)
+        log.write('\tWriting predictions to {}'.format(out_fpath))
         result.to_csv(out_fpath)
 
-    # Write execution time for tracking performance        
-    with open('{}.time.txt'.format(prefix), 'w') as fhand:
+    # Write execution time for tracking performance
+    fpath = '{}.time.txt'.format(prefix)
+    log.write('Writing execution times to {}'.format(fpath))        
+    with open(fpath, 'w') as fhand:
         fhand.write('fit,{}\n'.format(model.fit_time))
         if hasattr(model, 'pred_time'):
             fhand.write('pred,{}\n'.format(model.pred_time))
