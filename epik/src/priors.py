@@ -65,6 +65,37 @@ class LambdasDeltaPrior(KernelParamPrior):
         return()
 
 
+class LambdasFlatPrior(KernelParamPrior):
+    def __init__(self, seq_length, log_lambdas0=None, train=True,
+                 dtype=torch.float32):
+        super().__init__(seq_length=seq_length, n_alleles=None, train=train,
+                         dtype=dtype)
+        self.log_lambdas0 = log_lambdas0
+    
+    def theta_to_log_lambdas(self, theta, kernel=None):
+        return(theta)
+    
+    def log_lambdas_to_theta(self, log_lambdas):
+        return(log_lambdas)
+
+    def get_params0(self):
+        if self.log_lambdas0 is None:
+            raw_theta0 = -torch.arange(self.l+1).to(dtype=self.dtype)
+            # raw_theta0 = torch.zeros(self.l+1)
+        else:
+            raw_theta0 = self.log_lambdas0
+        return(raw_theta0)
+
+    def set_params(self, kernel):
+        raw_theta0 = self.get_params0()
+        print(raw_theta0)
+        theta = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train)}
+        kernel.register_params(theta)
+    
+    def set_priors(self, kernel):
+        return()
+
+
 class LambdasExpDecayPrior(KernelParamPrior):
     def __init__(self, seq_length, log_lambdas0=None, train=True,
                  dtype=torch.float32):

@@ -21,7 +21,7 @@ from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             ps_to_variances)
 from gpmap.src.inference import VCregression
 from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior,\
-    LambdasDeltaPrior
+    LambdasDeltaPrior, LambdasFlatPrior
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -71,6 +71,25 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
         l, a = 7, 4
         
+        lambdas_prior = LambdasFlatPrior(seq_length=l)
+        kernel = VCKernel(n_alleles=a, seq_length=l, lambdas_prior=lambdas_prior)
+        model = EpiK(kernel)
+        model.fit(train_x, train_y, y_var=train_y_var, n_iter=200, learning_rate=0.02)
+        
+        train_ypred = model.predict(train_x).detach().numpy()
+        test_ypred = model.predict(test_x).detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        print(kernel.lambdas.detach(), test_rho)
+        
+        assert(train_rho > 0.9)
+        assert(test_rho > 0.6)
+    
+    def test_epik_vc_smn1_exp_decay(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        l, a = 7, 4
+        
         lambdas_prior = LambdasExpDecayPrior(seq_length=l)
         kernel = VCKernel(n_alleles=a, seq_length=l, lambdas_prior=lambdas_prior)
         model = EpiK(kernel)
@@ -81,7 +100,7 @@ class ModelsTests(unittest.TestCase):
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
-        print(kernel.lambdas.detach())
+        print(kernel.lambdas.detach(), test_rho)
         
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
@@ -385,5 +404,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_vc_smn1']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_vc_smn1_exp_decay']
     unittest.main()
