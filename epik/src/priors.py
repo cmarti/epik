@@ -162,6 +162,7 @@ class LambdasExpDecayPrior(KernelParamPrior):
 
 
 class LambdasMonotonicDecayPrior(KernelParamPrior):
+    # TODO: fix to new parametrization
     def __init__(self, seq_length, tau=None, log_lambdas0=None, train=True,
                  dtype=torch.float32):
         super().__init__(seq_length=seq_length, n_alleles=None, train=train,

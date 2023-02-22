@@ -15,7 +15,8 @@ from epik.src.kernel import SkewedVCKernel, VCKernel, SiteProductKernel
 from epik.src.model import EpiK
 from epik.src.utils import (LogTrack, guess_space_configuration, seq_to_one_hot,
                             get_tensor)
-from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
+from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior,\
+    LambdasFlatPrior, LambdasMonotonicDecayPrior, LambdasDeltaPrior
 
         
 def main():
@@ -36,8 +37,10 @@ def main():
                                help='Probability of leaving under the discrete time chain in sVC prior (l-1)/l')
     options_group.add_argument('--train_p', default=False, action='store_true',
                                help='Allow different probabilities across sites and alleles in sVC prior')
-    options_group.add_argument('--lprior', default='monotonic_decay',
-                               help='Type of prior on log(lambdas) {monotonic_decay, 2nd_order_diff}')
+    options_group.add_argument('--lprior', default=None,
+                               help='Type of prior on log(lambdas) {None, delta, monotonic_decay, 2nd_order_diff}')
+    options_group.add_argument('-P', '--P', default=2, type=int,
+                               help='P for Delta(P) prior (2)')
     
     comp_group = parser.add_argument_group('Computational options')
     comp_group.add_argument('--gpu', default=False, action='store_true',
@@ -66,6 +69,7 @@ def main():
     train_p = parsed_args.train_p
     q = parsed_args.q
     lambdas_prior = parsed_args.lprior
+    P = parsed_args.P
     
     gpu = parsed_args.gpu
     n_devices = parsed_args.n_devices
@@ -123,7 +127,19 @@ def main():
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=n_alleles,
                                    train=train_p, dtype=dtype)
-        lambdas_prior = LambdasExpDecayPrior(seq_length=seq_length, dtype=dtype)
+        
+        if lambdas_prior is None:
+            lambdas_prior = LambdasFlatPrior(seq_length=seq_length, dtype=dtype)
+        elif lambdas_prior == 'delta':
+            lambdas_prior = LambdasDeltaPrior(seq_length, n_alleles, P=P, dtype=dtype)
+        elif lambdas_prior == '2nd_order_diff':
+            lambdas_prior = LambdasExpDecayPrior(seq_length=seq_length, dtype=dtype)
+        elif lambdas_prior == 'monotonic_decay':
+            lambdas_prior = LambdasMonotonicDecayPrior(seq_length=seq_length, dtype=dtype)
+        else:
+            msg = 'Lambdas prior unknown: {}'.format(lambdas_prior)
+            raise ValueError(msg)    
+        
         if kernel == 'SiteProduct':
             kernel = SiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
                                        p_prior=p_prior, dtype=dtype)
