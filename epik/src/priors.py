@@ -38,14 +38,12 @@ class LambdasDeltaPrior(KernelParamPrior):
     
     def theta_to_log_lambdas(self, theta, log_tau=None, kernel=None):
         obj = self if kernel is None else kernel
-        log_tau = obj.raw_log_tau if log_tau is None else log_tau 
-        
+        log_tau = obj.raw_log_tau if log_tau is None else log_tau
         log_a = np.log(self.n_genotypes - self.kernel_dimension) - 2 * log_tau
-        
         log_lambdas = torch.zeros(self.s)
         log_lambdas[:self.P] = theta
         log_lambdas[self.P:] = - log_a + np.log(self.n_p_faces) - obj.DP_log_lambda
-        return(log_lambdas)
+        return(log_lambdas.to(dtype=theta.dtype, device=theta.device))
     
     def get_theta0(self):
         return(torch.zeros(self.P))
@@ -88,7 +86,6 @@ class LambdasFlatPrior(KernelParamPrior):
 
     def set_params(self, kernel):
         raw_theta0 = self.get_params0()
-        print(raw_theta0)
         theta = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train)}
         kernel.register_params(theta)
     
