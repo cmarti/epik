@@ -143,6 +143,10 @@ class SkewedVCKernel(HaploidKernel):
         logp = -torch.exp(self.raw_logp)
         logp = self.p_prior.normalize_logp(self.p_prior.resize_logp(logp))
         return(logp)
+
+    @property
+    def p(self):
+        return(torch.exp(self.logp))
     
     def _forward(self, x1, x2, lambdas, norm_logp, diag=False):
         coeffs = self.coeffs.to(dtype=lambdas.dtype)
