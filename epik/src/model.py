@@ -125,6 +125,7 @@ class EpiK(object):
     
     def _fit(self, X, y, loss_function, optimizer, n_iter):
         pbar = range(n_iter)
+        self.loss_history = []
         
         if n_iter > 1:
             pbar = tqdm(pbar, desc='Iterations')
@@ -137,6 +138,7 @@ class EpiK(object):
                 loss.backward()
                 optimizer.step()
                 self.loss = loss
+                self.loss_history.append(loss.detach().item())
                 
                 if n_iter > 1:
                     self.report_progress(pbar, loss)

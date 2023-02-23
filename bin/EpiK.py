@@ -18,6 +18,7 @@ from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior)
 from epik.src.utils import (LogTrack, guess_space_configuration, seq_to_one_hot,
                             get_tensor)
+from epik.src.plot import plot_training_history
 
         
 def main():
@@ -128,7 +129,7 @@ def main():
     else:
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=n_alleles,
-                                   train=train_p, dtype=dtype)
+                                   train=True, dtype=dtype)
         
         log.write('Use {} prior on lambdas'.format(lambdas_prior))
         if lambdas_prior is None:
@@ -213,6 +214,11 @@ def main():
         fhand.write('fit,{}\n'.format(model.fit_time))
         if hasattr(model, 'pred_time'):
             fhand.write('pred,{}\n'.format(model.pred_time))
+            
+    # Save plot with training history
+    fpath = '{}.training.png'.format(prefix)
+    log.write('Saving plot with loss history to {}'.format(fpath))
+    plot_training_history(model.loss_history, fpath)
     
     log.finish()
 
