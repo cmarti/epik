@@ -33,17 +33,18 @@ class GPModel(gpytorch.models.ExactGP):
 
 class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
-                 output_device=None, n_devices=1,
+                 output_device=None, n_devices=1, partition_size=0,
+                 preconditioner_size=100,
                  dtype=torch.float32):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.output_device = output_device
         self.n_devices = n_devices
         self.dtype = dtype
-        self.partition_size = None
-        self.preconditioner_size = 100
+        self.partition_size = partition_size
+        self.preconditioner_size = preconditioner_size
     
-    def optimize_partition_size(self, X, y, y_var=None, preconditioner_size=100):
+    def optimize_partition_size(self, X, y, y_var=None):
         # TODO: test method for multigpu settings
         '''
         Function to set up GPU settings like number of GPUs and the 
@@ -61,12 +62,9 @@ class EpiK(object):
         for partition_size in pbar:
             report = {'Number of devices': str(self.n_devices), 
                       'Kernel partition size': str(partition_size)}
-            pbar.set_postfix(report)
-            
             try:
-                self.fit(X, y, y_var=y_var, n_iter=1,
-                         partition_size=partition_size, 
-                         preconditioner_size=preconditioner_size)
+                self.partition_size = partition_size
+                self.fit(X, y, y_var=y_var, n_iter=1)
                 break
             
             except (RuntimeError, AttributeError) as error:
@@ -76,9 +74,10 @@ class EpiK(object):
                 # handle CUDA OOM error
                 gc.collect()
                 torch.cuda.empty_cache()
+            
+            pbar.set_postfix(report)
                 
         self.partition_size = partition_size
-        self.preconditioner_size = preconditioner_size
     
     def set_likelihood(self, y_var=None):
         if self.likelihood_type == 'Gaussian':
@@ -154,15 +153,21 @@ class EpiK(object):
         self.model.eval()
         self.likelihood.eval()
     
-    def fit(self, X, y, y_var=None, n_iter=100, learning_rate=0.1,
-            partition_size=None, preconditioner_size=None):
-        
+    def set_partition_size(self, partition_size=None):
         if partition_size is None:
             partition_size = self.partition_size
-        
+            
+        if partition_size is not None:
+            return(gpytorch.beta_features.checkpoint_kernel(partition_size))
+    
+    def set_preconditioner_size(self, preconditioner_size=None):
         if preconditioner_size is None:
             preconditioner_size = self.preconditioner_size
-        
+            
+        if preconditioner_size is not None:
+            return(gpytorch.settings.max_preconditioner_size(preconditioner_size))
+    
+    def fit(self, X, y, y_var=None, n_iter=100, learning_rate=0.1):
         X, y = self.get_tensor(X), self.get_tensor(y)
 
         self.set_likelihood(y_var=y_var)
@@ -175,27 +180,15 @@ class EpiK(object):
         mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
 
         t0 = time()
-        if partition_size is not None and preconditioner_size is not None:
-            with gpytorch.beta_features.checkpoint_kernel(partition_size), \
-             gpytorch.settings.max_preconditioner_size(preconditioner_size):
-                self._fit(X, y, mll, optimizer, n_iter)
-        else:
+        with self.set_partition_size(), self.set_preconditioner_size():
             self._fit(X, y, mll, optimizer, n_iter)
         self.fit_time = time() - t0
     
-    def predict(self, pred_X, partition_size=None):
+    def predict(self, pred_X):
         self.set_evaluation_mode()
-        
-        if partition_size is None:
-            partition_size = self.partition_size
-
-        t0 = time()        
-        if partition_size is None:
-            with torch.no_grad(): #, gpytorch.settings.fast_pred_var():
-                f_preds = self.model(self.get_tensor(pred_X))
-        else:
-            with torch.no_grad(), gpytorch.beta_features.checkpoint_kernel(partition_size):
-                f_preds = self.model(self.get_tensor(pred_X))
+        t0 = time()
+        with torch.no_grad(), self.set_partition_size(): #, gpytorch.settings.fast_pred_var():
+            f_preds = self.model(self.get_tensor(pred_X))
                 
         # TODO: error when asking for variance: f_preds.variance
         self.pred_time = time() - t0
