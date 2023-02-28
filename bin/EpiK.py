@@ -162,16 +162,15 @@ def main():
             raise ValueError(msg)
     
     # Create model
-    log.write('Building model for gaussian process regression')
+    log.write('Building model for Gaussian Process regression')
     output_device = torch.device('cuda:0') if gpu else None
     model = EpiK(kernel, likelihood_type='Gaussian', dtype=dtype,
-                 output_device=output_device, n_devices=n_devices)
+                 output_device=output_device, n_devices=n_devices,
+                 partition_size=partition_size)
 
     # Fit by evidence maximization
     log.write('Estimate variance components by maximizing the evidence')
-    model.fit(X, y, y_var=y_var,
-              n_iter=n_iter, learning_rate=learning_rate,
-              partition_size=partition_size)
+    model.fit(X, y, y_var=y_var, n_iter=n_iter, learning_rate=learning_rate)
 
     # Output file prefix    
     prefix = '.'.join(out_fpath.split('.')[:-1])
