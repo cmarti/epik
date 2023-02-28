@@ -275,3 +275,26 @@ class DiploidKernel(SequenceKernel):
 
         kernel = self._forward(self.log_lda, self.log_eta, S1, S2, D2)
         return(kernel)
+
+
+class GeneralizedDiploidKernel(DiploidKernel):
+    def __init__(self, seq_length, **kwargs):
+        super().__init__(seq_length=seq_length, **kwargs)
+        self.define_kernel_params()
+    
+    def define_kernel_params(self):
+        super().define_kernel_params()
+        
+        params = {'raw_logit_p': Parameter(torch.zeros(1))}
+        self.register_params(params=params)
+    
+    @property
+    def odds(self):
+        return(torch.exp(self.raw_logit_p))
+
+    def _forward(self, log_lda, log_eta, S1, S2, D2):
+        L = self.seq_length
+        lda = torch.exp(log_lda)
+        eta = torch.exp(log_eta)
+        kernel = (((1 + (1 + self.odds) * lda + self.odds * eta)**(S2 - L/2)) *((1 - (1 + self.odds) * lda + self.odds * eta)**D2) *((1 + eta / self.odds)**(S1 - L/2)) * (1 - eta)**((L - S1 - S2 - D2)))
+        return(kernel)
