@@ -282,11 +282,11 @@ class GeneralizedDiploidKernel(DiploidKernel):
     def odds(self):
         return(torch.exp(self.raw_logit_p))
     
-    def _forward(self, x1, x2, lda, eta, odds):
+    def _forward(self, x1, x2, mu, lda, eta, odds):
         s2, d2, s1, d1 = self.calc_distance_classes(x1, x2)
-        kernel = (1 + (1 + odds) * lda + odds * eta)**s2 * (1 - (1 + odds) * lda + odds * eta)**d2 * (1 + odds * eta)**s1 * (1 - eta)**d1
+        kernel = (mu + (1 + odds) * lda + odds * eta)**s2 * (mu - (1 + odds) * lda + odds * eta)**d2 * (mu + odds * eta)**s1 * (mu - eta)**d1
         return(kernel)
 
     def forward(self, x1, x2, **params):
-        kernel = self._forward(x1, x2, self.lda, self.eta, self.odds)
+        kernel = self._forward(x1, x2, self.mu, self.lda, self.eta, self.odds)
         return(kernel)
