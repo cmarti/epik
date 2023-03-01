@@ -23,6 +23,12 @@ def seq_to_one_hot(X, alleles=None):
     return(onehot)
 
 
+def diploid_to_one_hot(X, dtype=torch.float32):
+    m = torch.tensor([[int(a) for a in x] for x in X])
+    onehot = torch.stack([m == 0, m == 1, m == 2], 2).to(dtype=dtype)
+    return(onehot)
+
+
 def to_device(tensor, output_device=None):
     if output_device is not None and output_device != -1:
         tensor = tensor.to(output_device)

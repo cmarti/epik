@@ -221,59 +221,50 @@ class SiteProductKernel(HaploidKernel):
 
 
 class DiploidKernel(SequenceKernel):
-    def __init__(self, seq_length, **kwargs):
-        super().__init__(n_alleles=2, seq_length=seq_length, **kwargs)
+    def __init__(self, **kwargs):
+        super().__init__(n_alleles=2, seq_length=0, **kwargs)
         self.define_kernel_params()
     
     def define_kernel_params(self):
-        constraints = {'raw_log_lda': LessThan(upper_bound=0.),
-                       'raw_log_eta': LessThan(upper_bound=0.)}
-        params = {'raw_log_lda': Parameter(torch.zeros(*self.batch_shape, 1, 1)),
-                  'raw_log_eta': Parameter(torch.zeros(*self.batch_shape, 1, 1))}
-        self.register_params(params=params, constraints=constraints)
+#         constraints = {'raw_log_lda': LessThan(upper_bound=0.),
+#                        'raw_log_eta': LessThan(upper_bound=0.)}
+        params = {'raw_log_lda': Parameter(torch.zeros(1)),
+                  'raw_log_eta': Parameter(torch.zeros(1)),
+                  'raw_log_mu': Parameter(torch.zeros(1))}
+        self.register_params(params=params) #constraints=constraints
     
     @property
-    def log_lda(self):
-        # when accessing the parameter, apply the constraint transform
-        return self.raw_log_lda_constraint.transform(self.raw_log_lda)
+    def mu(self):
+        return(torch.exp(self.raw_log_mu))
+    
+    @property
+    def lda(self):
+#         return(torch.exp(self.raw_log_lda_constraint.transform(self.raw_log_lda)))
+        return(torch.exp(self.raw_log_lda))
 
     @property
-    def log_eta(self):
-        # when accessing the parameter, apply the constraint transform
-        return self.raw_log_eta_constraint.transform(self.raw_log_eta)
+    def eta(self):
+#         return(torch.exp(self.raw_log_eta_constraint.transform(self.raw_log_eta)))
+        return(torch.exp(self.raw_log_eta))
 
-    @log_lda.setter
-    def log_lda(self, value):
-        return self._set_log_lda(value)
-
-    @log_eta.setter
-    def log_eta(self, value):
-        return self._set_log_eta(value)
-  
-    def _forward(self, log_lda, log_eta, S1, S2, D2):
-        L = self.seq_length
-        lda = torch.exp(log_lda)
-        eta = torch.exp(log_eta)
-        kernel = (((1 + lda + eta)**(S2 - L/2)) *((1 - lda + eta)**D2) *((1 + eta)**(S1 - L/2)) * (1 - eta)**((L - S1 - S2 - D2)))
-        return(kernel)
-    
     def dist(self, x1, x2):
-        res = x1.matmul(x2.transpose(-2, -1))
-        return(res)   
+        return(x1.matmul(x2.transpose(-2, -1)))
+    
+    def calc_distance_classes(self, x1, x2):
+        l = x1.shape[1]
+        s1 = self.dist(x1[:, :, 1], x2[:, :, 1])
+        s2 = self.dist(x1[:, :, 0], x2[:, :, 0]) + self.dist(x1[:, :, 2], x2[:, :, 2])
+        d2 = self.dist(x1[:, :, 0], x2[:, :, 2]) + self.dist(x1[:, :, 2], x2[:, :, 0])
+        d1 = l - s1 - s2 - d2
+        return(s2, d2, s1, d1)
+    
+    def _forward(self, x1, x2, mu, lda, eta):
+        s2, d2, s1, d1 = self.calc_distance_classes(x1, x2)
+        kernel = ((mu + 2 * lda + eta)**s2) * ((mu - 2 * lda + eta)**d2) * ((mu + eta)**s1) * ((mu - eta)**d1)
+        return(kernel)
 
-    def forward(self, geno1, geno2, **params):
-        geno1_ht = 1.*(geno1 == 1.)
-        geno2_ht = 1.*(geno2 == 1.)        
-        geno1_h0 = 1.*(geno1 == 0.)
-        geno1_h1 = 1.*(geno1 == 2.)
-        geno2_h0 = 1.*(geno2 == 0.)
-        geno2_h1 = 1.*(geno2 == 2.)
-
-        S1 = self.dist(geno1_ht, geno2_ht)
-        S2 = self.dist(geno1_h0, geno2_h0) + self.dist(geno1_h1, geno2_h1)
-        D2 = self.dist(geno1_h0, geno2_h1) + self.dist(geno1_h1, geno2_h0)
-
-        kernel = self._forward(self.log_lda, self.log_eta, S1, S2, D2)
+    def forward(self, x1, x2, **params):
+        kernel = self._forward(x1, x2, self.mu, self.lda, self.eta)
         return(kernel)
 
 
@@ -284,17 +275,18 @@ class GeneralizedDiploidKernel(DiploidKernel):
     
     def define_kernel_params(self):
         super().define_kernel_params()
-        
         params = {'raw_logit_p': Parameter(torch.zeros(1))}
         self.register_params(params=params)
     
     @property
     def odds(self):
         return(torch.exp(self.raw_logit_p))
+    
+    def _forward(self, x1, x2, lda, eta, odds):
+        s2, d2, s1, d1 = self.calc_distance_classes(x1, x2)
+        kernel = (1 + (1 + odds) * lda + odds * eta)**s2 * (1 - (1 + odds) * lda + odds * eta)**d2 * (1 + odds * eta)**s1 * (1 - eta)**d1
+        return(kernel)
 
-    def _forward(self, log_lda, log_eta, S1, S2, D2):
-        L = self.seq_length
-        lda = torch.exp(log_lda)
-        eta = torch.exp(log_eta)
-        kernel = (((1 + (1 + self.odds) * lda + self.odds * eta)**(S2 - L/2)) *((1 - (1 + self.odds) * lda + self.odds * eta)**D2) *((1 + eta / self.odds)**(S1 - L/2)) * (1 - eta)**((L - S1 - S2 - D2)))
+    def forward(self, x1, x2, **params):
+        kernel = self._forward(x1, x2, self.lda, self.eta, self.odds)
         return(kernel)

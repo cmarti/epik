@@ -5,9 +5,10 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
-from epik.src.kernel import SkewedVCKernel,  VCKernel, SiteProductKernel
+from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
+                             DiploidKernel)
 from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
-from epik.src.utils import seq_to_one_hot, get_tensor
+from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot
 from epik.src.settings import TEST_DATA_DIR
 from os.path import join
 
@@ -78,47 +79,33 @@ class KernelsTests(unittest.TestCase):
         theta = torch.tensor([0, 0.5], dtype=torch.float32)
         cov = kernel._forward(x, x, theta=theta, beta=beta)
         print(cov)
-        
-    def test_skewed_vc_lambdas_parametrizations(self):
-        x = torch.tensor([[1, 0, 1, 0],
-                          [0, 1, 1, 0],
-                          [1, 0, 0, 1],
-                          [0, 1, 0, 1]], dtype=torch.float32)
-        
-        # Constant component
-        lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
-                                lambdas_prior='monotonic_decay')
-        cov = kernel._forward(x, x, lambdas, kernel.logp)
-        assert(np.allclose(cov.detach().numpy(), 1))
-        
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
-                                lambdas_prior='2nd_order_diff')
-        cov = kernel._forward(x, x, lambdas, kernel.logp)
-        assert(np.allclose(cov.detach().numpy(), 1))
-        
-        # Arbitrary lambdas
-        lambdas = torch.tensor([1, 0.2, 0.05], dtype=torch.float32)
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
-                                lambdas_prior='monotonic_decay')
-        cov1 = kernel._forward(x, x, lambdas, kernel.logp).detach().numpy()
-        
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
-                                lambdas_prior='2nd_order_diff')
-        cov2 = kernel._forward(x, x, lambdas, kernel.logp).detach().numpy()
-        assert(np.allclose(cov1, cov2))
-        
-        # With initialized lambdas to ensure transformation to the right thetas
-        log_lambdas0 = torch.tensor([0, -10], dtype=torch.float32)
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
-                                lambdas_prior='monotonic_decay', log_lambdas0=log_lambdas0)
-        cov1 = kernel.forward(x, x).detach().numpy()
-        
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32,
-                                lambdas_prior='2nd_order_diff', log_lambdas0=log_lambdas0)
-        cov2 = kernel.forward(x, x).detach().numpy()
-        assert(np.allclose(cov1, cov2))
     
+    def test_diploid_kernel(self):
+        kernel = DiploidKernel()
+        X = ['0', '1', '2']
+        x = diploid_to_one_hot(X)
+        
+        # Purely constant function
+        mu, lda, eta = 1, 0, 0
+        cov = kernel._forward(x, x, mu, lda, eta).numpy()
+        assert(np.allclose(cov, 1))
+        
+        # Purely additive function
+        mu, lda, eta = 0, 1, 0
+        cov = kernel._forward(x, x, mu, lda, eta).numpy()
+        exp = np.array([[ 2.,  0., -2.],
+                        [ 0.,  0.,  0.],
+                        [-2.,  0.,  2.]])
+        assert(np.allclose(cov, exp))
+        
+        # Purely dominant function
+        mu, lda, eta = 0, 0, 1
+        cov = kernel._forward(x, x, mu, lda, eta).numpy()
+        exp = np.array([[ 1,  -1,   1.],
+                        [-1.,  1., -1.],
+                        [ 1., -1.,  1.]])
+        assert(np.allclose(cov, exp))
+        
     def test_skewed_vc_kernel(self):
         l, a = 2, 2
         lambdas_prior = LambdasExpDecayPrior(l, tau=0.2)
@@ -380,26 +367,6 @@ class KernelsTests(unittest.TestCase):
                     logfc = np.nanmean(np.log2(cov1 / cov4))
                     assert(np.allclose(logfc, 0, atol=1e-2))
 
-    def test_skewed_vc_kernel_exp_decay(self):
-        alleles = ['A', 'B']
-        alpha = len(alleles)
-        l = 12
-        
-        seqs = np.array(['A' * i + 'B' * (l-i) for i in range(l)])
-        train_x = seq_to_one_hot(seqs, alleles=alleles).to(torch.float64)
-        log_lambdas0 = -np.arange(l).astype(float)
-     
-        ker = VCKernel(alpha, l, tau=.1,
-                       log_lambdas0=log_lambdas0)
-        cov1 = ker.forward(train_x[:1, :], train_x).detach().numpy()
-        
-        ker = SkewedVCKernel(alpha, l, q=0.7, tau=.1,
-                             log_lambdas0=log_lambdas0)                    
-        cov2 = ker.forward(train_x[:1, :], train_x).detach().numpy()
-        
-        logfc = np.nanmean(np.log2(cov1 / cov2))
-        assert(np.allclose(logfc, 0, atol=1e-2))
-                    
     def test_plot_vc_cov_d_function(self):
         fig, axes = plt.subplots(1, 1, figsize=(5, 4))
         
@@ -434,5 +401,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_site_product_kernel']
+    import sys;sys.argv = ['', 'KernelsTests.test_diploid_kernel']
     unittest.main()
