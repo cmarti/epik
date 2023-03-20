@@ -180,8 +180,10 @@ class EpiK(object):
         mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
 
         t0 = time()
-        with self.set_partition_size(), self.set_preconditioner_size():
-            self._fit(X, y, mll, optimizer, n_iter)
+        
+        self.set_partition_size()
+        self.set_preconditioner_size()
+        self._fit(X, y, mll, optimizer, n_iter)
         self.fit_time = time() - t0
     
     def predict(self, pred_X):
