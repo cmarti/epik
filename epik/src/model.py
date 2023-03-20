@@ -189,7 +189,9 @@ class EpiK(object):
     def predict(self, pred_X):
         self.set_evaluation_mode()
         t0 = time()
-        with torch.no_grad(), self.set_partition_size(): #, gpytorch.settings.fast_pred_var():
+        
+        self.set_partition_size()
+        with torch.no_grad(): #, gpytorch.settings.fast_pred_var():
             f_preds = self.model(self.get_tensor(pred_X))
                 
         # TODO: error when asking for variance: f_preds.variance
