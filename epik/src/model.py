@@ -33,19 +33,20 @@ class GPModel(gpytorch.models.ExactGP):
 
 class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
-                 output_device=None, n_devices=1, partition_size=0,
-                 preconditioner_size=100,
-                 dtype=torch.float32):
+                 output_device=None, n_devices=1,
+                 partition_size=0, learning_rate=0.1,
+                 preconditioner_size=0, dtype=torch.float32):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.output_device = output_device
+        self.learning_rate = learning_rate
         self.n_devices = n_devices
         self.dtype = dtype
         self.partition_size = partition_size
         self.preconditioner_size = preconditioner_size
     
-    def optimize_partition_size(self, X, y, y_var=None):
-        # TODO: test method for multigpu settings
+    def optimize_partition_size(self):
+        # TODO: does not seem to be working
         '''
         Function to set up GPU settings like number of GPUs and the 
         partition size. Adapted from gpytorch website:
@@ -54,30 +55,19 @@ class EpiK(object):
         
         '''
         
-        N = X.size(0)
+        N = self.X.size(0)
         partition_sizes = np.append(0, np.ceil(N / 2 ** np.arange(1, np.floor(np.log2(N)))).astype(int))
-        # partition_sizes = partition_sizes[1:]
-        pbar = tqdm(partition_sizes, desc='Optimizing GPU settings')
-    
-        for partition_size in pbar:
-            report = {'Number of devices': str(self.n_devices), 
-                      'Kernel partition size': str(partition_size)}
+        for partition_size in partition_sizes:
             try:
                 self.partition_size = partition_size
-                self.fit(X, y, y_var=y_var, n_iter=1)
+                self.fit(n_iter=3)
                 break
             
             except (RuntimeError, AttributeError) as error:
-                report['Status'] = error
-                
-            finally:
+                print(error)
                 # handle CUDA OOM error
                 gc.collect()
                 torch.cuda.empty_cache()
-            
-            pbar.set_postfix(report)
-                
-        self.partition_size = partition_size
     
     def set_likelihood(self, y_var=None):
         if self.likelihood_type == 'Gaussian':
@@ -92,9 +82,11 @@ class EpiK(object):
         
         self.likelihood = self.to_device(likelihood)
     
-    def report_progress(self, pbar, loss, rho=None):
+    def report_progress(self, pbar, rho=None):
+        loss = self.loss
         if self.output_device is not None:
             loss = loss.cpu()
+            
         report_dict = {'loss': '{:.3f}'.format(loss.detach().numpy()),
                        'mem': get_gpu_memory(self.output_device)}
         if hasattr(self.model.covar_module, 'log_lda'):
@@ -122,29 +114,13 @@ class EpiK(object):
     def get_tensor(self, ndarray):
         return(get_tensor(ndarray, dtype=self.dtype, device=self.output_device))
     
-    def _fit(self, X, y, loss_function, optimizer, n_iter):
-        pbar = range(n_iter)
-        self.loss_history = []
+    def training_step(self, X, y):
+        self.optimizer.zero_grad()
+        self.loss = -self.calc_mll(self.model(X), y)
+        self.loss.backward()
+        self.optimizer.step()
+        self.loss_history.append(self.loss.detach().item())
         
-        if n_iter > 1:
-            pbar = tqdm(pbar, desc='Iterations')
-            
-        for _ in pbar:
-            try:
-                optimizer.zero_grad()
-                output = self.model(X)
-                loss = -loss_function(output, y)
-                loss.backward()
-                optimizer.step()
-                self.loss = loss
-                self.loss_history.append(loss.detach().item())
-                
-                if n_iter > 1:
-                    self.report_progress(pbar, loss)
-                    
-            except KeyboardInterrupt:
-                break
-    
     def set_training_mode(self):
         self.model.train()
         self.likelihood.train()
@@ -156,42 +132,52 @@ class EpiK(object):
     def set_partition_size(self, partition_size=None):
         if partition_size is None:
             partition_size = self.partition_size
-            
-        if partition_size is not None:
-            return(gpytorch.beta_features.checkpoint_kernel(partition_size))
+        return(gpytorch.beta_features.checkpoint_kernel(partition_size))
     
     def set_preconditioner_size(self, preconditioner_size=None):
         if preconditioner_size is None:
             preconditioner_size = self.preconditioner_size
-            
-        if preconditioner_size is not None:
-            return(gpytorch.settings.max_preconditioner_size(preconditioner_size))
+        return(gpytorch.settings.max_preconditioner_size(preconditioner_size))
     
-    def fit(self, X, y, y_var=None, n_iter=100, learning_rate=0.1):
-        X, y = self.get_tensor(X), self.get_tensor(y)
-
-        self.set_likelihood(y_var=y_var)
-        self.model = self.to_device(GPModel(X, y, self.kernel, self.likelihood,
+    def define_optimizer(self):
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.calc_mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
+    
+    def set_data(self, X, y, y_var=None):
+        self.X = self.get_tensor(X)
+        self.y = self.get_tensor(y)
+        self.y_var = y_var
+        
+        self.set_likelihood(y_var=self.y_var)
+        self.model = self.to_device(GPModel(self.X, self.y, self.kernel, self.likelihood,
                                             output_device=self.output_device,
                                             n_devices=self.n_devices)) 
+        self.define_optimizer()
+    
+    def fit(self, n_iter=100):
         self.set_training_mode()
         
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
-        mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
-
-        t0 = time()
+        pbar = range(n_iter)
+        self.loss_history = []
         
-        self.set_partition_size()
-        self.set_preconditioner_size()
-        self._fit(X, y, mll, optimizer, n_iter)
-        self.fit_time = time() - t0
+        with self.set_partition_size(), self.set_preconditioner_size():
+            
+            if n_iter > 1:
+                pbar = tqdm(pbar, desc='Maximizing Marginal Likelihood')
+            
+            t0 = time()    
+            for _ in pbar:
+                self.training_step(self.X, self.y)
+                if n_iter > 1:
+                    self.report_progress(pbar)
+                    
+            self.fit_time = time() - t0
     
     def predict(self, pred_X):
         self.set_evaluation_mode()
-        t0 = time()
         
-        self.set_partition_size()
-        with torch.no_grad(): #, gpytorch.settings.fast_pred_var():
+        t0 = time()
+        with torch.no_grad(), self.set_partition_size(), self.set_preconditioner_size(): #, gpytorch.settings.fast_pred_var():
             f_preds = self.model(self.get_tensor(pred_X))
                 
         # TODO: error when asking for variance: f_preds.variance

@@ -48,20 +48,22 @@ def main():
     comp_group.add_argument('--gpu', default=False, action='store_true',
                             help='Use GPU-acceleration')
     comp_group.add_argument('--use_float64', default=False, action='store_true',
-                            help='Use float64 data type (recommended for sVC kernel)')
+                            help='Use float64 data type')
     comp_group.add_argument('-m', '--n_devices', default=1, type=int,
-                            help='Number of GPUs to use')
-    comp_group.add_argument('-s', '--partition_size', default=None, type=int,
+                            help='Number of GPUs to use (1)')
+    comp_group.add_argument('-s', '--partition_size', default=0, type=int,
                             help='Use kernel partitioning on GPU of this size')
+    comp_group.add_argument('-t', '--preconditioner_size', default=0, type=int,
+                            help='Size of the preconditioner for CG-solve Kx=y')
     comp_group.add_argument('-n', '--n_iter', default=200, type=int,
-                            help='Number of iterations for optimization(200)')
-    comp_group.add_argument('-r', '--learning_rate', default=0.01, type=float,
-                            help='Learning rate for optimization (0.01)')
+                            help='Number of iterations for optimization (200)')
+    comp_group.add_argument('-r', '--learning_rate', default=0.1, type=float,
+                            help='Learning rate for optimization (0.1)')
 
     output_group = parser.add_argument_group('Output')
     output_group.add_argument('-o', '--output', required=True, help='Output file')
     output_group.add_argument('-p', '--pred',
-                              help='File containing sequencse for predicting genotype')
+                              help='File containing sequences for predicting genotype')
 
     # Parse arguments
     parsed_args = parser.parse_args()
@@ -78,6 +80,7 @@ def main():
     n_iter = parsed_args.n_iter
     learning_rate = parsed_args.learning_rate
     partition_size = parsed_args.partition_size
+    preconditioner_size = parsed_args.preconditioner_size
     use_float64 = parsed_args.use_float64
 
     pred_fpath = parsed_args.pred
@@ -166,11 +169,13 @@ def main():
     output_device = torch.device('cuda:0') if gpu else None
     model = EpiK(kernel, likelihood_type='Gaussian', dtype=dtype,
                  output_device=output_device, n_devices=n_devices,
-                 partition_size=partition_size)
+                 partition_size=partition_size, learning_rate=learning_rate,
+                 preconditioner_size=preconditioner_size)
+    model.set_data(X, y, y_var=y_var)
 
     # Fit by evidence maximization
     log.write('Estimate variance components by maximizing the evidence')
-    model.fit(X, y, y_var=y_var, n_iter=n_iter, learning_rate=learning_rate)
+    model.fit(n_iter=n_iter)
 
     # Output file prefix    
     prefix = '.'.join(out_fpath.split('.')[:-1])

@@ -5,7 +5,6 @@ from itertools import combinations
 from scipy.special._basic import comb
 from torch.nn import Parameter
 from gpytorch.kernels.kernel import Kernel
-from gpytorch.constraints.constraints import LessThan
 
 from epik.src.utils import get_tensor
 
@@ -173,6 +172,8 @@ class SkewedVCKernel(HaploidKernel):
             M = torch.diag(weights)
             m = self.inner_product(x1, x2, M, diag=diag)
             kernel += coeff_signs[power] * torch.exp(log_bi[power] + m)
+        # print(x1.shape[0], x2.shape[0], kernel.shape)
+        
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):

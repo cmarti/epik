@@ -297,8 +297,7 @@ class ModelsTests(unittest.TestCase):
         assert(test_rho > 0.6)
     
     def test_epik_smn1_gpu_partition(self):
-        partition_size = 100
-        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         l, a = 7, 4
         n_devices, output_device = 1, torch.device('cuda:0')
         
@@ -307,16 +306,20 @@ class ModelsTests(unittest.TestCase):
         kernel = SkewedVCKernel(n_alleles=a, seq_length=l, q=0.7,
                                 lambdas_prior=lambdas_prior, p_prior=p_prior)
         model = EpiK(kernel, output_device=output_device, n_devices=n_devices,
-                     partition_size=partition_size)
+                     learning_rate=0.02)
+        model.set_data(train_x, train_y, y_var=train_y_var)
         
-        # model.optimize_partition_size(train_x, train_y, y_var=train_y_var)
-        model.fit(train_x, train_y, y_var=train_y_var, n_iter=50, learning_rate=0.02)
+        model.partition_size = 1000
+        # model.optimize_partition_size()
+        # print(model.partition_size)
+        model.fit(n_iter=50)
         
         train_ypred = model.predict(train_x).cpu().detach().numpy()
         test_ypred = model.predict(test_x).cpu().detach().numpy()
         
         train_rho = pearsonr(train_ypred, train_y)[0]
         test_rho = pearsonr(test_ypred, test_y)[0]
+        print(train_rho, test_rho)
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
@@ -341,11 +344,11 @@ class ModelsTests(unittest.TestCase):
             check_call(cmd)
             
             # Predict test sequences with variable ps
-            cmd.extend(['-k', 'SiteProduct', '--train_p', '--use_float64'])
+            cmd.extend(['-k', 'SiteProduct', '--train_p'])
             check_call(cmd)
             
             # Predict test sequences with variable ps using GPU
-            cmd.extend(['--gpu'])
+            cmd.extend(['--gpu', '-s', '1000'])
             check_call(cmd)
             
     def test_recover_site_weights(self):
