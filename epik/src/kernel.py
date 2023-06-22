@@ -221,6 +221,47 @@ class SiteProductKernel(HaploidKernel):
         return(self._forward(x1, x2, theta=self.theta, beta=self.beta, diag=diag))
 
 
+class GeneralizedSiteProductKernel(HaploidKernel):
+    def __init__(self, n_alleles, seq_length, p_prior,
+                 dtype=torch.float32, **kwargs):
+        super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
+        
+        self.define_params()
+        self.p_prior = p_prior
+        self.p_prior.set(self)
+
+    def define_params(self):
+        params = {'raw_theta': Parameter(-torch.ones(self.l), requires_grad=True)}
+        self.register_params(params=params, constraints={})
+        
+    @property
+    def beta(self):
+        logp = -torch.exp(self.raw_logp)
+        logp = self.p_prior.resize_logp(logp)
+        norm_logp = self.p_prior.normalize_logp(logp)
+        beta = self.p_prior.norm_logp_to_beta(norm_logp)
+        return(beta)
+    
+    @property
+    def theta(self):
+        return(-torch.exp(self.raw_theta))
+
+    def _forward(self, x1, x2, theta, beta, diag=False):
+        # TODO: make sure diag works here
+        constant = torch.log(1 - torch.exp(theta)).sum()
+        print(theta)
+        theta = torch.stack([theta] * self.alpha, axis=1)
+        log_factors = torch.flatten(torch.log(1 + torch.exp(theta + beta)) - torch.log(1 - torch.exp(theta)))
+        M = torch.diag(log_factors)
+        m = self.inner_product(x1, x2, M, diag=diag)
+        kernel = torch.exp(m + constant)
+        print(kernel[0, :5])
+        return(kernel)
+    
+    def forward(self, x1, x2, diag=False, **params):
+        return(self._forward(x1, x2, theta=self.theta, beta=self.beta, diag=diag))
+
+
 class DiploidKernel(SequenceKernel):
     def __init__(self, **kwargs):
         super().__init__(n_alleles=2, seq_length=0, **kwargs)

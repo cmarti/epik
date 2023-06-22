@@ -5,12 +5,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
+from os.path import join
+
 from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
-                             DiploidKernel)
+                             DiploidKernel, GeneralizedSiteProductKernel)
 from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
 from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot
 from epik.src.settings import TEST_DATA_DIR
-from os.path import join
+
 
 
 class KernelsTests(unittest.TestCase):
@@ -77,6 +79,32 @@ class KernelsTests(unittest.TestCase):
         beta = torch.tensor([[1, 1, 0],
                              [1, 1, 0]], dtype=torch.float32)
         theta = torch.tensor([0, 0.5], dtype=torch.float32)
+        cov = kernel._forward(x, x, theta=theta, beta=beta)
+        print(cov)
+    
+    def test_generalized_site_product_kernel(self):
+        l, a = 1, 2
+        p_prior = AllelesProbPrior(l, a, dummy_allele=False) 
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              p_prior=p_prior)
+        x = torch.tensor([[1, 0],
+                          [0, 1]], dtype=torch.float32)
+        beta = torch.tensor([[1, 1]], dtype=torch.float32)
+        theta = torch.tensor([-1], dtype=torch.float32)
+        cov = kernel._forward(x, x, theta=theta, beta=beta)
+        print(cov)
+        
+        l, a = 2, 2
+        p_prior = AllelesProbPrior(l, a, dummy_allele=False) 
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              p_prior=p_prior)
+        x = torch.tensor([[1, 0, 1, 0],
+                          [0, 1, 1, 0],
+                          [1, 0, 0, 1],
+                          [0, 1, 0, 1]], dtype=torch.float32)
+        beta = torch.tensor([[1, 1],
+                             [1, 1]], dtype=torch.float32)
+        theta = torch.tensor([-1, -1], dtype=torch.float32)
         cov = kernel._forward(x, x, theta=theta, beta=beta)
         print(cov)
     
@@ -401,5 +429,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_diploid_kernel']
+    import sys;sys.argv = ['', 'KernelsTests.test_generalized_site_product_kernel']
     unittest.main()

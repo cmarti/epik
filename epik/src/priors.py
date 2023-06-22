@@ -206,18 +206,20 @@ class LambdasMonotonicDecayPrior(KernelParamPrior):
         
 class AllelesProbPrior(KernelParamPrior):
     def __init__(self, seq_length, n_alleles, eta=None, beta0=None, train=True,
-                 sites_equal=False, alleles_equal=False, dtype=torch.float32):
+                 sites_equal=False, alleles_equal=False, dtype=torch.float32,
+                 dummy_allele=False):
         super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
                          dtype=dtype)
         self.eta = eta
         self.sites_equal = sites_equal
         self.alleles_equal = alleles_equal
+        self.dummy_allele = dummy_allele
         self.calc_shape()
         self.beta0 = beta0
         
     def calc_shape(self):
         nrows = 1 if self.sites_equal else self.l
-        ncols = 1 if self.alleles_equal else self.alpha + 1
+        ncols = 1 if self.alleles_equal else self.alpha + int(self.dummy_allele)
         self.shape = (nrows, ncols)
 
     def resize_logp(self, logp):
@@ -226,10 +228,14 @@ class AllelesProbPrior(KernelParamPrior):
             logp = torch.matmul(ones, logp)
             
         if self.alleles_equal:
-            log1mp = torch.log(1 - torch.exp(logp)) * torch.ones((self.l, 1))
-            logp = logp - np.log(self.alpha)
-            ones = torch.ones((1, self.alpha))
-            logp = torch.cat([torch.matmul(logp, ones), log1mp], 1)
+            if self.dummy_allele:
+                log1mp = torch.log(1 - torch.exp(logp)) * torch.ones((self.l, 1))
+                logp = logp - np.log(self.alpha)
+                ones = torch.ones((1, self.alpha))
+                logp = torch.cat([torch.matmul(logp, ones), log1mp], 1)
+            else:
+                ones = torch.ones((1, self.alpha))
+                logp = torch.matmul(logp, ones)
         
         return(logp)
         

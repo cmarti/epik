@@ -6,22 +6,26 @@ import torch
 import pandas as pd
 import numpy as np
 
+import matplotlib.pyplot as plt
+
 from os.path import join
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
 
 from scipy.stats.stats import pearsonr
+from gpmap.src.inference import VCregression
+
+from gpytorch.settings import max_cg_iterations
 from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
-from epik.src.kernel import SkewedVCKernel, VCKernel, SiteProductKernel
+from epik.src.utils import seq_to_one_hot, get_tensor, split_training_test
 from epik.src.model import EpiK
-from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
-                            ps_to_variances)
-from gpmap.src.inference import VCregression
-from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior,\
-    LambdasDeltaPrior, LambdasFlatPrior
+from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
+                             GeneralizedSiteProductKernel)
+from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
+                             LambdasDeltaPrior, LambdasFlatPrior)
 from epik.src.plot import plot_training_history
 
 
@@ -255,14 +259,53 @@ class ModelsTests(unittest.TestCase):
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
+    def test_epik_generalized_site_kernel_smn1(self):
+        max_cg_iterations(2000)
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
+        l, a = 7, 4
+        
+        p_prior = AllelesProbPrior(seq_length=l, n_alleles=a,
+                                   alleles_equal=True, sites_equal=False,
+                                   dummy_allele=False)
+        print(p_prior.shape)
+        kernel = GeneralizedSiteProductKernel(n_alleles=4, seq_length=7, p_prior=p_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian', learning_rate=0.05)
+        model.set_data(train_x, train_y, y_var=train_y_var)
+        model.fit(n_iter=100)
+        
+        train_ypred = model.predict(train_x).detach().numpy()
+        test_ypred = model.predict(test_x).detach().numpy()
+        
+        train_rho = pearsonr(train_ypred, train_y)[0]
+        test_rho = pearsonr(test_ypred, test_y)[0]
+        
+        w = kernel.beta.detach().numpy()
+        print(w)
+        rho = kernel.theta.detach().numpy()
+        print(rho)
+        print(test_rho**2)
+        
+        # assert(w[0] < w[1])
+        # assert(w[-1] < w[-2])
+        # assert(train_rho > 0.9)
+        # assert(test_rho > 0.6)
+        
+        fig, axes = plt.subplots(1, 1, figsize=(6, 6))
+        axes.scatter(test_ypred, test_y)
+        fig.savefig('scatter.png', dpi=300)
+        
+        plot_training_history(model.loss_history,
+                              join(TEST_DATA_DIR, 'test_history.png'))
+    
     def test_epik_site_kernel_smn1_gpu(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1500)
         output_device = torch.device('cuda:0')
         
         kernel = SiteProductKernel(n_alleles=4, seq_length=7)
-        model = EpiK(kernel, likelihood_type='Gaussian', output_device=output_device)
-        model.fit(train_x, train_y, y_var=train_y_var,
-                  n_iter=200, learning_rate=0.05)
+        model = EpiK(kernel, likelihood_type='Gaussian',
+                     output_device=output_device, learning_rate=0.05)
+        model.set_data(train_x, train_y, y_var=train_y_var)
+        model.fit(n_iter=200)
         
         train_ypred = model.predict(train_x).detach().cpu().numpy()
         test_ypred = model.predict(test_x).detach().cpu().numpy()
@@ -434,5 +477,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_smn1_gpu_partition']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_generalized_site_kernel_smn1']
     unittest.main()
