@@ -211,20 +211,18 @@ def main():
         log.write('Writing inferred theta to {}'.format(fpath))
         theta =  kernel.theta
         if gpu:
-            theta = theta.cpu()    
-        with open(fpath, 'w') as fhand:
-            for l in theta:
-                fhand.write('{}\n'.format(l))
+            theta = theta.cpu()
+        theta = pd.DataFrame(theta.detach().numpy())
+        theta.to_csv(fpath)
     
     if hasattr(kernel, 'beta'):
         fpath = '{}.beta.txt'.format(prefix)
         log.write('Writing inferred beta to {}'.format(fpath))
-        theta =  kernel.beta
+        beta =  kernel.beta
         if gpu:
-            theta = theta.cpu()    
-        with open(fpath, 'w') as fhand:
-            for l in theta:
-                fhand.write('{}\n'.format(l))
+            beta = beta.cpu()   
+        beta = pd.DataFrame(beta.detach().numpy(), columns=np.append(alleles, '*'))
+        beta.to_csv(fpath)
     
     # Predict phenotype in new sequences 
     if pred_seqs.shape[0] > 0:
