@@ -5,13 +5,15 @@ import numpy as np
 import pandas as pd
 import torch
 
+from gpytorch.settings import max_cg_iterations
 from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 from gpytorch.kernels.matern_kernel import MaternKernel
 from gpytorch.kernels.rq_kernel import RQKernel
 from gpytorch.kernels.linear_kernel import LinearKernel
 
-from epik.src.kernel import SkewedVCKernel, VCKernel, SiteProductKernel
+from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
+                             GeneralizedSiteProductKernel)
 from epik.src.model import EpiK
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasFlatPrior, LambdasMonotonicDecayPrior,
@@ -34,11 +36,11 @@ def main():
 
     options_group = parser.add_argument_group('Kernel options')
     options_group.add_argument('-k', '--kernel', default='VC',
-                               help='Kernel function to use (VC, sVC, SiteProduct, Diploid, RBF, RQ, matern, linear)')
+                               help='Kernel function to use (VC, sVC, SiteProduct, GeneralizedSiteProduct, Diploid, RBF, RQ, matern, linear)')
     options_group.add_argument('--q', default=None, type=float,
                                help='Probability of leaving under the discrete time chain in sVC prior (l-1)/l')
-    options_group.add_argument('--train_p', default=False, action='store_true',
-                               help='Allow different probabilities across sites and alleles in sVC prior')
+    options_group.add_argument('--train_p', action='store_true', default=False,
+                               help='Train p parameters from the kernel')
     options_group.add_argument('--lprior', default=None,
                                help='Type of prior on log(lambdas) {None, delta, monotonic_decay, 2nd_order_diff}')
     options_group.add_argument('-P', '--P', default=2, type=int,
@@ -70,10 +72,10 @@ def main():
     data_fpath = parsed_args.data
     
     kernel = parsed_args.kernel
-    train_p = parsed_args.train_p
     q = parsed_args.q
     lambdas_prior = parsed_args.lprior
     P = parsed_args.P
+    train_p = parsed_args.train_p
     
     gpu = parsed_args.gpu
     n_devices = parsed_args.n_devices
@@ -132,7 +134,7 @@ def main():
     else:
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=n_alleles,
-                                   train=True, dtype=dtype)
+                                   train=train_p, dtype=dtype)
         
         log.write('Use {} prior on lambdas'.format(lambdas_prior))
         if lambdas_prior is None:
@@ -150,6 +152,9 @@ def main():
         if kernel == 'SiteProduct':
             kernel = SiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
                                        p_prior=p_prior, dtype=dtype)
+        elif kernel == 'GeneralizedSiteProduct':
+            kernel = GeneralizedSiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
+                                                  p_prior=p_prior, dtype=dtype)
         elif kernel == 'VC':
             kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length,
                               lambdas_prior=lambdas_prior, dtype=dtype)
@@ -165,6 +170,7 @@ def main():
             raise ValueError(msg)
     
     # Create model
+    max_cg_iterations(3000)
     log.write('Building model for Gaussian Process regression')
     output_device = torch.device('cuda:0') if gpu else None
     model = EpiK(kernel, likelihood_type='Gaussian', dtype=dtype,
@@ -184,9 +190,9 @@ def main():
     if hasattr(kernel, 'p'):
         fpath = '{}.p.csv'.format(prefix)
         log.write('Writing inferred p to {}'.format(fpath))
-        ps, lambdas = kernel.p, kernel.lambdas
+        ps = kernel.p
         if gpu:
-            ps, lambdas = ps.cpu(), lambdas.cpu()
+            ps = ps.cpu()
         ps = pd.DataFrame(ps.detach().numpy(), columns=np.append(alleles, '*'))
         ps.to_csv(fpath)
     
@@ -198,6 +204,26 @@ def main():
             lambdas = lambdas.cpu()    
         with open(fpath, 'w') as fhand:
             for l in lambdas:
+                fhand.write('{}\n'.format(l))
+    
+    if hasattr(kernel, 'theta'):
+        fpath = '{}.theta.txt'.format(prefix)
+        log.write('Writing inferred theta to {}'.format(fpath))
+        theta =  kernel.theta
+        if gpu:
+            theta = theta.cpu()    
+        with open(fpath, 'w') as fhand:
+            for l in theta:
+                fhand.write('{}\n'.format(l))
+    
+    if hasattr(kernel, 'beta'):
+        fpath = '{}.beta.txt'.format(prefix)
+        log.write('Writing inferred beta to {}'.format(fpath))
+        theta =  kernel.beta
+        if gpu:
+            theta = theta.cpu()    
+        with open(fpath, 'w') as fhand:
+            for l in theta:
                 fhand.write('{}\n'.format(l))
     
     # Predict phenotype in new sequences 
