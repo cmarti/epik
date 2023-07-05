@@ -41,10 +41,13 @@ def main():
                                help='Probability of leaving under the discrete time chain in sVC prior (l-1)/l')
     options_group.add_argument('--train_p', action='store_true', default=False,
                                help='Train p parameters from the kernel')
+    options_group.add_argument('--dummy_allele', action='store_true', default=False,
+                               help='Add dummy allele to each site')
     options_group.add_argument('--lprior', default=None,
                                help='Type of prior on log(lambdas) {None, delta, monotonic_decay, 2nd_order_diff}')
     options_group.add_argument('-P', '--P', default=2, type=int,
                                help='P for Delta(P) prior (2)')
+    
     
     comp_group = parser.add_argument_group('Computational options')
     comp_group.add_argument('--gpu', default=False, action='store_true',
@@ -76,6 +79,7 @@ def main():
     lambdas_prior = parsed_args.lprior
     P = parsed_args.P
     train_p = parsed_args.train_p
+    dummy_allele = parsed_args.dummy_allele
     
     gpu = parsed_args.gpu
     n_devices = parsed_args.n_devices
@@ -134,7 +138,7 @@ def main():
     else:
         n_alleles, seq_length = np.max(config['n_alleles']), config['length']
         p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=n_alleles,
-                                   train=train_p, dtype=dtype)
+                                   train=train_p, dtype=dtype, dummy_allele=dummy_allele)
         
         log.write('Use {} prior on lambdas'.format(lambdas_prior))
         if lambdas_prior is None:
