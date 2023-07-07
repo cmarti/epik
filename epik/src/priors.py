@@ -224,7 +224,7 @@ class AllelesProbPrior(KernelParamPrior):
 
     def resize_logp(self, logp):
         if self.sites_equal:
-            ones = torch.ones((self.l, 1))
+            ones = torch.ones((self.l, 1), device=logp.device)
             logp = torch.matmul(ones, logp)
             
         if self.alleles_equal:
