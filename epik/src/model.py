@@ -141,7 +141,20 @@ class EpiK(object):
     
     def define_optimizer(self):
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+    
+    def define_loss(self):
         self.calc_mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
+    
+    def define_model(self):
+        self.model = self.to_device(GPModel(self.X, self.y, self.kernel, self.likelihood,
+                                            output_device=self.output_device,
+                                            n_devices=self.n_devices))
+    
+    def get_gp_mean(self):
+        c = self.model.mean_module.constant
+        if self.output_device is not None:
+            c = c.cpu()
+        return(c.detach().numpy()) 
     
     def set_data(self, X, y, y_var=None):
         self.X = self.get_tensor(X)
@@ -149,10 +162,9 @@ class EpiK(object):
         self.y_var = y_var
         
         self.set_likelihood(y_var=self.y_var)
-        self.model = self.to_device(GPModel(self.X, self.y, self.kernel, self.likelihood,
-                                            output_device=self.output_device,
-                                            n_devices=self.n_devices)) 
+        self.define_model()
         self.define_optimizer()
+        self.define_loss()
     
     def fit(self, n_iter=100):
         self.set_training_mode()
@@ -177,9 +189,8 @@ class EpiK(object):
         self.set_evaluation_mode()
         
         t0 = time()
-        with torch.no_grad(), self.set_partition_size(), self.set_preconditioner_size(): #, gpytorch.settings.fast_pred_var():
-            f_preds = self.model(self.get_tensor(pred_X))
-                
+        with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size(): #, , gpytorch.settings.fast_pred_var():
+            f_preds = self.model(self.get_tensor(pred_X)).mean
         # TODO: error when asking for variance: f_preds.variance
         self.pred_time = time() - t0
-        return(f_preds.mean)
+        return(f_preds)

@@ -190,6 +190,7 @@ class SiteProductKernel(HaploidKernel):
         self.define_params()
         self.p_prior = p_prior
         self.p_prior.set(self)
+        self.params = ['beta', 'theta']
 
     def define_params(self):
         params = {'raw_theta': Parameter(torch.zeros(2), requires_grad=True)}
@@ -248,14 +249,13 @@ class GeneralizedSiteProductKernel(HaploidKernel):
 
     def _forward(self, x1, x2, theta, beta, diag=False):
         # TODO: make sure diag works here
+        # print(x1.shape, x2.shape)
         constant = torch.log(1 - torch.exp(theta)).sum()
-        print(theta)
         theta = torch.stack([theta] * self.alpha, axis=1)
         log_factors = torch.flatten(torch.log(1 + torch.exp(theta + beta)) - torch.log(1 - torch.exp(theta)))
         M = torch.diag(log_factors)
         m = self.inner_product(x1, x2, M, diag=diag)
         kernel = torch.exp(m + constant)
-        print(kernel[0, :5])
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
