@@ -266,3 +266,47 @@ class AllelesProbPrior(KernelParamPrior):
         if self.eta is not None:
             kernel.register_prior("raw_logp_prior", NormalPrior(0, self.eta),
                                   lambda module: module.raw_logp)
+
+
+class RhosPrior(KernelParamPrior):
+    def __init__(self, seq_length, n_alleles, sites_equal=False,
+                 logV0=1, eta=None, train=True, dtype=torch.float32):
+        super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
+                         dtype=dtype)
+        self.sites_equal = sites_equal
+        self.logV0 = logV0
+        self.eta = eta
+        self.calc_shape()
+        
+    def calc_shape(self):
+        self.shape = (1 if self.sites_equal else self.l,)
+        
+    def get_log_mu0(self):
+        log_mu0 = -np.log(self.l) * torch.ones(self.shape)
+        return(log_mu0)
+    
+    def get_logV0(self):
+        return(torch.tensor([self.logV0]))
+    
+    def normalize_log_mu(self, log_mu):
+        return(log_mu - torch.logsumexp(log_mu, 0))
+    
+    def log_mu_to_mu(self, log_mu):
+        if self.sites_equal:
+            ones = torch.ones((self.l, 1))
+            log_mu = torch.matmul(ones, log_mu)
+        return(torch.exp(self.normalize_log_mu(log_mu)))
+
+    def set_params(self, kernel):
+        params = {'log_mu': Parameter(self.get_log_mu0().to(dtype=self.dtype), requires_grad=True),
+                  'logV': Parameter(self.get_logV0().to(dtype=self.dtype), requires_grad=True),}
+        kernel.register_params(params=params, constraints={})
+    
+    def calc_log_rho(self, logV, mu):
+        log_rho0 = torch.log(torch.exp(logV * mu) - 1) - np.log(self.alpha - 1)
+        return(log_rho0)
+
+    def set_priors(self, kernel):
+        if self.eta is not None and not self.sites_equal:
+            kernel.register_prior("log_mu_prior", NormalPrior(0, self.eta),
+                                  lambda module: module.log_mu)
