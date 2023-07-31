@@ -305,6 +305,11 @@ class RhosPrior(KernelParamPrior):
     def calc_log_rho(self, logV, mu):
         log_rho0 = torch.log(torch.exp(logV * mu) - 1) - np.log(self.alpha - 1)
         return(log_rho0)
+    
+    def get_log_rho(self, kernel):
+        mu = self.log_mu_to_mu(kernel.log_mu)
+        log_rho = self.calc_log_rho(kernel.logV, mu)
+        return(log_rho)
 
     def set_priors(self, kernel):
         if self.eta is not None and not self.sites_equal:
