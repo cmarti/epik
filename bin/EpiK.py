@@ -178,7 +178,7 @@ def main():
     # Create model
     max_cg_iterations(3000)
     log.write('Building model for Gaussian Process regression')
-    output_device = torch.device('cuda:0') if gpu else None
+    output_device = torch.device('cuda') if gpu else None
     model = EpiK(kernel, likelihood_type='Gaussian', dtype=dtype,
                  output_device=output_device, n_devices=n_devices,
                  partition_size=partition_size, learning_rate=learning_rate,
@@ -196,59 +196,43 @@ def main():
     if hasattr(kernel, 'p'):
         fpath = '{}.p.csv'.format(prefix)
         log.write('Writing inferred p to {}'.format(fpath))
-        ps = kernel.p
-        if gpu:
-            ps = ps.cpu()
-        ps = pd.DataFrame(ps.detach().numpy(), columns=np.append(alleles, '*'))
+        ps = pd.DataFrame(model.to_numpy(kernel.p), columns=np.append(alleles, '*'))
         ps.to_csv(fpath)
     
     if hasattr(kernel, 'lambdas'):
         fpath = '{}.lambdas.txt'.format(prefix)
         log.write('Writing inferred lambdas to {}'.format(fpath))
-        lambdas =  kernel.lambdas
-        if gpu:
-            lambdas = lambdas.cpu()    
         with open(fpath, 'w') as fhand:
-            for l in lambdas:
+            for l in model.to_numpy(kernel.lambdas):
                 fhand.write('{}\n'.format(l))
     
     if hasattr(kernel, 'theta'):
         fpath = '{}.theta.txt'.format(prefix)
         log.write('Writing inferred theta to {}'.format(fpath))
-        theta =  kernel.theta
-        if gpu:
-            theta = theta.cpu()
-        theta = pd.DataFrame(theta.detach().numpy())
+        theta = pd.DataFrame(model.to_numpy(kernel.theta))
         theta.to_csv(fpath)
     
     if hasattr(kernel, 'rho'):
         fpath = '{}.rho.txt'.format(prefix)
         log.write('Writing inferred rho to {}'.format(fpath))
-        rho =  kernel.rho
-        if gpu:
-            rho = rho.cpu()
-        rho = pd.DataFrame(rho.detach().numpy())
+        rho = pd.DataFrame(model.to_numpy(kernel.rho))
         rho.to_csv(fpath)
     
     if hasattr(kernel, 'beta'):
         fpath = '{}.beta.txt'.format(prefix)
         log.write('Writing inferred beta to {}'.format(fpath))
-        beta =  kernel.beta
-        if gpu:
-            beta = beta.cpu()   
         if dummy_allele:
             alleles = np.append(alleles, '*')
-        beta = pd.DataFrame(beta.detach().numpy(), columns=alleles)
+            
+        beta = pd.DataFrame(model.to_numpy(kernel.beta), columns=alleles)
         beta.to_csv(fpath)
     
     # Predict phenotype in new sequences 
     if pred_seqs.shape[0] > 0:
         log.write('Obtain phenotypic predictions')
         Xpred = seq_to_one_hot(pred_seqs, alleles=alleles)
-        ypred = model.predict(Xpred)
-        if gpu:
-            ypred = ypred.cpu()
-        result = pd.DataFrame({'ypred': ypred.detach().numpy()}, index=pred_seqs)
+        result = pd.DataFrame({'ypred': model.to_numpy(model.predict(Xpred))},
+                              index=pred_seqs)
         log.write('\tWriting predictions to {}'.format(out_fpath))
         result.to_csv(out_fpath)
 
