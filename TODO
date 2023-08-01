@@ -7,3 +7,5 @@
 - Implement prior enforcing decay of the lambdas to avoid quadratic shapes in lambdas on longer sequences
 - Try to decouple priors from kernels to have a more independent development of different priors on lambdas
 - implemente method to take all hyperparameters from the set of kernels in Epik (even in the presence of ScaleKernel or constant module)
+- Add method to priors that take the kernel as argument and return the transformed parameters automatically
+  this would allow abstraction of internal names within the priors
