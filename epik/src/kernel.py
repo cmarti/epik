@@ -215,7 +215,8 @@ class SiteProductKernel(HaploidKernel):
         m = self.inner_product(x1, x2, M, diag=diag)
         
         distance = self.l - self.inner_product(x1, x2, diag=diag)
-        kernel = torch.exp(m) * (torch.exp(theta[0]) - torch.exp(theta[1])) ** distance # 1-et can be negative: avoid log
+        dist_factor = (torch.exp(theta[0]) - torch.exp(theta[1])) ** distance  # 1-et can be negative: avoid log
+        kernel = dist_factor * torch.exp(m) 
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
@@ -223,18 +224,15 @@ class SiteProductKernel(HaploidKernel):
 
 
 class GeneralizedSiteProductKernel(HaploidKernel):
-    def __init__(self, n_alleles, seq_length, p_prior,
+    def __init__(self, n_alleles, seq_length, p_prior, rho_prior,
                  dtype=torch.float32, **kwargs):
         super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
         
-        self.define_params()
         self.p_prior = p_prior
+        self.rho_prior = rho_prior
         self.p_prior.set(self)
+        self.rho_prior.set(self)
 
-    def define_params(self):
-        params = {'raw_theta': Parameter(-torch.ones(self.l), requires_grad=True)}
-        self.register_params(params=params, constraints={})
-        
     @property
     def beta(self):
         logp = -torch.exp(self.raw_logp)
@@ -244,22 +242,22 @@ class GeneralizedSiteProductKernel(HaploidKernel):
         return(beta)
     
     @property
-    def theta(self):
-        return(-torch.exp(self.raw_theta))
-
-    def _forward(self, x1, x2, theta, beta, diag=False):
+    def rho(self):
+        return(self.rho_prior.get_rho(self))
+    
+    def _forward(self, x1, x2, rho, beta, diag=False):
         # TODO: make sure diag works here
-        # print(x1.shape, x2.shape)
-        constant = torch.log(1 - torch.exp(theta)).sum()
-        theta = torch.stack([theta] * self.alpha, axis=1)
-        log_factors = torch.flatten(torch.log(1 + torch.exp(theta + beta)) - torch.log(1 - torch.exp(theta)))
+        constant = torch.log(1 - rho).sum()
+        rho = torch.stack([rho] * self.alpha, axis=1)
+        eta = torch.exp(beta)
+        log_factors = torch.flatten(torch.log(1 + rho * eta) - torch.log(1 - rho))
         M = torch.diag(log_factors)
         m = self.inner_product(x1, x2, M, diag=diag)
         kernel = torch.exp(m + constant)
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, theta=self.theta, beta=self.beta, diag=diag))
+        return(self._forward(x1, x2, rho=self.rho, beta=self.beta, diag=diag))
 
 
 class DiploidKernel(SequenceKernel):

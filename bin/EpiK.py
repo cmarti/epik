@@ -17,7 +17,7 @@ from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
 from epik.src.model import EpiK
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasFlatPrior, LambdasMonotonicDecayPrior,
-                             LambdasDeltaPrior)
+                             LambdasDeltaPrior, RhosPrior)
 from epik.src.utils import (LogTrack, guess_space_configuration, seq_to_one_hot,
                             get_tensor)
 from epik.src.plot import plot_training_history
@@ -157,8 +157,10 @@ def main():
             kernel = SiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
                                        p_prior=p_prior, dtype=dtype)
         elif kernel == 'GeneralizedSiteProduct':
+            rho_prior = RhosPrior(seq_length=seq_length, n_alleles=n_alleles)
             kernel = GeneralizedSiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
-                                                  p_prior=p_prior, dtype=dtype)
+                                                  p_prior=p_prior, rho_prior=rho_prior,
+                                                  dtype=dtype)
         elif kernel == 'VC':
             kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length,
                               lambdas_prior=lambdas_prior, dtype=dtype)
@@ -219,13 +221,24 @@ def main():
         theta = pd.DataFrame(theta.detach().numpy())
         theta.to_csv(fpath)
     
+    if hasattr(kernel, 'rho'):
+        fpath = '{}.rho.txt'.format(prefix)
+        log.write('Writing inferred rho to {}'.format(fpath))
+        rho =  kernel.rho
+        if gpu:
+            rho = rho.cpu()
+        rho = pd.DataFrame(rho.detach().numpy())
+        rho.to_csv(fpath)
+    
     if hasattr(kernel, 'beta'):
         fpath = '{}.beta.txt'.format(prefix)
         log.write('Writing inferred beta to {}'.format(fpath))
         beta =  kernel.beta
         if gpu:
             beta = beta.cpu()   
-        beta = pd.DataFrame(beta.detach().numpy(), columns=np.append(alleles, '*'))
+        if dummy_allele:
+            alleles = np.append(alleles, '*')
+        beta = pd.DataFrame(beta.detach().numpy(), columns=alleles)
         beta.to_csv(fpath)
     
     # Predict phenotype in new sequences 

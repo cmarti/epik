@@ -9,7 +9,7 @@ from os.path import join
 
 from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
                              DiploidKernel, GeneralizedSiteProductKernel)
-from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior
+from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior, RhosPrior
 from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot
 from epik.src.settings import TEST_DATA_DIR
 
@@ -82,30 +82,60 @@ class KernelsTests(unittest.TestCase):
         cov = kernel._forward(x, x, theta=theta, beta=beta)
         print(cov)
     
-    def test_generalized_site_product_kernel(self):
-        l, a = 1, 2
-        p_prior = AllelesProbPrior(l, a, dummy_allele=False) 
-        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
-                                              p_prior=p_prior)
-        x = torch.tensor([[1, 0],
-                          [0, 1]], dtype=torch.float32)
-        beta = torch.tensor([[1, 1]], dtype=torch.float32)
-        theta = torch.tensor([-1], dtype=torch.float32)
+    def test_site_product_kernel_long_sequences(self):
+        l, a = 100, 2
+        x = (np.random.uniform(size=(2, l)) > 0.5).astype(int)
+        x = np.array([''.join(y) for y in np.array(['A', 'B'])[x]])
+        x = seq_to_one_hot(x, alleles=['A', 'B'])
+        x = torch.tensor(x, dtype=torch.float32)
+        print(x.shape)
+        
+        # Site product kernel
+        beta = torch.tensor(np.vstack([[1, 1, 0]] * l ), dtype=torch.float32)
+        theta = torch.tensor([0, -5], dtype=torch.float32)
+        p_prior = AllelesProbPrior(l, a) 
+        kernel = SiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
         cov = kernel._forward(x, x, theta=theta, beta=beta)
         print(cov)
         
+        # Generalized site product kernel
+        p_prior = AllelesProbPrior(l, a, dummy_allele=False) 
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
+        cov = kernel.forward(x, x)
+        print(cov)
+        
+    def test_generalized_site_product_kernel(self):
+        l, a = 1, 2
+        rho_prior = RhosPrior(l, a, sites_equal=True)
+        p_prior = AllelesProbPrior(l, a, dummy_allele=False)
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              p_prior=p_prior, rho_prior=rho_prior)
+        x = torch.tensor([[1, 0],
+                          [0, 1]], dtype=torch.float32)
+        beta = torch.tensor([[1, 1]], dtype=torch.float32)
+        rho = torch.tensor([0.2], dtype=torch.float32)
+        cov = kernel._forward(x, x, rho=rho, beta=beta)
+        print(cov)
+        
+        cov = kernel.forward(x, x)
+        print(cov)
+         
         l, a = 2, 2
+        rho_prior = RhosPrior(l, a)
         p_prior = AllelesProbPrior(l, a, dummy_allele=False) 
         kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
-                                              p_prior=p_prior)
+                                              p_prior=p_prior, rho_prior=rho_prior)
         x = torch.tensor([[1, 0, 1, 0],
                           [0, 1, 1, 0],
                           [1, 0, 0, 1],
                           [0, 1, 0, 1]], dtype=torch.float32)
         beta = torch.tensor([[1, 1],
                              [1, 1]], dtype=torch.float32)
-        theta = torch.tensor([-1, -1], dtype=torch.float32)
-        cov = kernel._forward(x, x, theta=theta, beta=beta)
+        rho = torch.tensor([0.2, 0.2], dtype=torch.float32)
+        cov = kernel._forward(x, x, rho=rho, beta=beta)
+        print(cov)
+         
+        cov = kernel.forward(x, x)
         print(cov)
     
     def test_diploid_kernel(self):
@@ -429,5 +459,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_generalized_site_product_kernel']
+    import sys;sys.argv = ['', 'KernelsTests']
     unittest.main()
