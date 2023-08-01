@@ -17,7 +17,7 @@ from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
 from epik.src.model import EpiK
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasFlatPrior, LambdasMonotonicDecayPrior,
-                             LambdasDeltaPrior)
+                             LambdasDeltaPrior, RhosPrior)
 from epik.src.utils import (LogTrack, guess_space_configuration, seq_to_one_hot,
                             get_tensor)
 from epik.src.plot import plot_training_history
@@ -157,8 +157,10 @@ def main():
             kernel = SiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
                                        p_prior=p_prior, dtype=dtype)
         elif kernel == 'GeneralizedSiteProduct':
-            kernel = GeneralizedSiteProductKernel(n_alleles=n_alleles, seq_length=seq_length, 
-                                                  p_prior=p_prior, dtype=dtype)
+            rho_prior = RhosPrior(seq_length=seq_length, n_alleles=n_alleles)
+            kernel = GeneralizedSiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
+                                                  p_prior=p_prior, rho_prior=rho_prior,
+                                                  dtype=dtype)
         elif kernel == 'VC':
             kernel = VCKernel(n_alleles=n_alleles, seq_length=seq_length,
                               lambdas_prior=lambdas_prior, dtype=dtype)
@@ -209,6 +211,12 @@ def main():
         log.write('Writing inferred theta to {}'.format(fpath))
         theta = pd.DataFrame(model.to_numpy(kernel.theta))
         theta.to_csv(fpath)
+    
+    if hasattr(kernel, 'rho'):
+        fpath = '{}.rho.txt'.format(prefix)
+        log.write('Writing inferred rho to {}'.format(fpath))
+        rho = pd.DataFrame(model.to_numpy(kernel.rho))
+        rho.to_csv(fpath)
     
     if hasattr(kernel, 'beta'):
         fpath = '{}.beta.txt'.format(prefix)

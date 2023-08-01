@@ -4,8 +4,8 @@ import unittest
 import numpy as np
 import torch
 
-from epik.src.priors import AllelesProbPrior, LambdasExpDecayPrior,\
-    LambdasDeltaPrior
+from epik.src.priors import (AllelesProbPrior, LambdasExpDecayPrior,
+                             LambdasDeltaPrior, RhosPrior)
 from scipy.special._basic import comb
 
 
@@ -107,6 +107,37 @@ class PriorTests(unittest.TestCase):
         lk = -np.log(([comb(k, P) for k in range(P, l + 1)]))
         log_lambdas = log_lambdas[P:] - log_lambdas[P]
         assert(np.allclose(log_lambdas, lk))
+    
+    def test_rhos_prior(self):
+        l, a = 5, 4
+        
+        # Common rho across sites
+        prior = RhosPrior(l, a, sites_equal=True, train=False)
+        log_mu0 = prior.get_log_mu0()
+        assert(log_mu0.shape == (1,))
+        assert(np.allclose(log_mu0.numpy()[0], -np.log(l)))
+        
+        mu = prior.log_mu_to_mu(log_mu0)
+        assert(mu.shape[0] == l)
+        assert(np.allclose(mu, 1/l))
+        
+        log_rho = prior.calc_log_rho(logV=1, mu=mu)
+        assert(log_rho.shape[0] == l)
+        assert(np.allclose(log_rho, np.log(np.exp(1/l) - 1) - np.log(a-1)))
+        
+        # Different per site
+        prior = RhosPrior(l, a, sites_equal=False, train=False)
+        log_mu0 = prior.get_log_mu0()
+        assert(log_mu0.shape == (l,))
+        assert(np.allclose(log_mu0.numpy()[0], -np.log(l)))
+        
+        mu = prior.log_mu_to_mu(log_mu0)
+        assert(mu.shape[0] == l)
+        assert(np.allclose(mu, 1/l))
+        
+        log_rho = prior.calc_log_rho(logV=1, mu=mu)
+        assert(log_rho.shape[0] == l)
+        assert(np.allclose(log_rho, np.log(np.exp(1/l) - 1) - np.log(a-1)))
         
         
 if __name__ == '__main__':

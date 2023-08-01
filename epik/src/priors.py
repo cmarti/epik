@@ -234,7 +234,7 @@ class AllelesProbPrior(KernelParamPrior):
                 ones = torch.ones((1, self.alpha))
                 logp = torch.cat([torch.matmul(logp, ones), log1mp], 1)
             else:
-                ones = torch.ones((1, self.alpha))
+                ones = torch.ones((1, self.alpha), dtype=self.dtype)
                 logp = torch.matmul(logp, ones)
         
         return(logp)
@@ -266,3 +266,66 @@ class AllelesProbPrior(KernelParamPrior):
         if self.eta is not None:
             kernel.register_prior("raw_logp_prior", NormalPrior(0, self.eta),
                                   lambda module: module.raw_logp)
+
+
+class RhosPrior(KernelParamPrior):
+    def __init__(self, seq_length, n_alleles, sites_equal=False,
+                 v0=1.1, train=True, dtype=torch.float32):
+        super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
+                         dtype=dtype)
+        self.sites_equal = sites_equal
+        self.calc_shape()
+        self.logit_rho0 = self.v_to_logit_rho(v0)
+    
+    def v_to_logit_rho(self, v):
+        rho = (np.exp(np.log(v) / self.l) - 1) / (self.alpha - 1)
+        return(np.log(rho / (1 - rho)))
+        
+    def calc_shape(self):
+        self.shape = (1 if self.sites_equal else self.l,)
+        
+    def get_raw_rho0(self):
+        if self.sites_equal:
+            return(self.logit_rho0 * torch.ones(self.shape, dtype=self.dtype))
+        else:
+            return(torch.zeros(self.shape, dtype=self.dtype))
+    
+    def get_raw_sigma0(self):
+        return(2 * torch.ones((1,), dtype=self.dtype))
+    
+    def get_raw_mu0(self):
+        return(self.logit_rho0 * torch.ones((1,), dtype=self.dtype))
+
+    def set_params(self, kernel):
+        if self.sites_equal:
+            params = {'raw_rho': Parameter(self.get_raw_rho0(), requires_grad=True)}
+        else:
+            params = {'raw_rho': Parameter(self.get_raw_rho0(), requires_grad=True),
+                      'raw_sigma': Parameter(self.get_raw_sigma0(), requires_grad=True),
+                      'raw_mu': Parameter(self.get_raw_mu0(), requires_grad=True)}
+        kernel.register_params(params=params, constraints={})
+    
+    def calc_rho(self, raw_rho, mu=None, sigma=None):
+        if self.sites_equal:
+            ones = torch.ones((self.l, 1))
+            logit_rho = torch.matmul(ones, raw_rho)
+        elif mu is not None and sigma is not None:
+            logit_rho = mu + sigma * raw_rho
+        else:
+            msg = 'mu and sigma must be provided for `sites_equal=False`'
+            raise ValueError(msg)
+        rho = torch.exp(logit_rho) / (1 + torch.exp(logit_rho))
+        return(rho)
+    
+    def get_rho(self, kernel):
+        if self.sites_equal:
+            rho = self.calc_rho(kernel.raw_rho)
+        else:
+            rho = self.calc_rho(kernel.raw_rho, mu=kernel.raw_mu,
+                                sigma=torch.exp(kernel.raw_sigma))
+        return(rho)
+
+    def set_priors(self, kernel):
+        if not self.sites_equal:
+            kernel.register_prior("raw_rho_prior", NormalPrior(0, 1),
+                                  lambda module: module.raw_rho)

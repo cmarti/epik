@@ -25,7 +25,7 @@ from epik.src.model import EpiK
 from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
                              GeneralizedSiteProductKernel)
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
-                             LambdasDeltaPrior, LambdasFlatPrior)
+                             LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
 from epik.src.plot import plot_training_history
 
 
@@ -259,19 +259,64 @@ class ModelsTests(unittest.TestCase):
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
     
+    def test_epik_site_kernel_smn1_2(self):
+        seq_length = 220
+#         seq_length = 100
+        train = pd.read_parquet('/home/cmarti/Downloads/BBQ_data_for_VC_regression/data.train.pq')
+        train = train.iloc[:2000, :]
+        test = pd.read_parquet('/home/cmarti/Downloads/BBQ_data_for_VC_regression/data.test.pq')
+        test = test.iloc[:500, :]
+        
+        
+        x_train, y_train, y_var_train = seq_to_one_hot(train.index, alleles=['A', 'B']), train['li_m'].values, train['li_var'].values
+        x_train = x_train[: , :2*seq_length]
+        logv0 = np.log(y_train.var())
+        print(x_train.shape, logv0)
+        x_test, y_test, y_var_test = seq_to_one_hot(test.index, alleles=['A', 'B']), test['li_m'].values, test['li_var'].values
+        x_test = x_test[: , :2*seq_length]
+        
+        rho_prior = RhosPrior(seq_length=seq_length, n_alleles=2, sites_equal=False,
+                              v0=1.05)
+        p_prior = AllelesProbPrior(seq_length=seq_length, n_alleles=2,
+                                   alleles_equal=True, sites_equal=False,
+                                   dummy_allele=False, )
+        kernel = GeneralizedSiteProductKernel(n_alleles=2, seq_length=seq_length,
+                                              p_prior=p_prior, rho_prior=rho_prior)
+#         kernel = RBFKernel()
+#         kernel.lengthscale = 20
+#         kernel = ScaleKernel(kernel)
+
+        model = EpiK(kernel, likelihood_type='Gaussian', learning_rate=0.01)
+        model.set_data(x_train, y_train)
+        model.fit(n_iter=50)
+        
+        test_ypred = model.predict(x_test).detach().numpy()
+        train_ypred = model.predict(x_train).detach().numpy()
+        test_rho = pearsonr(test_ypred, y_test)[0]
+        train_rho = pearsonr(train_ypred, y_train)[0]
+        print(test_rho, train_rho)
+        print(model.get_gp_mean())
+        
+        w = kernel.beta.detach().numpy()[:, 0]
+        assert(w[0] < w[1])
+        assert(w[-1] < w[-2])
+        assert(test_rho > 0.6)
+    
     def test_epik_generalized_site_kernel_smn1(self):
         max_cg_iterations(2000)
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
         l, a = 7, 4
         
+        rho_prior = RhosPrior(seq_length=l, n_alleles=a,
+                              sites_equal=False, v0=1.05)
         p_prior = AllelesProbPrior(seq_length=l, n_alleles=a,
-                                   alleles_equal=True, sites_equal=False,
+                                   alleles_equal=False, sites_equal=False,
                                    dummy_allele=False)
-        print(p_prior.shape)
-        kernel = GeneralizedSiteProductKernel(n_alleles=4, seq_length=7, p_prior=p_prior)
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              p_prior=p_prior, rho_prior=rho_prior)
         model = EpiK(kernel, likelihood_type='Gaussian', learning_rate=0.05)
         model.set_data(train_x, train_y, y_var=train_y_var)
-        model.fit(n_iter=100)
+        model.fit(n_iter=40)
         
         train_ypred = model.predict(train_x).detach().numpy()
         test_ypred = model.predict(test_x).detach().numpy()
@@ -281,9 +326,9 @@ class ModelsTests(unittest.TestCase):
         
         w = kernel.beta.detach().numpy()
         print(w)
-        rho = kernel.theta.detach().numpy()
+        rho = kernel.rho.detach().numpy()
         print(rho)
-        print(test_rho**2)
+        print(train_rho**2, test_rho**2)
         
         # assert(w[0] < w[1])
         # assert(w[-1] < w[-2])
@@ -387,9 +432,12 @@ class ModelsTests(unittest.TestCase):
             check_call(cmd)
             
             # Predict test sequences with variable ps
+            check_call(cmd + ['-k', 'GeneralizedSiteProduct'])
+            
+            # Predict test sequences with variable ps
             cmd.extend(['-k', 'SiteProduct', '--train_p'])
             check_call(cmd)
-            
+             
             # Predict test sequences with variable ps using GPU
             cmd.extend(['--gpu', '-s', '1000'])
             check_call(cmd)
@@ -477,5 +525,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_generalized_site_kernel_smn1']
+    import sys;sys.argv = ['', 'ModelsTests']
     unittest.main()
