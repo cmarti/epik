@@ -5,6 +5,8 @@ import gpytorch
 
 from time import time
 from tqdm import tqdm
+
+from gpytorch.means import ZeroMean, ConstantMean
 from gpytorch.kernels.multi_device_kernel import MultiDeviceKernel
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
 from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikelihood,
@@ -15,9 +17,14 @@ from epik.src.utils import get_tensor, to_device, get_gpu_memory
 
 class GPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, kernel, likelihood,
-                 output_device=None, n_devices=None):
+                 output_device=None, n_devices=None, train_mean=False):
         super(GPModel, self).__init__(train_x, train_y, likelihood)
-        self.mean_module = gpytorch.means.ConstantMean()
+        
+        if train_mean:
+            self.mean_module = ConstantMean()
+        else:
+            self.mean_module = ZeroMean()
+        
         if output_device is None:
             self.covar_module = kernel
         else:
@@ -33,12 +40,13 @@ class GPModel(gpytorch.models.ExactGP):
 
 class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
-                 output_device=None, n_devices=1,
+                 output_device=None, n_devices=1, train_mean=False,
                  partition_size=0, learning_rate=0.1,
                  preconditioner_size=0, dtype=torch.float32):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.output_device = output_device
+        self.train_mean = train_mean
         self.learning_rate = learning_rate
         self.n_devices = n_devices
         self.dtype = dtype
@@ -82,34 +90,21 @@ class EpiK(object):
         
         self.likelihood = self.to_device(likelihood)
     
-    def report_progress(self, pbar, rho=None):
-        loss = self.loss
-        if self.output_device is not None:
-            loss = loss.cpu()
-            
-        report_dict = {'loss': '{:.3f}'.format(loss.detach().numpy()),
-                       'mem': get_gpu_memory(self.output_device)}
-        if hasattr(self.model.covar_module, 'log_lda'):
-            lambdas = self.model.covar_module.log_lda
-            lambdas_text = ['{:.2f}'.format(l) for l in lambdas.detach().numpy()]
-            lambdas_text = '[{}]'.format(', '.join(lambdas_text))
-            report_dict['log(lambda)'] = lambdas_text
-        
-        if self.model.covar_module.lengthscale is not None:
-            v = self.model.covar_module.lengthscale.detach().numpy()
-            report_dict['lengthscale'] = '{:.2f}'.format(v[0][0])
-        elif hasattr(self.model.covar_module, 'base_kernel'):
-            if self.model.covar_module.base_kernel.lengthscale is not None:
-                v = self.model.covar_module.base_kernel.lengthscale.detach().numpy()
-                report_dict['lengthscale'] = '{:.2f}'.format(v[0][0])
-        
-        if rho is not None:
-            report_dict['test rho'] = '{:.2f}'.format(rho)
-        
+    def get_mem_usage(self):
+        return(get_gpu_memory(self.output_device))
+    
+    def report_progress(self, pbar):
+        report_dict = {'loss': '{:.3f}'.format(self.to_numpy(self.loss)),
+                       'mem': self.get_mem_usage()}
         pbar.set_postfix(report_dict)
     
     def to_device(self, x):
         return(to_device(x, self.output_device))
+    
+    def to_numpy(self, v):
+        if self.output_device is not None:
+            v = v.cpu()
+        return(v.detach().numpy())
     
     def get_tensor(self, ndarray):
         return(get_tensor(ndarray, dtype=self.dtype, device=self.output_device))
@@ -147,14 +142,12 @@ class EpiK(object):
     
     def define_model(self):
         self.model = self.to_device(GPModel(self.X, self.y, self.kernel, self.likelihood,
+                                            train_mean=self.train_mean,
                                             output_device=self.output_device,
                                             n_devices=self.n_devices))
     
     def get_gp_mean(self):
-        c = self.model.mean_module.constant
-        if self.output_device is not None:
-            c = c.cpu()
-        return(c.detach().numpy()) 
+        return(self.to_numpy(self.model.mean_module.constant)) 
     
     def set_data(self, X, y, y_var=None):
         self.X = self.get_tensor(X)
@@ -185,12 +178,20 @@ class EpiK(object):
                     
             self.fit_time = time() - t0
     
-    def predict(self, pred_X):
-        self.set_evaluation_mode()
+    def predict(self, pred_X, calc_variance=False):
+        if calc_variance:
+            msg = 'Variance calculation not implemented yet'
+            raise ValueError(msg)
         
         t0 = time()
+        
+        self.set_evaluation_mode()
+        pred_X = self.get_tensor(pred_X)
+        print(pred_X.shape, pred_X.device)
+        
         with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size(): #, , gpytorch.settings.fast_pred_var():
-            f_preds = self.model(self.get_tensor(pred_X)).mean
+            f_preds = self.model(pred_X).mean
         # TODO: error when asking for variance: f_preds.variance
+
         self.pred_time = time() - t0
         return(f_preds)
