@@ -103,6 +103,9 @@ class VCKernel(HaploidKernel):
     def forward(self, x1, x2, diag=False, **params):
         kernel = self._forward(x1, x2, lambdas=self.lambdas, diag=diag)
         return(kernel)
+    
+    def get_params(self):
+        return({'lambdas': self.lambdas})
 
 
 class SkewedVCKernel(HaploidKernel):
@@ -180,6 +183,10 @@ class SkewedVCKernel(HaploidKernel):
         kernel = self._forward(x1, x2, lambdas=self.lambdas, norm_logp=self.logp,
                                diag=diag)
         return(kernel)
+    
+    def get_params(self):
+        return({'lambdas': self.lambdas,
+                'p': self.p})
 
 
 class GeneralizedSiteProductKernel(SequenceKernel):
@@ -217,6 +224,10 @@ class GeneralizedSiteProductKernel(SequenceKernel):
     
     def forward(self, x1, x2, diag=False, **params):
         return(self._forward(x1, x2, rho=self.rho, beta=self.beta, diag=diag))
+    
+    def get_params(self):
+        return({'rhos': self.rhos,
+                'beta': self.beta})
 
 
 class DiploidKernel(SequenceKernel):
