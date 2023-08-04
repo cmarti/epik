@@ -12,7 +12,7 @@ from os.path import join
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
 
-from scipy.stats.stats import pearsonr
+from scipy.stats import pearsonr
 from gpmap.src.inference import VCregression
 
 from gpytorch.settings import max_cg_iterations
@@ -22,8 +22,7 @@ from gpytorch.kernels.scale_kernel import ScaleKernel
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import seq_to_one_hot, get_tensor, split_training_test
 from epik.src.model import EpiK
-from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
-                             GeneralizedSiteProductKernel)
+from epik.src.kernel import SkewedVCKernel, VCKernel, GeneralizedSiteProductKernel
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
 from epik.src.plot import plot_training_history
@@ -62,13 +61,33 @@ def get_smn1_data(n, seed=0, dtype=None):
 
 
 class ModelsTests(unittest.TestCase):
+    def test_simulate_data(self):
+        l, a = 2, 2
+        lambdas0 = torch.tensor([0.001, 1, 0.2])
+        lambdas_prior = LambdasFlatPrior(seq_length=l,
+                                         log_lambdas0=torch.log(lambdas0))
+        kernel = VCKernel(n_alleles=a, seq_length=l,
+                          lambdas_prior=lambdas_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
+        y = model.sample(X, n=10000)
+        cors = pd.DataFrame(y).corr().values
+        
+        rho1 = np.array([cors[0, 1], cors[0, 2], cors[1, 0], cors[1, 3],
+                         cors[2, 0], cors[2, 3], cors[3, 1], cors[3, 2]])
+        rho2 = np.array([cors[0, 3], cors[1, 2], cors[2, 1], cors[3, 0]])
+        assert(rho1.std() < 0.2)
+        assert(rho2.std() < 0.1)
+        
     def test_epik_basic(self):
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2)
+        lambdas_prior = LambdasFlatPrior(seq_length=2)
+        kernel = VCKernel(n_alleles=2, seq_length=2, lambdas_prior=lambdas_prior)
         model = EpiK(kernel, likelihood_type='Gaussian')
         
         X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
         y = torch.tensor([0.2, 1.1, 0.5, 1.5])
-        model.fit(X, y, n_iter=100)
+        model.set_data(X, y)
+        model.fit(n_iter=100)
         ypred = model.predict(X)
         assert(pearsonr(ypred, y)[0] > 0.9)
     
@@ -525,5 +544,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_basic']
     unittest.main()

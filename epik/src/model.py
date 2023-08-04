@@ -187,15 +187,25 @@ class EpiK(object):
         
         self.set_evaluation_mode()
         pred_X = self.get_tensor(pred_X)
-        print(pred_X.shape, pred_X.device)
         
         with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size(): #, , gpytorch.settings.fast_pred_var():
             f_preds = self.model(pred_X).mean
-        # TODO: error when asking for variance: f_preds.variance
 
         self.pred_time = time() - t0
         return(f_preds)
     
+    def get_prior(self, X):
+        self.set_likelihood()
+        model = self.to_device(GPModel(None, None, self.kernel, self.likelihood,
+                                       train_mean=self.train_mean,
+                                       output_device=self.output_device,
+                                       n_devices=self.n_devices))
+        prior = model.forward(X)
+        return(prior)
+    
     def sample(self, X, n=1):
-        prior = self.model.forward(X)
-        return(prior.rsample(n))
+        prior = self.get_prior(X)
+        v = torch.zeros(n)
+        with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size():
+            y = prior.rsample(v.size())
+        return(y)
