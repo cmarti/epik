@@ -195,3 +195,7 @@ class EpiK(object):
 
         self.pred_time = time() - t0
         return(f_preds)
+    
+    def sample(self, X, n=1):
+        prior = self.model.forward(X)
+        return(prior.rsample(n))
