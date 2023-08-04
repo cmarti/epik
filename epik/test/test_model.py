@@ -26,6 +26,7 @@ from epik.src.kernel import SkewedVCKernel, VCKernel, GeneralizedSiteProductKern
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
 from epik.src.plot import plot_training_history
+from itertools import product
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -79,7 +80,7 @@ class ModelsTests(unittest.TestCase):
         assert(rho1.std() < 0.2)
         assert(rho2.std() < 0.1)
         
-    def test_epik_basic(self):
+    def test_epik_vc_kernel_basic(self):
         lambdas_prior = LambdasFlatPrior(seq_length=2)
         kernel = VCKernel(n_alleles=2, seq_length=2, lambdas_prior=lambdas_prior)
         model = EpiK(kernel, likelihood_type='Gaussian')
@@ -90,7 +91,65 @@ class ModelsTests(unittest.TestCase):
         model.fit(n_iter=100)
         ypred = model.predict(X)
         assert(pearsonr(ypred, y)[0] > 0.9)
+        
+    def test_epik_vc_kernel(self):
+        # Simulate from prior distribution
+        log_lambdas0 = torch.tensor([-5, 2., 1, 0, -2, -5])
+        l = log_lambdas0.shape[0]-1
+        
+        lambdas_prior = LambdasFlatPrior(seq_length=l, log_lambdas0=log_lambdas0)
+        kernel = VCKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        
+        alleles = ['A', 'C', 'T', 'G']
+        seqs = np.array([''.join(gt) for gt in product(alleles, repeat=l)])
+        X = seq_to_one_hot(seqs, alleles)
+        y = model.sample(X, n=1, sigma=0.1).flatten()
+        y_var = 0.1 * torch.ones_like(y)
+        splits = split_training_test(X, y, y_var, ptrain=0.8)
+        train_x, train_y, test_x, test_y, train_y_var = splits
+        
+        # Train new model
+        lambdas_prior = LambdasFlatPrior(seq_length=l)
+        kernel = VCKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=150)
+        
+        # Predict on test sequences
+        ypred = model.predict(test_x).detach()
+        r2 = pearsonr(ypred, test_y)[0] ** 2
+        assert(r2 > 0.9)
     
+    def test_epik_rho_kernel(self):
+        # Simulate from prior distribution
+        log_lambdas0 = torch.tensor([-5, 2., 1, 0, -2, -5])
+        l, a = log_lambdas0.shape[0]-1, a
+        
+        rhos_prior = RhosPrior(seq_length=l, n_alleles=a)
+        kernel = GeneralizedSiteProductKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        
+        alleles = ['A', 'C', 'T', 'G']
+        seqs = np.array([''.join(gt) for gt in product(alleles, repeat=l)])
+        X = seq_to_one_hot(seqs, alleles)
+        y = model.sample(X, n=1, sigma=0.1).flatten()
+        y_var = 0.1 * torch.ones_like(y)
+        splits = split_training_test(X, y, y_var, ptrain=0.8)
+        train_x, train_y, test_x, test_y, train_y_var = splits
+        
+        # Train new model
+        lambdas_prior = LambdasFlatPrior(seq_length=l)
+        kernel = VCKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=150)
+        
+        # Predict on test sequences
+        ypred = model.predict(test_x).detach()
+        r2 = pearsonr(ypred, test_y)[0] ** 2
+        assert(r2 > 0.9)
+        
     def test_epik_vc_smn1(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
         l, a = 7, 4
@@ -544,5 +603,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_basic']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_vc_kernel']
     unittest.main()
