@@ -194,17 +194,18 @@ class EpiK(object):
         self.pred_time = time() - t0
         return(f_preds)
     
-    def get_prior(self, X):
-        self.set_likelihood()
-        model = self.to_device(GPModel(None, None, self.kernel, self.likelihood,
+    def get_prior(self, X, sigma):
+        noise = sigma * torch.ones(X.shape[0])
+        likelihood = FixedNoiseGaussianLikelihood(noise=noise)
+        model = self.to_device(GPModel(None, None, self.kernel, likelihood,
                                        train_mean=self.train_mean,
                                        output_device=self.output_device,
                                        n_devices=self.n_devices))
         prior = model.forward(X)
         return(prior)
     
-    def sample(self, X, n=1):
-        prior = self.get_prior(X)
+    def sample(self, X, n=1, sigma=1e-4):
+        prior = self.get_prior(X, sigma=sigma)
         v = torch.zeros(n)
         with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size():
             y = prior.rsample(v.size())
