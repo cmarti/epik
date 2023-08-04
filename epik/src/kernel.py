@@ -182,48 +182,7 @@ class SkewedVCKernel(HaploidKernel):
         return(kernel)
 
 
-class SiteProductKernel(HaploidKernel):
-    def __init__(self, n_alleles, seq_length, p_prior,
-                 dtype=torch.float32, **kwargs):
-        super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
-        
-        self.define_params()
-        self.p_prior = p_prior
-        self.p_prior.set(self)
-        self.params = ['beta', 'theta']
-
-    def define_params(self):
-        params = {'raw_theta': Parameter(torch.zeros(2), requires_grad=True)}
-        self.register_params(params=params, constraints={})
-        
-    @property
-    def beta(self):
-        logp = -torch.exp(self.raw_logp)
-        logp = self.p_prior.resize_logp(logp)
-        norm_logp = self.p_prior.normalize_logp(logp)
-        beta = self.p_prior.norm_logp_to_beta(norm_logp)
-        return(beta)
-    
-    @property
-    def theta(self):
-        return(self.raw_theta)
-
-    def _forward(self, x1, x2, theta, beta, diag=False):
-        # TODO: make sure diag works here
-        log_factors = torch.flatten(torch.log(torch.exp(theta[0]) + torch.exp(theta[1] + beta[:, :-1])))
-        M = torch.diag(log_factors)
-        m = self.inner_product(x1, x2, M, diag=diag)
-        
-        distance = self.l - self.inner_product(x1, x2, diag=diag)
-        dist_factor = (torch.exp(theta[0]) - torch.exp(theta[1])) ** distance  # 1-et can be negative: avoid log
-        kernel = dist_factor * torch.exp(m) 
-        return(kernel)
-    
-    def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, theta=self.theta, beta=self.beta, diag=diag))
-
-
-class GeneralizedSiteProductKernel(HaploidKernel):
+class GeneralizedSiteProductKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, p_prior, rho_prior,
                  dtype=torch.float32, **kwargs):
         super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
