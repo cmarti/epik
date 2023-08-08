@@ -211,7 +211,11 @@ class GeneralizedSiteProductKernel(SequenceKernel):
     def rho(self):
         return(self.rho_prior.get_rho(self))
     
-    def _forward(self, x1, x2, rho, beta, diag=False):
+    @property
+    def rho_c(self):
+        return(self.rho_prior.get_rho_c(self))
+    
+    def _forward(self, x1, x2, rho_c, rho, beta, diag=False):
         # TODO: make sure diag works here
         constant = torch.log(1 - rho).sum()
         rho = torch.stack([rho] * self.alpha, axis=1)
@@ -219,14 +223,15 @@ class GeneralizedSiteProductKernel(SequenceKernel):
         log_factors = torch.flatten(torch.log(1 + rho * eta) - torch.log(1 - rho))
         M = torch.diag(log_factors)
         m = self.inner_product(x1, x2, M, diag=diag)
-        kernel = torch.exp(m + constant)
+        kernel = torch.exp(m + constant) - 1 + rho_c
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, rho=self.rho, beta=self.beta, diag=diag))
+        return(self._forward(x1, x2, rho_c=self.rho_c, rho=self.rho, beta=self.beta, diag=diag))
     
     def get_params(self):
-        return({'rhos': self.rhos,
+        return({'rho_c': self.rho_c, 
+                'rho': self.rho,
                 'beta': self.beta})
 
 

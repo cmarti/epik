@@ -40,9 +40,11 @@ class GPModel(gpytorch.models.ExactGP):
 
 class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
-                 output_device=None, n_devices=1, train_mean=False,
+                 output_device=None, n_devices=1,
+                 train_mean=False, train_noise=False,
                  partition_size=0, learning_rate=0.1,
-                 preconditioner_size=0, dtype=torch.float32):
+                 preconditioner_size=0, dtype=torch.float32,
+                 track_progress=True):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.output_device = output_device
@@ -52,36 +54,14 @@ class EpiK(object):
         self.dtype = dtype
         self.partition_size = partition_size
         self.preconditioner_size = preconditioner_size
-    
-    def optimize_partition_size(self):
-        # TODO: does not seem to be working
-        '''
-        Function to set up GPU settings like number of GPUs and the 
-        partition size. Adapted from gpytorch website:
-        
-        https://docs.gpytorch.ai/en/stable/examples/02_Scalable_Exact_GPs/Simple_MultiGPU_GP_Regression.html
-        
-        '''
-        
-        N = self.X.size(0)
-        partition_sizes = np.append(0, np.ceil(N / 2 ** np.arange(1, np.floor(np.log2(N)))).astype(int))
-        for partition_size in partition_sizes:
-            try:
-                self.partition_size = partition_size
-                self.fit(n_iter=3)
-                break
-            
-            except (RuntimeError, AttributeError) as error:
-                print(error)
-                # handle CUDA OOM error
-                gc.collect()
-                torch.cuda.empty_cache()
+        self.train_noise = train_noise
+        self.track_progress = track_progress
     
     def set_likelihood(self, y_var=None):
         if self.likelihood_type == 'Gaussian':
             if y_var is not None:
                 likelihood = FixedNoiseGaussianLikelihood(noise=self.get_tensor(y_var),
-                                                          learn_additional_noise=True)
+                                                          learn_additional_noise=self.train_noise)
             else:
                 likelihood = GaussianLikelihood()
         else:
@@ -94,9 +74,10 @@ class EpiK(object):
         return(get_gpu_memory(self.output_device))
     
     def report_progress(self, pbar):
-        report_dict = {'loss': '{:.3f}'.format(self.to_numpy(self.loss)),
-                       'mem': self.get_mem_usage()}
-        pbar.set_postfix(report_dict)
+        if self.track_progress:
+            report_dict = {'loss': '{:.3f}'.format(self.to_numpy(self.loss)),
+                           'mem': self.get_mem_usage()}
+            pbar.set_postfix(report_dict)
     
     def to_device(self, x):
         return(to_device(x, self.output_device))
@@ -167,7 +148,7 @@ class EpiK(object):
         
         with self.set_partition_size(), self.set_preconditioner_size():
             
-            if n_iter > 1:
+            if n_iter > 1 and self.track_progress:
                 pbar = tqdm(pbar, desc='Maximizing Marginal Likelihood')
             
             t0 = time()    
@@ -194,9 +175,8 @@ class EpiK(object):
         self.pred_time = time() - t0
         return(f_preds)
     
-    def get_prior(self, X, sigma):
-        noise = sigma * torch.ones(X.shape[0])
-        likelihood = FixedNoiseGaussianLikelihood(noise=noise)
+    def get_prior(self, X, sigma2):
+        likelihood = FixedNoiseGaussianLikelihood(noise=sigma2 * torch.ones(X.shape[0]))
         model = self.to_device(GPModel(None, None, self.kernel, likelihood,
                                        train_mean=self.train_mean,
                                        output_device=self.output_device,
@@ -204,8 +184,8 @@ class EpiK(object):
         prior = model.forward(X)
         return(prior)
     
-    def sample(self, X, n=1, sigma=1e-4):
-        prior = self.get_prior(X, sigma=sigma)
+    def sample(self, X, n=1, sigma2=1e-4):
+        prior = self.get_prior(X, sigma2=sigma2)
         v = torch.zeros(n)
         with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size():
             y = prior.rsample(v.size())

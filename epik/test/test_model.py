@@ -122,28 +122,109 @@ class ModelsTests(unittest.TestCase):
         assert(r2 > 0.9)
     
     def test_epik_rho_kernel(self):
-        # Simulate from prior distribution
-        log_lambdas0 = torch.tensor([-5, 2., 1, 0, -2, -5])
-        l, a = log_lambdas0.shape[0]-1, a
-        
-        rhos_prior = RhosPrior(seq_length=l, n_alleles=a)
-        kernel = GeneralizedSiteProductKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
-        model = EpiK(kernel, likelihood_type='Gaussian')
-        
         alleles = ['A', 'C', 'T', 'G']
+        rho0 = torch.tensor([0.1, 0.6, 0.7, 0.6, 0.4])
+        log_rho0 = np.log(rho0)
+        l, a = rho0.shape[0], len(alleles)
         seqs = np.array([''.join(gt) for gt in product(alleles, repeat=l)])
         X = seq_to_one_hot(seqs, alleles)
-        y = model.sample(X, n=1, sigma=0.1).flatten()
-        y_var = 0.1 * torch.ones_like(y)
+        sigma2 = 0.1
+        y_var = sigma2 * torch.ones(X.shape[0])
+        
+        # Simulate under rho model
+        rhos_prior = RhosPrior(seq_length=l, n_alleles=a, rho0=rho0)
+        p_prior = AllelesProbPrior(seq_length=l, n_alleles=a, dummy_allele=False)
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              rho_prior=rhos_prior, p_prior=p_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        y = model.sample(X, n=1, sigma2=sigma2).flatten()
+        
+        # Split data in training and test sets
         splits = split_training_test(X, y, y_var, ptrain=0.8)
         train_x, train_y, test_x, test_y, train_y_var = splits
         
         # Train new model
-        lambdas_prior = LambdasFlatPrior(seq_length=l)
-        kernel = VCKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
+        rhos_prior = RhosPrior(seq_length=l, n_alleles=a)
+        p_prior = AllelesProbPrior(seq_length=l, n_alleles=a, train=False,
+                                   alleles_equal=True, sites_equal=True)
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              rho_prior=rhos_prior, p_prior=p_prior)
         model = EpiK(kernel, likelihood_type='Gaussian')
         model.set_data(train_x, train_y, train_y_var)
-        model.fit(n_iter=150)
+        model.fit(n_iter=50)
+        
+        # Test rho inference
+        params = kernel.get_params()
+        log_rho = np.log(params['rho'].detach().numpy())
+        r = pearsonr(log_rho, log_rho0)[0]
+        assert(r > 0.7)
+        
+        # Predict on test sequences
+        ypred = model.predict(test_x).detach()
+        r2 = pearsonr(ypred, test_y)[0] ** 2
+        assert(r2 > 0.9)
+    
+    def test_epik_rho_pi_kernel(self):
+        alleles = ['A', 'C', 'T', 'G']
+        rho0 = torch.tensor([0.1, 0.6, 0.7, 0.6, 0.4])
+        rho0 = torch.tensor([0.5,])
+        p0 = torch.tensor([[0.2, 0.5, 0.2, 0.1],
+                           [0.1, 0.1, 0.5, 0.3],
+                           [0.2, 0.5, 0.2, 0.1],
+                           [0.2, 0.5, 0.2, 0.1],
+                           [0.3, 0.25, 0.2, 0.25],
+                           [0.25, 0.25, 0.25, 0.25]])
+        p0 = torch.tensor([[0.01, 0.49, 0.49, 0.01]])
+        beta0 = -torch.log(p0 / (1-p0))
+        log_rho0 = np.log(rho0)
+        l, a = rho0.shape[0], len(alleles)
+        l = 5
+        print(l, a)
+        seqs = np.array([''.join(gt) for gt in product(alleles, repeat=l)])
+        X = seq_to_one_hot(seqs, alleles)
+        sigma2 = 0.005
+        y_var = sigma2 * torch.ones(X.shape[0])
+        
+        # Simulate under rho model
+        rhos_prior = RhosPrior(seq_length=l, n_alleles=a, rho0=rho0, sites_equal=True,
+                               train=False)
+        p_prior = AllelesProbPrior(seq_length=l, n_alleles=a, dummy_allele=False,
+                                   beta0=beta0, sites_equal=True)
+        assert(np.allclose(p_prior.norm_logp_to_beta(np.log(p0)), beta0))
+        
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              rho_prior=rhos_prior, p_prior=p_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian')
+        y = model.sample(X, n=1, sigma2=sigma2).flatten()
+        
+        # Split data in training and test sets
+        splits = split_training_test(X, y, y_var, ptrain=0.8)
+        train_x, train_y, test_x, test_y, train_y_var = splits
+        
+        # Train new model
+        # rhos_prior = RhosPrior(seq_length=l, n_alleles=a, sites_equal=True)
+        p_prior = AllelesProbPrior(seq_length=l, n_alleles=a, train=True,
+                                   dummy_allele=False, sites_equal=True)
+        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
+                                              rho_prior=rhos_prior, p_prior=p_prior)
+        model = EpiK(kernel, likelihood_type='Gaussian', train_mean=False,
+                     learning_rate=0.1)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=500)
+        
+        # Test rho inference
+        params = kernel.get_params()
+        log_rho = np.log(params['rho'].detach().numpy())
+        # r = pearsonr(log_rho, log_rho0)[0]
+        # assert(r > 0.7)
+        print(log_rho, log_rho0)
+        
+        # Test p inference
+        beta = params['beta'].detach().numpy()[0].flatten()
+        print(beta)
+        print(beta0)
+        r = pearsonr(beta[0].flatten(), beta0.flatten())[0]
+        print(r)
         
         # Predict on test sequences
         ypred = model.predict(test_x).detach()
@@ -603,5 +684,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_vc_kernel']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_rho_pi_kernel']
     unittest.main()
