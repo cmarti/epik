@@ -270,11 +270,13 @@ class AllelesProbPrior(KernelParamPrior):
 
 class RhosPrior(KernelParamPrior):
     def __init__(self, seq_length, n_alleles, sites_equal=False,
-                 rho0=None, v0=1.1, train=True, dtype=torch.float32):
+                 rho0=None, v0=1.1, train=True, dtype=torch.float32,
+                 train_constant_component=False):
         super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
                          dtype=dtype)
         self.sites_equal = sites_equal
         self.calc_shape()
+        self.train_constant_component = train_constant_component
         
         if rho0 is None:
             self.logit_rho0 = torch.tensor(self.v_to_logit_rho(v0), dtype=self.dtype)
@@ -303,11 +305,11 @@ class RhosPrior(KernelParamPrior):
     def set_params(self, kernel):
         if self.sites_equal:
             params = {'raw_rho': Parameter(self.get_logit_rho0(), requires_grad=self.train),
-                      'raw_rho_c': Parameter(self.get_raw_rho_c0(), requires_grad=self.train)}
+                      'raw_rho_c': Parameter(self.get_raw_rho_c0(), requires_grad=self.train_constant_component)}
         else:
             logit_rho = self.get_logit_rho0()
             logit_rho_mu, logit_rho_sd = logit_rho.mean(), logit_rho.std() + 0.01
-            params = {'raw_rho_c': Parameter(self.get_raw_rho_c0(), requires_grad=self.train),
+            params = {'raw_rho_c': Parameter(self.get_raw_rho_c0(), requires_grad=self.train_constant_component),
                       'raw_mu': Parameter(logit_rho_mu, requires_grad=self.train),
                       'raw_sigma': Parameter(torch.log(logit_rho_sd), requires_grad=self.train),
                       'raw_rho': Parameter((logit_rho - logit_rho_mu) / (logit_rho_sd),
