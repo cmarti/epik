@@ -91,11 +91,13 @@ class EpiK(object):
         return(get_tensor(ndarray, dtype=self.dtype, device=self.output_device))
     
     def training_step(self, X, y):
+        params = self.kernel.get_params()
         self.optimizer.zero_grad()
         self.loss = -self.calc_mll(self.model(X), y)
         self.loss.backward()
         self.optimizer.step()
-        self.loss_history.append(self.loss.detach().item())
+        params['loss'] = self.loss.detach().item()
+        self.loss_history.append(params)
         
     def set_training_mode(self):
         self.model.train()
@@ -151,7 +153,8 @@ class EpiK(object):
             if n_iter > 1 and self.track_progress:
                 pbar = tqdm(pbar, desc='Maximizing Marginal Likelihood')
             
-            t0 = time()    
+            t0 = time()
+            
             for _ in pbar:
                 self.training_step(self.X, self.y)
                 if n_iter > 1:
