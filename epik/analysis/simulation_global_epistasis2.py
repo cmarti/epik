@@ -144,11 +144,11 @@ class SigmoidLandscape(GlobalEpistasisModel):
 
 class GPmodel(object):
     def __init__(self, l, a, train_p=False, sites_equal=True, track_progress=False,
-                 kernel='rho'):
+                 kernel='rho', rho0=None):
         self.l = l
         self.a = a
         if kernel == 'rho':
-            rhos_prior = RhosPrior(seq_length=l, n_alleles=a,
+            rhos_prior = RhosPrior(seq_length=l, n_alleles=a, rho0=rho0,
                                    sites_equal=sites_equal, train=True)
             p_prior = AllelesProbPrior(seq_length=l, n_alleles=a, dummy_allele=False,
                                        sites_equal=True, train=train_p)
@@ -171,6 +171,13 @@ class GPmodel(object):
         p0 = np.vstack([np.random.dirichlet(np.ones(self.a)) for _ in range(self.l)])
         beta0 = -np.log(p0 / (1 - p0))
         return(torch.tensor(rho0), torch.tensor(beta0))
+    
+    def simulate(self, X, sigma2):
+        y_true = self.model.sample(X, n=1, sigma2=0).flatten()
+        y_true = (y_true - y_true.mean()) / y_true.std()
+        y = torch.normal(y_true, np.sqrt(sigma2))
+        y_var = sigma2 * torch.ones(X.shape[0])
+        return(y_true, y, y_var)
 
     def predict(self, train_x, train_y, train_y_var, test_x):
         self.model.set_data(train_x, train_y, train_y_var)
@@ -201,6 +208,10 @@ class GPmodel(object):
         beta = params['beta'].flatten()
         beta_r = pearsonr(beta, beta0)[0]
         return({'rho_r': rho_r, 'beta_r': beta_r})
+    
+    @property
+    def history(self):
+        return(self.model.loss_history)
 
 
 def plot_predictions(axes, phi_true, y_true, xs, ys, 
