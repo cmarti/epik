@@ -224,12 +224,12 @@ class AllelesProbPrior(KernelParamPrior):
 
     def resize_logp(self, logp):
         if self.sites_equal:
-            ones = torch.ones((self.l, 1), device=logp.device)
+            ones = torch.ones((self.l, 1), device=logp.device, dtype=self.dtype)
             logp = torch.matmul(ones, logp)
             
         if self.alleles_equal:
             if self.dummy_allele:
-                log1mp = torch.log(1 - torch.exp(logp)) * torch.ones((self.l, 1))
+                log1mp = torch.log(1 - torch.exp(logp)) * torch.ones((self.l, 1), dtype=self.dtype)
                 logp = logp - np.log(self.alpha)
                 ones = torch.ones((1, self.alpha))
                 logp = torch.cat([torch.matmul(logp, ones), log1mp], 1)
@@ -318,7 +318,7 @@ class RhosPrior(KernelParamPrior):
     
     def calc_rho(self, raw_rho, mu=None, sigma=None):
         if self.sites_equal:
-            ones = torch.ones((self.l, 1))
+            ones = torch.ones((self.l, 1), dtype=self.dtype)
             logit_rho = torch.matmul(ones, raw_rho)
         elif mu is not None and sigma is not None:
             logit_rho = mu + sigma * raw_rho
