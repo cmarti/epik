@@ -14,7 +14,7 @@ if __name__ == '__main__':
     l, a = 5, len(alleles)
     sigma2 = 0
     reps = 5
-    rho0 = torch.tensor([0.1])
+    rho0 = torch.tensor([0.5])
     n = 100
 
     seqs = np.array([''.join(gt) for gt in product(alleles, repeat=l)])

@@ -144,19 +144,21 @@ class SigmoidLandscape(GlobalEpistasisModel):
 
 class GPmodel(object):
     def __init__(self, l, a, train_p=False, sites_equal=True, track_progress=False,
-                 kernel='rho', rho0=None):
+                 kernel='rho', rho0=None, dtype=torch.float32):
         self.l = l
         self.a = a
         if kernel == 'rho':
             rhos_prior = RhosPrior(seq_length=l, n_alleles=a, rho0=rho0,
-                                   sites_equal=sites_equal, train=True)
+                                   sites_equal=sites_equal, train=True, dtype=dtype)
             p_prior = AllelesProbPrior(seq_length=l, n_alleles=a, dummy_allele=False,
-                                       sites_equal=True, train=train_p)
+                                       sites_equal=True, train=train_p, dtype=dtype)
             kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
-                                                  rho_prior=rhos_prior, p_prior=p_prior)
+                                                  rho_prior=rhos_prior, p_prior=p_prior,
+                                                  dtype=dtype)
         elif kernel == 'VC':
             lambdas_prior = LambdasFlatPrior(seq_length=l)
-            kernel = VCKernel(seq_length=l, n_alleles=a, lambdas_prior=lambdas_prior)
+            kernel = VCKernel(seq_length=l, n_alleles=a, lambdas_prior=lambdas_prior,
+                              dtype=dtype)
         elif kernel == 'RBF':
             kernel = RBFKernel()
         else:
@@ -164,7 +166,7 @@ class GPmodel(object):
             raise ValueError(msg)
             
         self.model = EpiK(kernel, likelihood_type='Gaussian',
-                          track_progress=track_progress)
+                          track_progress=track_progress, dtype=dtype)
     
     def sample_params(self):
         rho0 = np.random.uniform(size=self.l)
@@ -174,7 +176,7 @@ class GPmodel(object):
     
     def simulate(self, X, sigma2):
         y_true = self.model.sample(X, n=1, sigma2=0).flatten()
-        y_true = (y_true - y_true.mean()) / y_true.std()
+        # y_true = (y_true - y_true.mean()) / y_true.std()
         y = torch.normal(y_true, np.sqrt(sigma2))
         y_var = sigma2 * torch.ones(X.shape[0])
         return(y_true, y, y_var)
@@ -245,7 +247,7 @@ def plot_hist(axes, phi, bins, title=''):
 
 
 if __name__ == '__main__':
-    l, alpha = 10, 2
+    l, alpha = 14, 2
     uniform = False
     pmut = 0.02
     n = 500
