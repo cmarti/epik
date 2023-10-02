@@ -91,13 +91,15 @@ class EpiK(object):
         return(get_tensor(ndarray, dtype=self.dtype, device=self.output_device))
     
     def training_step(self, X, y):
-        params = self.kernel.get_params()
         self.optimizer.zero_grad()
         self.loss = -self.calc_mll(self.model(X), y)
         self.loss.backward()
         self.optimizer.step()
-        params['loss'] = self.loss.detach().item()
-        self.loss_history.append(params)
+        
+        if hasattr(self.kernel, 'get_params'):
+            params = self.kernel.get_params()
+            params['loss'] = self.loss.detach().item()
+            self.loss_history.append(params)
         
     def set_training_mode(self):
         self.model.train()

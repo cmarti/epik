@@ -244,9 +244,10 @@ def main():
             fhand.write('pred,{}\n'.format(model.pred_time))
             
     # Save plot with training history
-    fpath = '{}.training.png'.format(prefix)
-    log.write('Saving plot with loss history to {}'.format(fpath))
-    plot_training_history(model.loss_history, fpath)
+    if hasattr(model, 'loss_history'):
+        fpath = '{}.training.png'.format(prefix)
+        log.write('Saving plot with loss history to {}'.format(fpath))
+        plot_training_history(model.loss_history, fpath)
     
     log.finish()
 
