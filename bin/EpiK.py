@@ -12,7 +12,7 @@ from gpytorch.kernels.matern_kernel import MaternKernel
 from gpytorch.kernels.rq_kernel import RQKernel
 from gpytorch.kernels.linear_kernel import LinearKernel
 
-from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
+from epik.src.kernel import (SkewedVCKernel, VCKernel,
                              GeneralizedSiteProductKernel)
 from epik.src.model import EpiK
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
@@ -129,6 +129,8 @@ def main():
     log.write('Selected {} kernel'.format(kernel))
     if kernel == 'RBF':
         kernel = ScaleKernel(RBFKernel())
+    elif kernel == 'ARD':
+        kernel = ScaleKernel(RBFKernel(ard_num_dims=X.shape[1]))
     elif kernel == 'matern':
         kernel = ScaleKernel(MaternKernel())
     elif kernel == 'RQ':
