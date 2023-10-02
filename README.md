@@ -16,6 +16,11 @@ Download the repository using git and cd into it
 git clone git@bitbucket.org:cmartiga/epik.git
 ```
 
+or
+```bash
+git clone git@github.com:cmarti/epik.git
+```
+
 Install using setuptools
 ```bash
 cd epik
