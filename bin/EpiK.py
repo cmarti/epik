@@ -155,10 +155,7 @@ def main():
             msg = 'Lambdas prior unknown: {}'.format(lambdas_prior)
             raise ValueError(msg)    
         
-        if kernel == 'SiteProduct':
-            kernel = SiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
-                                       p_prior=p_prior, dtype=dtype)
-        elif kernel == 'GeneralizedSiteProduct':
+        if kernel == 'GeneralizedSiteProduct':
             rho_prior = RhosPrior(seq_length=seq_length, n_alleles=n_alleles)
             kernel = GeneralizedSiteProductKernel(n_alleles=n_alleles, seq_length=seq_length,
                                                   p_prior=p_prior, rho_prior=rho_prior,
