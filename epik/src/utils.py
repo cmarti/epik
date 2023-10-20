@@ -23,6 +23,17 @@ def seq_to_one_hot(X, alleles=None):
     return(onehot)
 
 
+def one_hot_to_seq(x, alleles):
+    ncol = x.shape[1]
+    alpha = alleles.shape[0]
+    if ncol % alpha != 0:
+        raise ValueError('Check that the number of alleles is correct')
+    l = int(ncol / alpha)
+    a = np.hstack([alleles] * l)
+    X = [''.join(a[i == 1]) for i in x]
+    return(X)
+
+
 def diploid_to_one_hot(X, dtype=torch.float32):
     m = torch.tensor([[int(a) for a in x] for x in X])
     onehot = torch.stack([m == 0, m == 1, m == 2], 2).to(dtype=dtype)
