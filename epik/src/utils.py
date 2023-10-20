@@ -133,9 +133,9 @@ def ps_to_variances(ps):
     return(v)
 
 
-def get_full_space_one_hot(seq_length, n_alleles):
+def get_full_space_one_hot(seq_length, n_alleles, dtype=torch.float32):
     n = n_alleles ** seq_length
-    i = np.arange(n)
+    i = torch.arange(n)
     
     c = i
     one_hot = []
@@ -143,6 +143,6 @@ def get_full_space_one_hot(seq_length, n_alleles):
         r = c % n_alleles
         for j in range(n_alleles):
             one_hot.append(r == j)
-        c = c // n_alleles
-    X = np.vstack(one_hot).T.astype(float)
-    return(torch.tensor(X))
+        c = torch.div(c, n_alleles, rounding_mode='floor')
+    X = torch.vstack(one_hot).T.to(dtype=dtype)
+    return(X)
