@@ -107,18 +107,23 @@ def guess_space_configuration(seqs):
     return(config)
 
 
-def split_training_test(X, y, y_var, ptrain=0.8, dtype=None):
+def split_training_test(X, y, y_var=None, ptrain=0.8, dtype=None):
     ps = np.random.uniform(size=X.shape[0])
     train = ps < ptrain
     train_x, train_y = X[train, :], y[train]
-    train_y_var = y_var[train] 
+    
+    if y_var is None:
+        train_y_var = None
+    else:
+        train_y_var = y_var[train] 
 
     test = ps > (1 - ptrain)
     test_x, test_y = X[test, :], y[test]
     
     output = [train_x, train_y, test_x, test_y, train_y_var]
     if dtype is not None:
-        output = [get_tensor(a, dtype=dtype) for a in output]
+        output = [get_tensor(a, dtype=dtype) if a is not None else None
+                  for a in output]
     return(output)
 
 
@@ -126,3 +131,17 @@ def ps_to_variances(ps):
     v = 1 / ps
     v = (v.T / v.sum(1)).T
     return(v)
+
+
+def get_full_space_one_hot(seq_length, n_alleles):
+    n = n_alleles ** seq_length
+    i = np.arange(n)
+    
+    c = i
+    one_hot = []
+    for _ in range(seq_length):
+        r = c % n_alleles
+        for j in range(n_alleles):
+            one_hot.append(r == j)
+        c = c // n_alleles
+    return(np.vstack(one_hot).T.astype(float))

@@ -3,7 +3,8 @@ import unittest
 
 import numpy as np
 
-from epik.src.utils import seq_to_one_hot, diploid_to_one_hot
+from epik.src.utils import (seq_to_one_hot, diploid_to_one_hot,
+                            get_full_space_one_hot)
 
 
 class UtilsTests(unittest.TestCase):
@@ -15,6 +16,24 @@ class UtilsTests(unittest.TestCase):
                            [0, 1, 1, 0],
                            [0, 1, 0, 1.]])
         assert(np.allclose(x - onehot, 0))
+    
+    def test_get_full_one_hot(self):
+        X = get_full_space_one_hot(seq_length=2, n_alleles=2)
+        assert(np.all(X == [[1, 0, 1, 0],
+                            [0, 1, 1, 0],
+                            [1, 0, 0, 1],
+                            [0, 1, 0, 1]]))
+        
+        X = get_full_space_one_hot(seq_length=2, n_alleles=3)
+        assert(np.all(X == [[1, 0, 0, 1, 0, 0],
+                            [0, 1, 0, 1, 0, 0],
+                            [0, 0, 1, 1, 0, 0],
+                            [1, 0, 0, 0, 1, 0],
+                            [0, 1, 0, 0, 1, 0],
+                            [0, 0, 1, 0, 1, 0],
+                            [1, 0, 0, 0, 0, 1],
+                            [0, 1, 0, 0, 0, 1],
+                            [0, 0, 1, 0, 0, 1],]))
     
     def test_diploid_encoding(self):
         X = np.array(['00', '01', '11', '02', '22'])
