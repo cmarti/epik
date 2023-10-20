@@ -144,4 +144,5 @@ def get_full_space_one_hot(seq_length, n_alleles):
         for j in range(n_alleles):
             one_hot.append(r == j)
         c = c // n_alleles
-    return(np.vstack(one_hot).T.astype(float))
+    X = np.vstack(one_hot).T.astype(float)
+    return(torch.tensor(X))
