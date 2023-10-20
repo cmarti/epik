@@ -162,11 +162,12 @@ class ConnectednessKernel(_GeneralizedSiteProductKernel):
     is_stationary = True
     def _forward(self, x1, x2, rho, diag=False):
         # TODO: make sure diag works here
-        constant = torch.log(1 - rho).sum()
+        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.output_device))
+        constant = torch.log(1 - rho).sum() - c
         rho = torch.stack([rho] * self.alpha, axis=1)
         log_factors = torch.flatten(torch.log(1 + rho * (self.alpha - 1)) - torch.log(1 - rho))
         m = self.inner_product(x1, x2, torch.diag(log_factors), diag=diag)
-        kernel = torch.exp(m + constant - torch.log(torch.tensor([self.n], dtype=self.dtype)))
+        kernel = torch.exp(m + constant)
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
@@ -177,11 +178,10 @@ class ConnectednessKernel(_GeneralizedSiteProductKernel):
 
 
 class _PiKernel(SequenceKernel):
-    def set_p_prior(self, seq_length, n_alleles, p_prior, dummy_allele=False):
+    def set_p_prior(self, p_prior, dummy_allele=False):
         if p_prior is None:
-            p_prior = p_prior = AllelesProbPrior(seq_length=seq_length,
-                                                 n_alleles=n_alleles,
-                                                 dummy_allele=dummy_allele)
+            p_prior = AllelesProbPrior(seq_length=self.l, n_alleles=self.alpha,
+                                       dummy_allele=dummy_allele)
         self.p_prior = p_prior
         self.p_prior.set(self)
     
@@ -203,13 +203,14 @@ class RhoPiKernel(_GeneralizedSiteProductKernel, _PiKernel):
 
     def _forward(self, x1, x2, rho, beta, diag=False):
         # TODO: make sure diag works here
-        constant = torch.log(1 - rho).sum()
+        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.output_device))
+        constant = torch.log(1 - rho).sum() - c
         rho = torch.stack([rho] * self.alpha, axis=1)
         eta = torch.exp(beta)
         log_factors = torch.flatten(torch.log(1 + rho * eta) - torch.log(1 - rho))
         M = torch.diag(log_factors)
         m = self.inner_product(x1, x2, M, diag=diag)
-        kernel = torch.exp(m + constant - torch.log(torch.tensor([self.n], dtype=self.dtype)))
+        kernel = torch.exp(m + constant)
         return(kernel)
     
     def forward(self, x1, x2, diag=False, **params):
@@ -228,7 +229,7 @@ class SkewedVCKernel(LambdasKernel, _PiKernel):
         self.set_q(q)
         self.define_aux_variables()
         self.set_lambdas_prior(lambdas_prior)
-        self.set_p_prior(seq_length, n_alleles, p_prior, dummy_allele=True)
+        self.set_p_prior(p_prior, dummy_allele=True)
         
     def set_q(self, q=None):
         if q is None:
