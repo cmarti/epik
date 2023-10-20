@@ -162,7 +162,7 @@ class ConnectednessKernel(_GeneralizedSiteProductKernel):
     is_stationary = True
     def _forward(self, x1, x2, rho, diag=False):
         # TODO: make sure diag works here
-        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.output_device))
+        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
         constant = torch.log(1 - rho).sum() - c
         rho = torch.stack([rho] * self.alpha, axis=1)
         log_factors = torch.flatten(torch.log(1 + rho * (self.alpha - 1)) - torch.log(1 - rho))
@@ -203,7 +203,7 @@ class RhoPiKernel(_GeneralizedSiteProductKernel, _PiKernel):
 
     def _forward(self, x1, x2, rho, beta, diag=False):
         # TODO: make sure diag works here
-        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.output_device))
+        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
         constant = torch.log(1 - rho).sum() - c
         rho = torch.stack([rho] * self.alpha, axis=1)
         eta = torch.exp(beta)
