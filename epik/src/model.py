@@ -1,5 +1,3 @@
-import numpy as np
-import gc
 import torch
 import gpytorch
 
@@ -11,8 +9,7 @@ from gpytorch.kernels.multi_device_kernel import MultiDeviceKernel
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
 from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikelihood,
                                                       GaussianLikelihood)
-
-from epik.src.utils import get_tensor, to_device, get_gpu_memory
+from epik.src.utils import get_tensor, to_device, split_training_test
 
 
 class GPModel(gpytorch.models.ExactGP):
@@ -44,7 +41,7 @@ class EpiK(object):
                  train_mean=False, train_noise=False,
                  partition_size=0, learning_rate=0.1,
                  preconditioner_size=0, dtype=torch.float32,
-                 track_progress=True):
+                 track_progress=False):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.output_device = output_device
@@ -56,6 +53,7 @@ class EpiK(object):
         self.preconditioner_size = preconditioner_size
         self.train_noise = train_noise
         self.track_progress = track_progress
+        self.fit_time = 0
     
     def set_likelihood(self, y_var=None):
         if self.likelihood_type == 'Gaussian':
@@ -70,13 +68,9 @@ class EpiK(object):
         
         self.likelihood = self.to_device(likelihood)
     
-    def get_mem_usage(self):
-        return(get_gpu_memory(self.output_device))
-    
     def report_progress(self, pbar):
         if self.track_progress:
-            report_dict = {'loss': '{:.3f}'.format(self.to_numpy(self.loss)),
-                           'mem': self.get_mem_usage()}
+            report_dict = {'loss': '{:.3f}'.format(self.to_numpy(self.loss))}
             pbar.set_postfix(report_dict)
     
     def to_device(self, x):
@@ -97,9 +91,10 @@ class EpiK(object):
         self.optimizer.step()
         
         if hasattr(self.kernel, 'get_params'):
-            params = self.kernel.get_params()
-            params['loss'] = self.loss.detach().item()
-            self.loss_history.append(params)
+            params = self.get_params()
+#             print(params)
+            self.params_history.append(params)
+            self.loss_history.append(self.loss.detach().item())
         
     def set_training_mode(self):
         self.model.train()
@@ -110,9 +105,13 @@ class EpiK(object):
         self.likelihood.eval()
     
     def set_partition_size(self, partition_size=None):
+        nrows = self.X.shape[0]
+        
         if partition_size is None:
             partition_size = self.partition_size
-        return(gpytorch.beta_features.checkpoint_kernel(partition_size))
+        
+        partition_nrows = int(partition_size / nrows)
+        return(gpytorch.beta_features.checkpoint_kernel(partition_nrows))
     
     def set_preconditioner_size(self, preconditioner_size=None):
         if preconditioner_size is None:
@@ -132,7 +131,10 @@ class EpiK(object):
                                             n_devices=self.n_devices))
     
     def get_gp_mean(self):
-        return(self.to_numpy(self.model.mean_module.constant)) 
+        if hasattr(self.model.mean_module, 'constant'):
+            return(self.to_numpy(self.model.mean_module.constant))
+        else:
+            return(torch.zeros(1))
     
     def set_data(self, X, y, y_var=None):
         self.X = self.get_tensor(X)
@@ -149,6 +151,7 @@ class EpiK(object):
         
         pbar = range(n_iter)
         self.loss_history = []
+        self.params_history = []
         
         with self.set_partition_size(), self.set_preconditioner_size():
             
@@ -181,6 +184,7 @@ class EpiK(object):
         return(f_preds)
     
     def get_prior(self, X, sigma2):
+        self.X = X
         likelihood = FixedNoiseGaussianLikelihood(noise=sigma2 * torch.ones(X.shape[0]))
         model = self.to_device(GPModel(None, None, self.kernel, likelihood,
                                        train_mean=self.train_mean,
@@ -195,3 +199,28 @@ class EpiK(object):
         with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size():
             y = prior.rsample(v.size())
         return(y)
+    
+    def get_params(self):
+        params = {'mean': self.to_numpy(self.get_gp_mean())}
+        if hasattr(self.kernel, 'get_params'):
+            for param, values in self.kernel.get_params().items():
+                params[param] = self.to_numpy(values)
+        return(params)
+    
+    def simulate_dataset(self, X, sigma=0, ptrain=0.8):
+        y_true = self.sample(X, n=1).flatten()
+        y_true = y_true / y_true.std()
+        
+        splits = split_training_test(X, y_true, y_var=None, ptrain=ptrain)
+        train_x, train_y, test_x, test_y, train_y_var = splits
+        if sigma > 0:
+            train_y = torch.normal(train_y, sigma)
+            train_y_var = torch.full_like(train_y, sigma**2)
+            
+        return(train_x, train_y, test_x, test_y, train_y_var)
+    
+    def save(self, fpath):
+        torch.save(self.model.state_dict(), fpath)
+        
+    def load(self, fpath):
+        self.model.load_state_dict(torch.load(fpath))

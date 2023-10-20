@@ -7,16 +7,18 @@ from torch.nn import Parameter
 from gpytorch.kernels.kernel import Kernel
 
 from epik.src.utils import get_tensor
+from epik.src.priors import (LambdasFlatPrior, LambdasDeltaPrior, RhosPrior,
+                             AllelesProbPrior)
 
 
 class SequenceKernel(Kernel):
-    is_stationary = True
     def __init__(self, n_alleles, seq_length, dtype=torch.float32, **kwargs):
         self.alpha = n_alleles
         self.l = seq_length
         self.s = self.l + 1
         self.t = self.l * self.alpha
         self.fdtype = dtype
+        self.n = float(self.alpha ** self.l)
         super().__init__(**kwargs)
     
     def register_params(self, params={}, constraints={}):
@@ -36,9 +38,12 @@ class SequenceKernel(Kernel):
             return((torch.matmul(x1[:min_size, :], metric) * x2[:min_size, :]).sum(1))
         else:
             return(torch.matmul(x1, torch.matmul(metric, x2.T)))
+    
+    def calc_hamming_distance(self, x1, x2):
+        return(self.l - self.inner_product(x1, x2))
 
 
-class HaploidKernel(SequenceKernel):
+class LambdasKernel(SequenceKernel):
     def calc_polynomial_coeffs(self):
         lambdas = self.lambdas_p
         
@@ -56,24 +61,27 @@ class HaploidKernel(SequenceKernel):
 
         return(B)
     
-    def calc_hamming_distance(self, x1, x2):
-        return(self.l - self.inner_product(x1, x2))
-    
     @property
     def lambdas(self):
         log_lambdas = self.lambdas_prior.theta_to_log_lambdas(self.raw_theta, kernel=self)
         lambdas = torch.exp(log_lambdas)
         return(lambdas)
+    
+    def set_lambdas_prior(self, lambdas_prior):
+        if lambdas_prior is None:
+            lambdas_prior = LambdasFlatPrior(seq_length=self.l)
+        self.lambdas_prior = lambdas_prior
+        self.lambdas_prior.set(self)
 
 
-class VCKernel(HaploidKernel):
-    def __init__(self, n_alleles, seq_length, lambdas_prior,
+class VarianceComponentKernel(LambdasKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, lambdas_prior=None,
                  **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         
         self.define_aux_variables()
-        self.lambdas_prior = lambdas_prior
-        self.lambdas_prior.set(self)
+        self.set_lambdas_prior(lambdas_prior)
 
     def define_aux_variables(self):
         self.krawchouk_matrix = Parameter(self.calc_krawchouk_matrix(),
@@ -83,7 +91,7 @@ class VCKernel(HaploidKernel):
         ss = 0
         for q in range(self.s):
             ss += (-1.)**q * (self.alpha-1.)**(k-q) * comb(d,q) * comb(self.l-d,k-q)
-        return(ss)
+        return(ss / self.n)
     
     def calc_krawchouk_matrix(self):
         w_kd = np.zeros((self.s, self.s))
@@ -108,17 +116,119 @@ class VCKernel(HaploidKernel):
         return({'lambdas': self.lambdas})
 
 
-class SkewedVCKernel(HaploidKernel):
-    def __init__(self, n_alleles, seq_length, lambdas_prior, p_prior, q=None,
-                 dtype=torch.float32, **kwargs):
-        super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
+class DeltaPKernel(VarianceComponentKernel):
+    def __init__(self, n_alleles, seq_length, P, **kwargs):
+        lambdas_prior = LambdasDeltaPrior(seq_length, n_alleles, P=P)
+        super().__init__(n_alleles, seq_length, lambdas_prior=lambdas_prior,
+                         **kwargs)
+
+
+class _GeneralizedSiteProductKernel(SequenceKernel):
+    def __init__(self, n_alleles, seq_length, rho_prior=None, **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        
+        if rho_prior is None:
+            rho_prior = RhosPrior(seq_length=seq_length, n_alleles=n_alleles)
+            
+        self.rho_prior = rho_prior
+        self.rho_prior.set(self)
+
+    @property
+    def rho(self):
+        return(self.rho_prior.get_rho(self))
+
+
+class ExponentialKernel(_GeneralizedSiteProductKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, **kwargs):
+        rho_prior = RhosPrior(seq_length=seq_length, n_alleles=n_alleles,
+                              sites_equal=True)
+        super().__init__(n_alleles, seq_length, rho_prior=rho_prior, **kwargs)
+    
+    def _forward(self, x1, x2, rho, diag=False):
+        d = self.calc_hamming_distance(x1, x2)
+        rho = rho[0]
+        decay_factor = (1 - rho) / (1 + (self.alpha - 1) * rho) 
+        return(decay_factor ** d)
+    
+    def forward(self, x1, x2, diag=False, **params):
+        return(self._forward(x1, x2, rho=self.rho, diag=diag))
+    
+    def get_params(self):
+        return({'rho': self.rho})
+
+
+class ConnectednessKernel(_GeneralizedSiteProductKernel):
+    is_stationary = True
+    def _forward(self, x1, x2, rho, diag=False):
+        # TODO: make sure diag works here
+        constant = torch.log(1 - rho).sum()
+        rho = torch.stack([rho] * self.alpha, axis=1)
+        log_factors = torch.flatten(torch.log(1 + rho * (self.alpha - 1)) - torch.log(1 - rho))
+        m = self.inner_product(x1, x2, torch.diag(log_factors), diag=diag)
+        kernel = torch.exp(m + constant - torch.log(torch.tensor([self.n], dtype=self.dtype)))
+        return(kernel)
+    
+    def forward(self, x1, x2, diag=False, **params):
+        return(self._forward(x1, x2, rho=self.rho, diag=diag))
+    
+    def get_params(self):
+        return({'rho': self.rho})
+
+
+class _PiKernel(SequenceKernel):
+    def set_p_prior(self, seq_length, n_alleles, p_prior, dummy_allele=False):
+        if p_prior is None:
+            p_prior = p_prior = AllelesProbPrior(seq_length=seq_length,
+                                                 n_alleles=n_alleles,
+                                                 dummy_allele=dummy_allele)
+        self.p_prior = p_prior
+        self.p_prior.set(self)
+    
+    @property
+    def beta(self):
+        logp = -torch.exp(self.raw_logp)
+        logp = self.p_prior.resize_logp(logp)
+        norm_logp = self.p_prior.normalize_logp(logp)
+        beta = self.p_prior.norm_logp_to_beta(norm_logp)
+        return(beta)
+
+
+class RhoPiKernel(_GeneralizedSiteProductKernel, _PiKernel):
+    is_stationary = False
+    def __init__(self, n_alleles, seq_length, p_prior=None, rho_prior=None,
+                 **kwargs):
+        super().__init__(n_alleles, seq_length, rho_prior=rho_prior, **kwargs)
+        self.set_p_prior(p_prior)
+
+    def _forward(self, x1, x2, rho, beta, diag=False):
+        # TODO: make sure diag works here
+        constant = torch.log(1 - rho).sum()
+        rho = torch.stack([rho] * self.alpha, axis=1)
+        eta = torch.exp(beta)
+        log_factors = torch.flatten(torch.log(1 + rho * eta) - torch.log(1 - rho))
+        M = torch.diag(log_factors)
+        m = self.inner_product(x1, x2, M, diag=diag)
+        kernel = torch.exp(m + constant - torch.log(torch.tensor([self.n], dtype=self.dtype)))
+        return(kernel)
+    
+    def forward(self, x1, x2, diag=False, **params):
+        return(self._forward(x1, x2, rho=self.rho, beta=self.beta, diag=diag))
+    
+    def get_params(self):
+        return({'rho': self.rho, 'beta': self.beta})
+
+
+class SkewedVCKernel(LambdasKernel, _PiKernel):
+    is_stationary = False
+    def __init__(self, n_alleles, seq_length,
+                 lambdas_prior=None, p_prior=None, q=None, **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
         
         self.set_q(q)
         self.define_aux_variables()
-        self.lambdas_prior = lambdas_prior
-        self.lambdas_prior.set(self)
-        self.p_prior = p_prior
-        self.p_prior.set(self)
+        self.set_lambdas_prior(lambdas_prior)
+        self.set_p_prior(seq_length, n_alleles, p_prior, dummy_allele=True)
         
     def set_q(self, q=None):
         if q is None:
@@ -185,57 +295,16 @@ class SkewedVCKernel(HaploidKernel):
         return(kernel)
     
     def get_params(self):
-        return({'lambdas': self.lambdas,
-                'p': self.p})
+        return({'lambdas': self.lambdas, 'beta': self.beta})
 
 
-class GeneralizedSiteProductKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, p_prior, rho_prior,
-                 dtype=torch.float32, **kwargs):
-        super().__init__(n_alleles, seq_length, dtype=dtype, **kwargs)
-        
-        self.p_prior = p_prior
-        self.rho_prior = rho_prior
-        self.p_prior.set(self)
-        self.rho_prior.set(self)
-
-    @property
-    def beta(self):
-        logp = -torch.exp(self.raw_logp)
-        logp = self.p_prior.resize_logp(logp)
-        norm_logp = self.p_prior.normalize_logp(logp)
-        beta = self.p_prior.norm_logp_to_beta(norm_logp)
-        return(beta)
-    
-    @property
-    def rho(self):
-        return(self.rho_prior.get_rho(self))
-    
-    @property
-    def rho_c(self):
-        return(self.rho_prior.get_rho_c(self))
-    
-    def _forward(self, x1, x2, rho_c, rho, beta, diag=False):
-        # TODO: make sure diag works here
-        constant = torch.log(1 - rho).sum()
-        rho = torch.stack([rho] * self.alpha, axis=1)
-        eta = torch.exp(beta)
-        log_factors = torch.flatten(torch.log(1 + rho * eta) - torch.log(1 - rho))
-        M = torch.diag(log_factors)
-        m = self.inner_product(x1, x2, M, diag=diag)
-        kernel = torch.exp(m + constant) - 1 + rho_c
-        return(kernel)
-    
-    def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, rho_c=self.rho_c, rho=self.rho, beta=self.beta, diag=diag))
-    
-    def get_params(self):
-        return({'rho_c': self.rho_c, 
-                'rho': self.rho,
-                'beta': self.beta})
+##########################################
+######### Diploid kernels ################
+##########################################
 
 
 class DiploidKernel(SequenceKernel):
+    is_stationary = True
     def __init__(self, **kwargs):
         super().__init__(n_alleles=2, seq_length=0, **kwargs)
         self.define_kernel_params()

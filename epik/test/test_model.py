@@ -20,9 +20,10 @@ from gpytorch.kernels.rbf_kernel import RBFKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
-from epik.src.utils import seq_to_one_hot, get_tensor, split_training_test
+from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
+                            get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
-from epik.src.kernel import SkewedVCKernel, VCKernel, GeneralizedSiteProductKernel
+from epik.src.kernel import SkewedVCKernel, VarianceComponentKernel
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
 from epik.src.plot import plot_training_history
@@ -61,18 +62,28 @@ def get_smn1_data(n, seed=0, dtype=None):
     return(output)
 
 
+def get_vc_random_landscape_data(sigma=0, ptrain=0.8):
+    log_lambdas0 = torch.tensor([-5, 2., 1, 0, -2, -5])
+    alpha, l = 4, log_lambdas0.shape[0] - 1
+    X = get_full_space_one_hot(seq_length=l, n_alleles=alpha)
+    
+    kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
+                                     lambdas_prior=LambdasFlatPrior(l, log_lambdas0))
+    model = EpiK(kernel)
+    return(alpha, l, log_lambdas0, model.simulate_dataset(X, sigma=sigma, ptrain=ptrain))
+
+
 class ModelsTests(unittest.TestCase):
-    def test_simulate_data(self):
+    def test_epik_simulate(self):
         l, a = 2, 2
+        X = get_full_space_one_hot(seq_length=l, n_alleles=a)
         lambdas0 = torch.tensor([0.001, 1, 0.2])
-        lambdas_prior = LambdasFlatPrior(seq_length=l,
-                                         log_lambdas0=torch.log(lambdas0))
-        kernel = VCKernel(n_alleles=a, seq_length=l,
-                          lambdas_prior=lambdas_prior)
-        model = EpiK(kernel, likelihood_type='Gaussian')
-        X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
-        y = model.sample(X, n=10000)
-        cors = pd.DataFrame(y).corr().values
+        prior = LambdasFlatPrior(l, torch.log(lambdas0))
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         lambdas_prior=prior)
+        model = EpiK(kernel)
+        y = pd.DataFrame(model.sample(X, n=10000).numpy())
+        cors = y.corr().values
         
         rho1 = np.array([cors[0, 1], cors[0, 2], cors[1, 0], cors[1, 3],
                          cors[2, 0], cors[2, 3], cors[3, 1], cors[3, 2]])
@@ -80,43 +91,90 @@ class ModelsTests(unittest.TestCase):
         assert(rho1.std() < 0.2)
         assert(rho2.std() < 0.1)
         
-    def test_epik_vc_kernel_basic(self):
-        lambdas_prior = LambdasFlatPrior(seq_length=2)
-        kernel = VCKernel(n_alleles=2, seq_length=2, lambdas_prior=lambdas_prior)
-        model = EpiK(kernel, likelihood_type='Gaussian')
-        
-        X = seq_to_one_hot(np.array(['AA', 'AB', 'BA', 'BB']))
-        y = torch.tensor([0.2, 1.1, 0.5, 1.5])
-        model.set_data(X, y)
-        model.fit(n_iter=100)
-        ypred = model.predict(X)
-        assert(pearsonr(ypred, y)[0] > 0.9)
-        
-    def test_epik_vc_kernel(self):
-        # Simulate from prior distribution
-        log_lambdas0 = torch.tensor([-5, 2., 1, 0, -2, -5])
-        l = log_lambdas0.shape[0]-1
-        
-        lambdas_prior = LambdasFlatPrior(seq_length=l, log_lambdas0=log_lambdas0)
-        kernel = VCKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
-        model = EpiK(kernel, likelihood_type='Gaussian')
-        
-        alleles = ['A', 'C', 'T', 'G']
-        seqs = np.array([''.join(gt) for gt in product(alleles, repeat=l)])
-        X = seq_to_one_hot(seqs, alleles)
-        y = model.sample(X, n=1, sigma=0.1).flatten()
-        y_var = 0.1 * torch.ones_like(y)
-        splits = split_training_test(X, y, y_var, ptrain=0.8)
-        train_x, train_y, test_x, test_y, train_y_var = splits
+    def test_epik_fit(self):
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
+        train_x, train_y, _, _, train_y_var = data
         
         # Train new model
-        lambdas_prior = LambdasFlatPrior(seq_length=l)
-        kernel = VCKernel(n_alleles=4, seq_length=l, lambdas_prior=lambdas_prior)
-        model = EpiK(kernel, likelihood_type='Gaussian')
+        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l))
         model.set_data(train_x, train_y, train_y_var)
-        model.fit(n_iter=150)
+        model.fit(n_iter=100)
+        params = model.get_params()
+        loglambdas = np.log(params['lambdas'])
+        r = pearsonr(loglambdas, log_lambdas0)[0]
+        assert(params['mean'][0] == 0)
+        assert(r > 0.8)
+    
+    def test_epik_predict(self):
+        # Simulate from prior distribution
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, train_y_var = data
         
-        # Predict on test sequences
+        # Predict unobserved sequences
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
+                                         lambdas_prior=LambdasFlatPrior(l, log_lambdas0))
+        model = EpiK(kernel)
+        model.set_data(train_x, train_y, train_y_var)
+        ypred = model.predict(test_x).detach()
+        r2 = pearsonr(ypred, test_y)[0] ** 2
+        assert(r2 > 0.9)
+    
+    def test_epik_bin(self):
+        alleles = np.array(['A', 'C', 'G', 'T'])
+        _, _, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, train_y_var = data
+        
+        data = pd.DataFrame({'y': train_y.numpy()},
+                            index=one_hot_to_seq(train_x.numpy(), alleles))
+        test = pd.DataFrame({'x': one_hot_to_seq(test_x.numpy(), alleles)})
+        bin_fpath = join(BIN_DIR, 'EpiK.py')
+        
+        with NamedTemporaryFile() as fhand:
+            out_fpath = fhand.name
+            params_fpath = '{}.model_params.pth'.format(out_fpath)
+            data_fpath = '{}.train.csv'.format(out_fpath)
+            xpred_fpath = '{}.test.csv'.format(out_fpath)
+            data.to_csv(data_fpath)
+            test.to_csv(xpred_fpath, header=False, index=False)
+        
+            # Check help
+            cmd = [sys.executable, bin_fpath, '-h']
+            check_call(cmd)
+            
+            # Model fitting
+            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath,
+                   '-n', '100']
+            check_call(cmd)
+            state_dict = torch.load(params_fpath)
+            log_lambdas = state_dict['covar_module.raw_theta'].numpy()
+            r = pearsonr(log_lambdas, log_lambdas0)[0]
+            assert(r > 0.8)
+            
+            # Predict test sequences
+            cmd.extend(['-p', xpred_fpath, '--params', params_fpath])
+            check_call(cmd)
+            
+            # Predict test sequences with variable ps using GPU
+#             cmd.extend(['--gpu', '-s', '1000'])
+#             check_call(cmd)
+    
+    def test_partitioning(self):
+        # Simulate from prior distribution
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, train_y_var = data
+        
+        # Fit model
+        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
+                     partition_size=1e5)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=100)
+        params = model.get_params()
+        loglambdas = np.log(params['lambdas'])
+        r = pearsonr(loglambdas, log_lambdas0)[0]
+        assert(params['mean'][0] == 0)
+        assert(r > 0.8)
+        
+        # Predict unobserved sequences
         ypred = model.predict(test_x).detach()
         r2 = pearsonr(ypred, test_y)[0] ** 2
         assert(r2 > 0.9)
@@ -569,37 +627,6 @@ class ModelsTests(unittest.TestCase):
         print(train_rho, test_rho)
         assert(train_rho > 0.9)
         assert(test_rho > 0.6)
-    
-    def test_epik_bin(self):
-        bin_fpath = join(BIN_DIR, 'EpiK.py')
-        data_fpath = join(TEST_DATA_DIR, 'smn1.train.csv')
-        xpred_fpath = join(TEST_DATA_DIR, 'smn1.test.txt')
-        
-        with NamedTemporaryFile() as fhand:
-            out_fpath = fhand.name
-        
-            # Check help
-            cmd = [sys.executable, bin_fpath, '-h']
-            check_call(cmd)
-            
-            # Model fitting
-            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath, '-n', '50']
-            check_call(cmd)
-            
-            # Predict test sequences
-            cmd.extend(['-p', xpred_fpath])
-            check_call(cmd)
-            
-            # Predict test sequences with variable ps
-            check_call(cmd + ['-k', 'GeneralizedSiteProduct'])
-            
-            # Predict test sequences with variable ps
-            cmd.extend(['-k', 'SiteProduct', '--train_p'])
-            check_call(cmd)
-             
-            # Predict test sequences with variable ps using GPU
-            cmd.extend(['--gpu', '-s', '1000'])
-            check_call(cmd)
             
     def test_recover_site_weights(self):
         ws = np.array([0.5, 0.9, 0.05, 0.9, 0.1])
@@ -684,5 +711,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_rho_pi_kernel']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin']
     unittest.main()

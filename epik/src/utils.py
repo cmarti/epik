@@ -101,7 +101,7 @@ def guess_space_configuration(seqs):
        
     Returns
     -------
-    config: dict with keys {'length', 'n_alleles'}
+    config: dict with keys {'seq_length', 'n_alleles', 'alphabet'}
             Returns a dictionary with the inferred configuration of the discrete
             space where the sequences come from.
     
@@ -112,7 +112,7 @@ def guess_space_configuration(seqs):
         for i, a in enumerate(seq):
             alleles[i][a] = 1 
     length = len(alleles)
-    config = {'length': length,
+    config = {'seq_length': length,
               'n_alleles': [len(alleles[i]) for i in range(length)],
               'alphabet': [[a for a in alleles[i].keys()] for i in range(length)]}
     return(config)
