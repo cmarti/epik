@@ -7,11 +7,12 @@ import torch
 
 from os.path import join
 
-from epik.src.kernel import (SkewedVCKernel, VCKernel, SiteProductKernel,
-                             DiploidKernel, GeneralizedSiteProductKernel)
+from epik.src.kernel import (VarianceComponentKernel)
 from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior, RhosPrior
-from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot
+from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot,\
+    get_full_space_one_hot
 from epik.src.settings import TEST_DATA_DIR
+from build.lib.epik.src.kernel import ConnectednessKernel
 
 
 
@@ -27,18 +28,13 @@ class KernelsTests(unittest.TestCase):
         
     def test_vc_kernel(self):
         l, a = 2, 2
-        lambdas_prior = LambdasExpDecayPrior(l)
-        kernel = VCKernel(n_alleles=a, seq_length=l,
-                          lambdas_prior=lambdas_prior)
-        x = torch.tensor([[1, 0, 1, 0],
-                          [0, 1, 1, 0],
-                          [1, 0, 0, 1],
-                          [0, 1, 0, 1]], dtype=torch.float32)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l)
+        x = get_full_space_one_hot(l, a)
 
         # k=0        
         lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
         cov = kernel._forward(x, x, lambdas)
-        assert(np.allclose(cov, 1))
+        assert(np.allclose(cov, 0.25))
         
         # k=1        
         lambdas = torch.tensor([0, 1, 0], dtype=torch.float32)
@@ -47,7 +43,7 @@ class KernelsTests(unittest.TestCase):
                        [0, 2, -2, 0],
                        [0, -2, 2, 0],
                        [-2, 0, 0, 2]], dtype=np.float32)
-        assert(np.abs(cov - k1).mean() < 1e-4)
+        assert(np.allclose(cov,  k1 / 4, atol=1e-4))
         
         # k=2
         lambdas = torch.tensor([0, 0, 1], dtype=torch.float32)
@@ -56,31 +52,24 @@ class KernelsTests(unittest.TestCase):
                        [-1, 1, 1, -1],
                        [-1, 1, 1, -1],
                        [1, -1, -1, 1]], dtype=np.float32)
-        assert(np.abs(cov - k2).mean() < 1e-4)
+        assert(np.allclose(cov,  k2 / 4, atol=1e-4))
         
-    def test_site_product_kernel(self):
+    def test_rho_kernel(self):
         l, a = 1, 2
-        p_prior = AllelesProbPrior(l, a) 
-        kernel = SiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
-        x = torch.tensor([[1, 0],
-                          [0, 1]], dtype=torch.float32)
-        beta = torch.tensor([[1, 1, 0]], dtype=torch.float32)
-        theta = torch.tensor([0, 1], dtype=torch.float32)
-        cov = kernel._forward(x, x, theta=theta, beta=beta)
-        print(cov)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l)
+        x = get_full_space_one_hot(l, a)
+        rho = torch.tensor([[0.5]])
+        cov = kernel._forward(x, x, rho=rho)
+        assert(cov[0, 0] == 0.75)
+        assert(cov[0, 1] == 0.25)
         
         l, a = 2, 2
-        p_prior = AllelesProbPrior(l, a) 
-        kernel = SiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
-        x = torch.tensor([[1, 0, 1, 0],
-                          [0, 1, 1, 0],
-                          [1, 0, 0, 1],
-                          [0, 1, 0, 1]], dtype=torch.float32)
-        beta = torch.tensor([[1, 1, 0],
-                             [1, 1, 0]], dtype=torch.float32)
-        theta = torch.tensor([0, 0.5], dtype=torch.float32)
-        cov = kernel._forward(x, x, theta=theta, beta=beta)
-        print(cov)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l)
+        x = get_full_space_one_hot(l, a)
+        rho = torch.tensor([[0.5, 0.5]])
+        cov = kernel._forward(x, x, rho=rho)
+        d0, d1, d2 = cov[0][0], cov[0][1], cov[0][3]
+        assert(d1 / d0 == d2 / d1)
     
     def test_site_product_kernel_long_sequences(self):
         l, a = 100, 2
@@ -459,5 +448,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests']
+    import sys;sys.argv = ['', 'KernelsTests.test_rho_kernel']
     unittest.main()
