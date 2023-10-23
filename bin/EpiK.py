@@ -111,8 +111,7 @@ def main():
     # Load counts data
     log = LogTrack()
     log.write('Start analysis')
-    data = pd.read_csv(data_fpath, dtype=str)
-    data = data.set_index(data.columns[0]).astype(float)
+    data = pd.read_csv(data_fpath, index_col=0).dropna()
     
     # Get processed data
     seqs = data.index.values
@@ -138,7 +137,7 @@ def main():
     max_cg_iterations(3000)
     log.write('Building model for Gaussian Process regression')
     device = torch.device('cuda') if gpu else None
-    model = EpiK(kernel, dtype=dtype,
+    model = EpiK(kernel, dtype=dtype, track_progress=True,
                  device=device, n_devices=n_devices,
                  partition_size=partition_size, learning_rate=learning_rate)
     model.set_data(X, y, y_var=y_var)
