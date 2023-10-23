@@ -126,10 +126,11 @@ class DeltaPKernel(VarianceComponentKernel):
 class _GeneralizedSiteProductKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, rho_prior=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
-        
+        self.set_rho_prior(rho_prior)
+    
+    def set_rho_prior(self, rho_prior=None):
         if rho_prior is None:
-            rho_prior = RhosPrior(seq_length=seq_length, n_alleles=n_alleles)
-            
+            rho_prior = RhosPrior(seq_length=self.l, n_alleles=self.alpha)
         self.rho_prior = rho_prior
         self.rho_prior.set(self)
 
@@ -138,32 +139,12 @@ class _GeneralizedSiteProductKernel(SequenceKernel):
         return(self.rho_prior.get_rho(self))
 
 
-class ExponentialKernel(_GeneralizedSiteProductKernel):
-    is_stationary = True
-    def __init__(self, n_alleles, seq_length, **kwargs):
-        rho_prior = RhosPrior(seq_length=seq_length, n_alleles=n_alleles,
-                              sites_equal=True)
-        super().__init__(n_alleles, seq_length, rho_prior=rho_prior, **kwargs)
-    
-    def _forward(self, x1, x2, rho, diag=False):
-        d = self.calc_hamming_distance(x1, x2)
-        rho = rho[0]
-        decay_factor = (1 - rho) / (1 + (self.alpha - 1) * rho) 
-        return(decay_factor ** d)
-    
-    def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, rho=self.rho, diag=diag))
-    
-    def get_params(self):
-        return({'rho': self.rho})
-
-
 class ConnectednessKernel(_GeneralizedSiteProductKernel):
     is_stationary = True
     def _forward(self, x1, x2, rho, diag=False):
         # TODO: make sure diag works here
-        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
-        constant = torch.log(1 - rho).sum() - c
+        # c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
+        constant = torch.log(1 - rho).sum()# - c
         rho = torch.stack([rho] * self.alpha, axis=1)
         log_factors = torch.flatten(torch.log(1 + rho * (self.alpha - 1)) - torch.log(1 - rho))
         m = self.inner_product(x1, x2, torch.diag(log_factors), diag=diag)
@@ -203,8 +184,8 @@ class RhoPiKernel(_GeneralizedSiteProductKernel, _PiKernel):
 
     def _forward(self, x1, x2, rho, beta, diag=False):
         # TODO: make sure diag works here
-        c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
-        constant = torch.log(1 - rho).sum() - c
+        # c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
+        constant = torch.log(1 - rho).sum()# - c
         rho = torch.stack([rho] * self.alpha, axis=1)
         eta = torch.exp(beta)
         log_factors = torch.flatten(torch.log(1 + rho * eta) - torch.log(1 - rho))

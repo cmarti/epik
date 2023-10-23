@@ -269,77 +269,42 @@ class AllelesProbPrior(KernelParamPrior):
 
 
 class RhosPrior(KernelParamPrior):
-    def __init__(self, seq_length, n_alleles, sites_equal=False,
-                 rho0=None, v0=1.1, train=True, dtype=torch.float32,
-                 train_constant_component=False):
+    def __init__(self, seq_length, n_alleles, rho0=None,
+                 train=True, dtype=torch.float32):
         super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
                          dtype=dtype)
-        self.sites_equal = sites_equal
-        self.calc_shape()
-        self.train_constant_component = train_constant_component
-        
         if rho0 is None:
-            self.logit_rho0 = torch.tensor(self.v_to_logit_rho(v0), dtype=self.dtype)
+            self.logit_rho0 = torch.tensor(np.zeros(self.l), dtype=self.dtype)
         else:
             self.logit_rho0 = torch.log(rho0 / (1 - rho0)).to(dtype=self.dtype)
     
-    def v_to_logit_rho(self, v):
-        rho = (np.exp(np.log(v) / self.l) - 1) / (self.alpha - 1)
-        logit = [np.log(rho / (1 - rho))]
-        if not self.sites_equal:
-            logit = logit * self.l
-        return(logit)
-        
-    def calc_shape(self):
-        self.shape = (1 if self.sites_equal else self.l,)
-        
     def get_logit_rho0(self):
-        if self.sites_equal:
-            return(self.logit_rho0 * torch.ones(self.shape, dtype=self.dtype))
-        else:
-            return(self.logit_rho0)
-    
-    def get_raw_rho_c0(self):
-        return(torch.zeros((1,), dtype=self.dtype))
+        return(self.logit_rho0)
     
     def set_params(self, kernel):
-        if self.sites_equal:
-            params = {'raw_rho': Parameter(self.get_logit_rho0(), requires_grad=self.train),
-                      'raw_rho_c': Parameter(self.get_raw_rho_c0(), requires_grad=self.train_constant_component)}
-        else:
-            logit_rho = self.get_logit_rho0()
-            logit_rho_mu, logit_rho_sd = logit_rho.mean(), logit_rho.std() + 0.01
-            params = {'raw_rho_c': Parameter(self.get_raw_rho_c0(), requires_grad=self.train_constant_component),
-                      'raw_mu': Parameter(logit_rho_mu, requires_grad=self.train),
-                      'raw_sigma': Parameter(torch.log(logit_rho_sd), requires_grad=self.train),
-                      'raw_rho': Parameter((logit_rho - logit_rho_mu) / (logit_rho_sd),
-                                           requires_grad=self.train),}
+        params = {'raw_rho': Parameter(self.get_logit_rho0(), requires_grad=self.train)}
+        # else:
+        #     logit_rho = self.get_logit_rho0()
+        #     logit_rho_mu, logit_rho_sd = logit_rho.mean(), logit_rho.std() + 0.01
+        #     params = {'raw_mu': Parameter(logit_rho_mu, requires_grad=self.train),
+        #               'raw_sigma': Parameter(torch.log(logit_rho_sd), requires_grad=self.train),
+        #               'raw_rho': Parameter((logit_rho - logit_rho_mu) / (logit_rho_sd),
+        #                                    requires_grad=self.train),}
         kernel.register_params(params=params, constraints={})
     
     def calc_rho(self, raw_rho, mu=None, sigma=None):
-        if self.sites_equal:
-            ones = torch.ones((self.l, 1), dtype=self.dtype)
-            logit_rho = torch.matmul(ones, raw_rho)
-        elif mu is not None and sigma is not None:
+        if mu is not None and sigma is not None:
             logit_rho = mu + sigma * raw_rho
         else:
-            msg = 'mu and sigma must be provided for `sites_equal=False`'
-            raise ValueError(msg)
+            logit_rho = raw_rho
         rho = torch.exp(logit_rho) / (1 + torch.exp(logit_rho))
         return(rho)
     
     def get_rho(self, kernel):
-        if self.sites_equal:
-            rho = self.calc_rho(kernel.raw_rho)
-        else:
-            rho = self.calc_rho(kernel.raw_rho, mu=kernel.raw_mu,
-                                sigma=torch.exp(kernel.raw_sigma))
-        return(rho)
-
-    def get_rho_c(self, kernel):
-        return(torch.exp(kernel.raw_rho_c))
+        return(self.calc_rho(kernel.raw_rho))
 
     def set_priors(self, kernel):
-        if not self.sites_equal:
-            kernel.register_prior("raw_rho_prior", NormalPrior(0, 1),
-                                  lambda module: module.raw_rho)
+        # if not self.sites_equal:
+        #     kernel.register_prior("raw_rho_prior", NormalPrior(0, 1),
+        #                           lambda module: module.raw_rho)
+        return()
