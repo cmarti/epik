@@ -7,7 +7,7 @@ import torch
 
 from os.path import join
 
-from epik.src.kernel import (VarianceComponentKernel)
+from epik.src.kernel import (VarianceComponentKernel, RhoPiKernel)
 from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior, RhosPrior
 from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot,\
     get_full_space_one_hot
@@ -71,6 +71,32 @@ class KernelsTests(unittest.TestCase):
         d0, d1, d2 = cov[0][0], cov[0][1], cov[0][3]
         assert(d1 / d0 == d2 / d1)
     
+    def test_rho_pi_kernel(self):
+        l, a = 1, 2
+        kernel = RhoPiKernel(n_alleles=a, seq_length=l)
+        x = get_full_space_one_hot(l, a)
+        rho = torch.tensor([0.5])
+        beta = torch.tensor([[0, 0]])
+        cov = kernel._forward(x, x, rho=rho, beta=beta)
+        assert(cov[0, 0] == 0.75)
+        assert(cov[0, 1] == 0.25)
+        
+        l, a = 2, 2
+        kernel = RhoPiKernel(n_alleles=a, seq_length=l)
+        x = get_full_space_one_hot(l, a)
+        rho = torch.tensor([0.5, 0.5])
+        beta = torch.tensor([[0, 0], [0, 0]])
+        cov = kernel._forward(x, x, rho=rho, beta=beta)
+        d0, d1, d2 = cov[0][0], cov[0][1], cov[0][3]
+        assert(d1 / d0 == d2 / d1)
+        
+        # Ensure heterokedasticity
+        beta = torch.tensor([[0, 1], [1, 0]])
+        cov = kernel._forward(x, x, rho=rho, beta=beta)
+        assert(cov[0, 0] != cov[1, 1])
+        assert(cov[0, 1] != cov[0, 2])
+        assert(cov[0, 0] / cov[0, 1] * cov[0, 0] / cov[0, 2] == cov[0, 0] / cov[0, 3])
+        
     def test_site_product_kernel_long_sequences(self):
         l, a = 100, 2
         x = (np.random.uniform(size=(2, l)) > 0.5).astype(int)
@@ -448,5 +474,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_rho_kernel']
+    import sys;sys.argv = ['', 'KernelsTests.test_rho_pi_kernel']
     unittest.main()

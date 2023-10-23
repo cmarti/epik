@@ -181,6 +181,12 @@ class ModelsTests(unittest.TestCase):
             ypred = pd.read_csv(out_fpath, index_col=0)['y_pred'].values
             r2 = pearsonr(ypred, test_y)[0] ** 2
             assert(r2 > 0.9)
+            
+            # Test running with different kernel
+            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath,
+                   '-n', '100', '--gpu', '-p', xpred_fpath,
+                   '-k', 'Rho']
+            check_call(cmd)
     
     def test_epik_bin_gpu(self):
         alleles = np.array(['A', 'C', 'G', 'T'])
@@ -215,7 +221,7 @@ class ModelsTests(unittest.TestCase):
             ypred = pd.read_csv(out_fpath, index_col=0)['y_pred'].values
             r2 = pearsonr(ypred, test_y)[0] ** 2
             assert(r2 > 0.9)
-    
+            
     def test_partitioning(self):
         # Simulate from prior distribution
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
@@ -769,5 +775,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin_gpu']
+    import sys;sys.argv = ['', 'ModelsTests.test_partitioning']
     unittest.main()
