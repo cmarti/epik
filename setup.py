@@ -22,7 +22,7 @@ def main():
                 'EpiK = bin.EpiK:main',
             ]},
         install_requires=['numpy', 'pandas', 'sklearn',
-                          'torch', 'gpytorch', 'tqdm'],
+                          'torch', 'gpytorch==1.11', 'tqdm'],
         python_requires='>=3',
         platforms='ALL',
         keywords=['genotype-phenotyp maps', 'fitness landscape', 
