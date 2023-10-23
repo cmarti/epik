@@ -119,10 +119,35 @@ class ModelsTests(unittest.TestCase):
         r2 = pearsonr(ypred, test_y)[0] ** 2
         assert(r2 > 0.9)
     
+    def test_epik_gpu(self):
+        # Simulate from prior distribution
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, train_y_var = data
+        
+        # Train new model
+        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l), 
+                     device=torch.device('cuda:0'))
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=100)
+        params = model.get_params()
+        loglambdas = np.log(params['lambdas'])
+        r = pearsonr(loglambdas, log_lambdas0)[0]
+        assert(params['mean'][0] == 0)
+        assert(r > 0.8)
+        
+        # Predict unobserved sequences
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
+                                         lambdas_prior=LambdasFlatPrior(l, log_lambdas0))
+        model = EpiK(kernel)
+        model.set_data(train_x, train_y, train_y_var)
+        ypred = model.predict(test_x).detach()
+        r2 = pearsonr(ypred, test_y)[0] ** 2
+        assert(r2 > 0.9)
+        
     def test_epik_bin(self):
         alleles = np.array(['A', 'C', 'G', 'T'])
         _, _, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
-        train_x, train_y, test_x, test_y, train_y_var = data
+        train_x, train_y, test_x, test_y, _ = data
         
         data = pd.DataFrame({'y': train_y.numpy()},
                             index=one_hot_to_seq(train_x.numpy(), alleles))
@@ -153,10 +178,43 @@ class ModelsTests(unittest.TestCase):
             # Predict test sequences
             cmd.extend(['-p', xpred_fpath, '--params', params_fpath])
             check_call(cmd)
+            ypred = pd.read_csv(out_fpath, index_col=0)['y_pred'].values
+            r2 = pearsonr(ypred, test_y)[0] ** 2
+            assert(r2 > 0.9)
+    
+    def test_epik_bin_gpu(self):
+        alleles = np.array(['A', 'C', 'G', 'T'])
+        _, _, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, _ = data
+        
+        data = pd.DataFrame({'y': train_y.numpy()},
+                            index=one_hot_to_seq(train_x.numpy(), alleles))
+        test = pd.DataFrame({'x': one_hot_to_seq(test_x.numpy(), alleles)})
+        bin_fpath = join(BIN_DIR, 'EpiK.py')
+        
+        with NamedTemporaryFile() as fhand:
+            out_fpath = fhand.name
+            params_fpath = '{}.model_params.pth'.format(out_fpath)
+            data_fpath = '{}.train.csv'.format(out_fpath)
+            xpred_fpath = '{}.test.csv'.format(out_fpath)
+            data.to_csv(data_fpath)
+            test.to_csv(xpred_fpath, header=False, index=False)
+        
+            # Fitting and prediction using GPU
+            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath,
+                   '-n', '100', '--gpu', '-p', xpred_fpath]
+            check_call(cmd)
             
-            # Predict test sequences with variable ps using GPU
-#             cmd.extend(['--gpu', '-s', '1000'])
-#             check_call(cmd)
+            # Check parameter inference
+            state_dict = torch.load(params_fpath)
+            log_lambdas = state_dict['covar_module.module.raw_theta'].cpu().numpy()
+            r = pearsonr(log_lambdas, log_lambdas0)[0]
+            assert(r > 0.8)
+            
+            # Check predictions
+            ypred = pd.read_csv(out_fpath, index_col=0)['y_pred'].values
+            r2 = pearsonr(ypred, test_y)[0] ** 2
+            assert(r2 > 0.9)
     
     def test_partitioning(self):
         # Simulate from prior distribution
@@ -711,5 +769,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin_gpu']
     unittest.main()
