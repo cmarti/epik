@@ -137,9 +137,9 @@ def main():
     # Create model
     max_cg_iterations(3000)
     log.write('Building model for Gaussian Process regression')
-    output_device = torch.device('cuda') if gpu else None
+    device = torch.device('cuda') if gpu else None
     model = EpiK(kernel, dtype=dtype,
-                 output_device=output_device, n_devices=n_devices,
+                 device=device, n_devices=n_devices,
                  partition_size=partition_size, learning_rate=learning_rate)
     model.set_data(X, y, y_var=y_var)
 

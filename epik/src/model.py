@@ -14,7 +14,7 @@ from epik.src.utils import get_tensor, to_device, split_training_test
 
 class GPModel(gpytorch.models.ExactGP):
     def __init__(self, train_x, train_y, kernel, likelihood,
-                 output_device=None, n_devices=None, train_mean=False):
+                 device=None, n_devices=None, train_mean=False):
         super(GPModel, self).__init__(train_x, train_y, likelihood)
         
         if train_mean:
@@ -22,12 +22,12 @@ class GPModel(gpytorch.models.ExactGP):
         else:
             self.mean_module = ZeroMean()
         
-        if output_device is None:
+        if device is None:
             self.covar_module = kernel
         else:
             self.covar_module = MultiDeviceKernel(kernel,
                                                   device_ids=range(n_devices),
-                                                  output_device=output_device)
+                                                  output_device=device)
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -37,14 +37,14 @@ class GPModel(gpytorch.models.ExactGP):
 
 class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
-                 output_device=None, n_devices=1,
+                 device=None, n_devices=1,
                  train_mean=False, train_noise=False,
                  partition_size=0, learning_rate=0.1,
                  preconditioner_size=0, dtype=torch.float32,
                  track_progress=False):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
-        self.output_device = output_device
+        self.device = device
         self.train_mean = train_mean
         self.learning_rate = learning_rate
         self.n_devices = n_devices
@@ -74,15 +74,15 @@ class EpiK(object):
             pbar.set_postfix(report_dict)
     
     def to_device(self, x):
-        return(to_device(x, self.output_device))
+        return(to_device(x, self.device))
     
     def to_numpy(self, v):
-        if self.output_device is not None:
+        if self.device is not None:
             v = v.cpu()
         return(v.detach().numpy())
     
     def get_tensor(self, ndarray):
-        return(get_tensor(ndarray, dtype=self.dtype, device=self.output_device))
+        return(get_tensor(ndarray, dtype=self.dtype, device=self.device))
     
     def training_step(self, X, y):
         self.optimizer.zero_grad()
@@ -127,7 +127,7 @@ class EpiK(object):
     def define_model(self):
         self.model = self.to_device(GPModel(self.X, self.y, self.kernel, self.likelihood,
                                             train_mean=self.train_mean,
-                                            output_device=self.output_device,
+                                            device=self.device,
                                             n_devices=self.n_devices))
     
     def get_gp_mean(self):
@@ -188,7 +188,7 @@ class EpiK(object):
         likelihood = FixedNoiseGaussianLikelihood(noise=sigma2 * torch.ones(X.shape[0]))
         model = self.to_device(GPModel(None, None, self.kernel, likelihood,
                                        train_mean=self.train_mean,
-                                       output_device=self.output_device,
+                                       device=self.device,
                                        n_devices=self.n_devices))
         prior = model.forward(X)
         return(prior)
