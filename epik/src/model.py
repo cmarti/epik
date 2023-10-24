@@ -39,7 +39,7 @@ class EpiK(object):
     def __init__(self, kernel, likelihood_type='Gaussian',
                  device=None, n_devices=1,
                  train_mean=False, train_noise=False,
-                 partition_size=0, learning_rate=0.1,
+                 learning_rate=0.1,
                  preconditioner_size=0, dtype=torch.float32,
                  track_progress=False):
         self.kernel = kernel
@@ -49,7 +49,6 @@ class EpiK(object):
         self.learning_rate = learning_rate
         self.n_devices = n_devices
         self.dtype = dtype
-        self.partition_size = partition_size
         self.preconditioner_size = preconditioner_size
         self.train_noise = train_noise
         self.track_progress = track_progress
@@ -84,18 +83,6 @@ class EpiK(object):
     def get_tensor(self, ndarray):
         return(get_tensor(ndarray, dtype=self.dtype, device=self.device))
     
-    def training_step(self, X, y):
-        self.optimizer.zero_grad()
-        self.loss = -self.calc_mll(self.model(X), y)
-        self.loss.backward()
-        self.optimizer.step()
-        
-        if hasattr(self.kernel, 'get_params'):
-            params = self.get_params()
-#             print(params)
-            self.params_history.append(params)
-            self.loss_history.append(self.loss.detach().item())
-        
     def set_training_mode(self):
         self.model.train()
         self.likelihood.train()
@@ -103,15 +90,6 @@ class EpiK(object):
     def set_evaluation_mode(self):
         self.model.eval()
         self.likelihood.eval()
-    
-    def set_partition_size(self, partition_size=None):
-        nrows = self.X.shape[0]
-        
-        if partition_size is None:
-            partition_size = self.partition_size
-        
-        partition_nrows = int(partition_size / nrows)
-        return(gpytorch.beta_features.checkpoint_kernel(partition_nrows))
     
     def set_preconditioner_size(self, preconditioner_size=None):
         if preconditioner_size is None:
@@ -146,6 +124,16 @@ class EpiK(object):
         self.define_optimizer()
         self.define_loss()
     
+    def training_step(self, X, y):
+        self.optimizer.zero_grad()
+        self.loss = -self.calc_mll(self.model(X), y)
+        self.loss.backward()
+        self.optimizer.step()
+        
+        if hasattr(self.kernel, 'get_params'):
+            self.params_history.append(self.get_params())
+            self.loss_history.append(self.loss.detach().item())
+    
     def fit(self, n_iter=100):
         self.set_training_mode()
         
@@ -153,7 +141,7 @@ class EpiK(object):
         self.loss_history = []
         self.params_history = []
         
-        with self.set_partition_size(), self.set_preconditioner_size():
+        with self.set_preconditioner_size():
             
             if n_iter > 1 and self.track_progress:
                 pbar = tqdm(pbar, desc='Maximizing Marginal Likelihood')
@@ -177,7 +165,7 @@ class EpiK(object):
         self.set_evaluation_mode()
         pred_X = self.get_tensor(pred_X)
         
-        with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size(): #, , gpytorch.settings.fast_pred_var():
+        with torch.no_grad(), self.set_preconditioner_size(): #, , gpytorch.settings.fast_pred_var():
             f_preds = self.model(pred_X).mean
 
         self.pred_time = time() - t0
@@ -196,7 +184,7 @@ class EpiK(object):
     def sample(self, X, n=1, sigma2=1e-4):
         prior = self.get_prior(X, sigma2=sigma2)
         v = torch.zeros(n)
-        with torch.no_grad(), self.set_preconditioner_size(), self.set_partition_size():
+        with torch.no_grad(), self.set_preconditioner_size():
             y = prior.rsample(v.size())
         return(y)
     
