@@ -16,8 +16,7 @@ from scipy.stats import pearsonr
 from gpmap.src.inference import VCregression
 
 from gpytorch.settings import max_cg_iterations
-from gpytorch.kernels.rbf_kernel import RBFKernel
-from gpytorch.kernels.scale_kernel import ScaleKernel
+# from gpytorch.kernels.keops import RBFKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
@@ -28,6 +27,8 @@ from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
 from epik.src.plot import plot_training_history
 from itertools import product
+from epik.src.keops import RhoKernel
+from gpytorch.kernels.scale_kernel import ScaleKernel
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -73,6 +74,18 @@ def get_vc_random_landscape_data(sigma=0, ptrain=0.8):
     return(alpha, l, log_lambdas0, model.simulate_dataset(X, sigma=sigma, ptrain=ptrain))
 
 
+def get_rho_random_landscape_data(sigma=0, ptrain=0.8):
+    rho0 = torch.tensor([[0.1, 0.5, 0.05, 0.25, 0.7]]).T
+    logit_rho0 = torch.log(rho0 / (1 - rho0))
+    alpha, l = 4, logit_rho0.shape[0]
+    X = get_full_space_one_hot(seq_length=l, n_alleles=alpha)
+    
+    kernel = RhoKernel(n_alleles=alpha, seq_length=l, logit_rho0=logit_rho0)
+    model = EpiK(kernel)
+    return(alpha, l, logit_rho0,
+           model.simulate_dataset(X, sigma=sigma, ptrain=ptrain))
+
+
 class ModelsTests(unittest.TestCase):
     def test_epik_simulate(self):
         l, a = 2, 2
@@ -113,6 +126,28 @@ class ModelsTests(unittest.TestCase):
         # Predict unobserved sequences
         kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
                                          lambdas_prior=LambdasFlatPrior(l, log_lambdas0))
+        model = EpiK(kernel)
+        model.set_data(train_x, train_y, train_y_var)
+        ypred = model.predict(test_x).detach()
+        r2 = pearsonr(ypred, test_y)[0] ** 2
+        assert(r2 > 0.9)
+    
+    def test_epik_keops(self):
+        # Simulate from prior distribution
+        alpha, l, logit_rho0, data = get_rho_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, train_y_var = data
+        
+        # Train new model
+        kernel = RhoKernel(alpha, l)
+        model = EpiK(kernel, track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=50)
+        logit_rho = kernel.logit_rho.detach().numpy().flatten() 
+        r = pearsonr(logit_rho, logit_rho0.flatten())[0]
+        assert(r > 0.8)
+        
+        # # Predict unobserved sequences
+        kernel = RhoKernel(alpha, l, logit_rho0=logit_rho0)
         model = EpiK(kernel)
         model.set_data(train_x, train_y, train_y_var)
         ypred = model.predict(test_x).detach()
@@ -775,5 +810,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_partitioning']
+    import sys;sys.argv = ['', 'ModelsTests.test_epik_keops']
     unittest.main()
