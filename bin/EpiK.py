@@ -6,11 +6,13 @@ import pandas as pd
 import torch
 
 from gpytorch.settings import max_cg_iterations
-from gpytorch.kernels import (RBFKernel, ScaleKernel, MaternKernel,
-                              RQKernel, LinearKernel)
+from gpytorch.kernels import ScaleKernel, RQKernel, LinearKernel
+from gpytorch.kernels.keops import RBFKernel, MaternKernel
 
-from epik.src.kernel import (ConnectednessKernel, VarianceComponentKernel,
-                             DeltaPKernel, RhoPiKernel, HetRBFKernel)
+from epik.src.kernel import (VarianceComponentKernel, DeltaPKernel,
+                             HetRBFKernel)
+from epik.src.keops import (RhoPiKernel, RhoKernel)
+
 from epik.src.model import EpiK
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 from epik.src.plot import plot_training_history
@@ -29,7 +31,7 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P):
         kernel = ScaleKernel(LinearKernel())
     else:
         if kernel == 'Connectedness' or kernel == 'Rho':
-            kernel = ConnectednessKernel(n_alleles, seq_length, dtype=dtype)
+            kernel = RhoKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'HetRBF':
             kernel = HetRBFKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'HetARD':
@@ -82,8 +84,6 @@ def main():
                             help='Use float64 data type')
     comp_group.add_argument('-m', '--n_devices', default=1, type=int,
                             help='Number of GPUs to use (1)')
-    comp_group.add_argument('-s', '--partition_size', default=0, type=int,
-                            help='Use kernel partitioning of this size')
     comp_group.add_argument('-n', '--n_iter', default=200, type=int,
                             help='Number of iterations for optimization (200)')
     comp_group.add_argument('-r', '--learning_rate', default=0.1, type=float,
@@ -107,7 +107,6 @@ def main():
     n_devices = parsed_args.n_devices
     n_iter = parsed_args.n_iter
     learning_rate = parsed_args.learning_rate
-    partition_size = parsed_args.partition_size
     use_float64 = parsed_args.use_float64
 
     pred_fpath = parsed_args.pred
@@ -144,7 +143,7 @@ def main():
     device = torch.device('cuda:0') if gpu else None
     model = EpiK(kernel, dtype=dtype, track_progress=True,
                  device=device, n_devices=n_devices,
-                 partition_size=partition_size, learning_rate=learning_rate)
+                 learning_rate=learning_rate)
     model.set_data(X, y, y_var=y_var)
 
     # Fit by evidence maximization
