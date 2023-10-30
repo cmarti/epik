@@ -22,13 +22,14 @@ from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
-from epik.src.kernel import SkewedVCKernel, VarianceComponentKernel
+from epik.src.kernel import SkewedVCKernel, VarianceComponentKernel, HetRBFKernel
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
 from epik.src.plot import plot_training_history
 from itertools import product
 from epik.src.keops import RhoKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
+from gpytorch.kernels.rbf_kernel import RBFKernel
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -154,6 +155,28 @@ class ModelsTests(unittest.TestCase):
         r2 = pearsonr(ypred, test_y)[0] ** 2
         assert(r2 > 0.9)
     
+    def test_epik_keops_gpu(self):
+        # Simulate from prior distribution
+        alpha, l, logit_rho0, data = get_rho_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, train_y_var = data
+        
+        # Train new model
+        kernel = RhoKernel(alpha, l)
+        model = EpiK(kernel, track_progress=True, device=torch.device('cuda:0'))
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=50)
+        logit_rho = kernel.logit_rho.cpu().detach().numpy().flatten() 
+        r = pearsonr(logit_rho, logit_rho0.flatten())[0]
+        assert(r > 0.8)
+        
+        # # Predict unobserved sequences
+        kernel = RhoKernel(alpha, l, logit_rho0=logit_rho0)
+        model = EpiK(kernel)
+        model.set_data(train_x, train_y, train_y_var)
+        ypred = model.predict(test_x).detach()
+        r2 = pearsonr(ypred, test_y)[0] ** 2
+        assert(r2 > 0.9)
+    
     def test_epik_gpu(self):
         # Simulate from prior distribution
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
@@ -256,6 +279,60 @@ class ModelsTests(unittest.TestCase):
             ypred = pd.read_csv(out_fpath, index_col=0)['y_pred'].values
             r2 = pearsonr(ypred, test_y)[0] ** 2
             assert(r2 > 0.9)
+    
+    def test_epik_het(self):
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
+        l, alpha = 7, 4
+        track_progress = False
+        
+        kernel = ScaleKernel(RBFKernel(ard_num_dims=1))
+        model = EpiK(kernel, track_progress=track_progress, learning_rate=0.2)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=200)
+        ypred = model.predict(test_x).detach()
+        r2_1 = pearsonr(ypred, test_y)[0] ** 2
+        print(r2_1)
+        
+        kernel = HetRBFKernel(alpha, l, dims=1, train_het=False)
+        model = EpiK(kernel, track_progress=track_progress)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=100)
+        ypred = model.predict(test_x).detach()
+        r2_2 = pearsonr(ypred, test_y)[0] ** 2
+        print(r2_2)
+        print(kernel.theta)
+        print(kernel.theta0)
+        
+        kernel = HetRBFKernel(alpha, l, dims=1)
+        model = EpiK(kernel, track_progress=track_progress)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=100)
+        ypred = model.predict(test_x).detach()
+        r2_2 = pearsonr(ypred, test_y)[0] ** 2
+        print(r2_2)
+        print(kernel.theta)
+        print(kernel.theta0)
+        # # exit()
+        kernel = ScaleKernel(RBFKernel(ard_num_dims=alpha * l))
+        model = EpiK(kernel, track_progress=track_progress, learning_rate=0.2)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=200)
+        ypred = model.predict(test_x).detach()
+        r2_3 = pearsonr(ypred, test_y)[0] ** 2
+        print(r2_3)
+        
+        kernel = HetRBFKernel(alpha, l, dims=alpha*l)
+        model = EpiK(kernel, track_progress=track_progress)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=15)
+        ypred = model.predict(test_x).detach()
+        r2_4 = pearsonr(ypred, test_y)[0] ** 2
+        print(r2_4)
+        
+        print(kernel.theta)
+        print(kernel.theta0)
+        
+        print(r2_1, r2_2, r2_3, r2_4)
             
     def test_partitioning(self):
         # Simulate from prior distribution

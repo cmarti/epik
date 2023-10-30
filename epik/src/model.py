@@ -22,12 +22,13 @@ class GPModel(gpytorch.models.ExactGP):
         else:
             self.mean_module = ZeroMean()
         
-        if device is None:
-            self.covar_module = kernel
-        else:
-            self.covar_module = MultiDeviceKernel(kernel,
-                                                  device_ids=range(n_devices),
-                                                  output_device=device)
+        self.covar_module = kernel
+        # if device is None:
+        #     self.covar_module = kernel
+        # else:
+        #     self.covar_module = MultiDeviceKernel(kernel,
+        #                                           device_ids=range(n_devices),
+        #                                           output_device=device)
 
     def forward(self, x):
         mean_x = self.mean_module(x)
@@ -64,8 +65,10 @@ class EpiK(object):
         else:
             msg = 'Only Gaussian likelihood is allowed so far'
             raise ValueError(msg)
-        
-        self.likelihood = self.to_device(likelihood)
+
+        if self.device is not None:
+            likelihood = likelihood.cuda()
+        self.likelihood = likelihood # self.to_device(likelihood)
     
     def report_progress(self, pbar):
         if self.track_progress:
@@ -103,10 +106,12 @@ class EpiK(object):
         self.calc_mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
     
     def define_model(self):
-        self.model = self.to_device(GPModel(self.X, self.y, self.kernel, self.likelihood,
-                                            train_mean=self.train_mean,
-                                            device=self.device,
-                                            n_devices=self.n_devices))
+        self.model = GPModel(self.X, self.y, self.kernel, self.likelihood,
+                             train_mean=self.train_mean,
+                             device=self.device,
+                             n_devices=self.n_devices) # self.to_device()
+        if self.device is not None:
+            self.model = self.model.cuda()
     
     def get_gp_mean(self):
         if hasattr(self.model.mean_module, 'constant'):
