@@ -170,7 +170,7 @@ class EpiK(object):
         self.set_evaluation_mode()
         pred_X = self.get_tensor(pred_X)
         
-        with torch.no_grad(), self.set_preconditioner_size(): #, , gpytorch.settings.fast_pred_var():
+        with torch.no_grad(), self.set_preconditioner_size(), gpytorch.settings.skip_posterior_variances(): #, , gpytorch.settings.fast_pred_var():
             f_preds = self.model(pred_X).mean
 
         self.pred_time = time() - t0
