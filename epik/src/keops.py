@@ -135,7 +135,7 @@ class VarianceComponentKernel(SequenceKernel):
         self.set_params()
     
     def set_params(self):
-        log_lambdas0 = -torch.arange(self.s) if self.log_lambdas0 is None else self.log_lambdas0
+        log_lambdas0 = -torch.arange(self.s).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
         log_lambdas0 = log_lambdas0.reshape((self.s, 1))
         w_kd = self.calc_krawchouk_matrix()
         d_powers_inv = self.calc_d_powers_matrix_inv()
@@ -174,7 +174,7 @@ class VarianceComponentKernel(SequenceKernel):
     def get_k(self):
         return(self.k)
     
-    def _nonkeops_forward(self, x1, x2):
+    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         x1_ = x1[..., :, None, :]
         x2_ = x2[..., None, :, :]
         d = self.l - (x1_ * x2_).sum(-1).unsqueeze(-1)
