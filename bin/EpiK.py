@@ -10,7 +10,7 @@ from gpytorch.kernels import (RBFKernel, ScaleKernel, MaternKernel,
                               RQKernel, LinearKernel)
 
 from epik.src.kernel import (ConnectednessKernel, VarianceComponentKernel,
-                             DeltaPKernel, RhoPiKernel)
+                             DeltaPKernel, RhoPiKernel, HetRBFKernel)
 from epik.src.model import EpiK
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 from epik.src.plot import plot_training_history
@@ -30,6 +30,11 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P):
     else:
         if kernel == 'Connectedness' or kernel == 'Rho':
             kernel = ConnectednessKernel(n_alleles, seq_length, dtype=dtype)
+        elif kernel == 'HetRBF':
+            kernel = HetRBFKernel(n_alleles, seq_length, dtype=dtype)
+        elif kernel == 'HetARD':
+            kernel = HetRBFKernel(n_alleles, seq_length, dtype=dtype,
+                                  dims=n_alleles * seq_length)
         elif kernel == 'RhoPi':
             kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'VC':
