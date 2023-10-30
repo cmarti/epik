@@ -44,10 +44,11 @@ class SequenceKernel(Kernel):
 
 
 class HetRBFKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, dims=1,
+    def __init__(self, n_alleles, seq_length, dims=1, train_het=True,
                  log_lengthscale0=None, log_ds0=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         self.dims = dims
+        self.train_het = train_het
         self.log_ds0 = log_ds0
         self.log_lengthscale0 = log_lengthscale0
         self.set_params()
@@ -57,8 +58,8 @@ class HetRBFKernel(SequenceKernel):
         
         theta = torch.zeros((self.l, self.alpha)) if self.log_ds0 is None else self.log_ds0
         params = {'log_lengthscale': Parameter(log_lengthscale0, requires_grad=True),
-                  'theta': Parameter(theta, requires_grad=True),
-                  'theta0': Parameter(torch.zeros((1,)), requires_grad=True),
+                  'theta': Parameter(theta, requires_grad=self.train_het),
+                  'theta0': Parameter(torch.zeros((1,)), requires_grad=self.train_het),
                   }
         self.register_params(params)
         
