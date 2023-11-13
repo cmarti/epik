@@ -32,13 +32,13 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P):
     else:
         if kernel == 'Connectedness' or kernel == 'Rho':
             kernel = RhoKernel(n_alleles, seq_length, dtype=dtype)
+        elif kernel == 'RhoPi':
+            kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'HetRBF':
             kernel = HetRBFKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'HetARD':
             kernel = HetRBFKernel(n_alleles, seq_length, dtype=dtype,
                                   dims=n_alleles * seq_length)
-        elif kernel == 'RhoPi':
-            kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'VC':
             kernel = VarianceComponentKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'DP':
@@ -136,11 +136,15 @@ def main():
     log.write('Selected {} kernel'.format(kernel))
     kernel = select_kernel(kernel, n_alleles, config['seq_length'],
                            dtype=dtype, P=P)
+
+    # Define device
+    device = torch.device('cuda') if gpu else None
+    device_label = 'GPU' if gpu else 'CPU'
+    log.write('Running computations on {}'.format(device_label))
     
     # Create model
     max_cg_iterations(3000)
     log.write('Building model for Gaussian Process regression')
-    device = torch.device('cuda:0') if gpu else None
     model = EpiK(kernel, dtype=dtype, track_progress=True,
                  device=device, n_devices=n_devices,
                  learning_rate=learning_rate)
