@@ -43,6 +43,52 @@ class SequenceKernel(Kernel):
         return(self.l - self.inner_product(x1, x2))
 
 
+class HetRBFKernel(SequenceKernel):
+    def __init__(self, n_alleles, seq_length, dims=1, train_het=True,
+                 log_lengthscale0=None, log_ds0=None, **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        self.dims = dims
+        self.train_het = train_het
+        self.log_ds0 = log_ds0
+        self.log_lengthscale0 = log_lengthscale0
+        self.set_params()
+
+    def set_params(self):
+        log_lengthscale0 = torch.zeros((1, 1, self.dims)) if self.log_lengthscale0 is None else self.log_lengthscale0
+        
+        theta = torch.zeros((self.l, self.alpha)) if self.log_ds0 is None else self.log_ds0
+        params = {'log_lengthscale': Parameter(log_lengthscale0, requires_grad=True),
+                  'theta': Parameter(theta, requires_grad=self.train_het),
+                  'theta0': Parameter(torch.zeros((1,)), requires_grad=self.train_het),
+                  }
+        self.register_params(params)
+        
+    def get_lengthscale(self):
+        return(torch.exp(self.log_lengthscale))
+    
+    def get_theta(self):
+        t = self.theta
+        return(t - t.mean(1).unsqueeze(1))
+    
+    def get_theta0(self):
+        return(self.theta0)
+    
+    def f(self, x, theta0, theta, a=1, b=1):
+        phi = theta0 + (x * theta.reshape(1, 1, self.l * self.alpha)).sum(-1)
+        r = a + b * torch.exp(phi) / (1 + torch.exp(phi))
+        return(r)
+    
+    def forward(self, x1, x2, diag=False, **kwargs):
+        l = self.get_lengthscale()
+        theta = self.get_theta()
+        theta0 = self.get_theta0()
+        x1_, x2_ = x1[..., :, None, :], x2[..., None, :, :]
+        f1 = self.f(x1_, theta0=theta0, theta=theta)
+        f2 = self.f(x2_, theta0=theta0, theta=theta)
+        k = torch.exp((l * x1_ * x2_).sum(-1)) * f1 * f2
+        return(k)
+
+
 class LambdasKernel(SequenceKernel):
     def calc_polynomial_coeffs(self):
         lambdas = self.lambdas_p

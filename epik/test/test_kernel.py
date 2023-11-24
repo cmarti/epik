@@ -60,8 +60,8 @@ class KernelsTests(unittest.TestCase):
         x = get_full_space_one_hot(l, a)
         rho = torch.tensor([[0.5]])
         cov = kernel._forward(x, x, rho=rho)
-        assert(cov[0, 0] == 0.75)
-        assert(cov[0, 1] == 0.25)
+        assert(cov[0, 0] == 1.5)
+        assert(cov[0, 1] == 0.5)
         
         l, a = 2, 2
         kernel = ConnectednessKernel(n_alleles=a, seq_length=l)
@@ -69,6 +69,8 @@ class KernelsTests(unittest.TestCase):
         rho = torch.tensor([[0.5, 0.5]])
         cov = kernel._forward(x, x, rho=rho)
         d0, d1, d2 = cov[0][0], cov[0][1], cov[0][3]
+        exp_d0 = torch.prod(1 + rho)
+        assert(np.allclose(d0, exp_d0))
         assert(d1 / d0 == d2 / d1)
     
     def test_rho_pi_kernel(self):
@@ -474,5 +476,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_rho_pi_kernel']
+    import sys;sys.argv = ['', 'KernelsTests.test_rho_kernel']
     unittest.main()

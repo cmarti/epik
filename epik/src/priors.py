@@ -20,6 +20,9 @@ class KernelParamPrior(object):
     def set(self, kernel):
         self.set_params(kernel)
         self.set_priors(kernel)
+    
+    def set_priors(self, kernel):
+        return()
 
 
 class LambdasDeltaPrior(KernelParamPrior):
@@ -59,9 +62,6 @@ class LambdasDeltaPrior(KernelParamPrior):
                  'DP_log_lambda': Parameter(self.DP_log_lambda, requires_grad=False)}
         kernel.register_params(theta)
     
-    def set_priors(self, kernel):
-        return()
-
 
 class LambdasFlatPrior(KernelParamPrior):
     def __init__(self, seq_length, log_lambdas0=None, train=True,
@@ -89,9 +89,6 @@ class LambdasFlatPrior(KernelParamPrior):
         theta = {'raw_theta': Parameter(raw_theta0, requires_grad=self.train)}
         kernel.register_params(theta)
     
-    def set_priors(self, kernel):
-        return()
-
 
 class LambdasExpDecayPrior(KernelParamPrior):
     def __init__(self, seq_length, log_lambdas0=None, train=True,
@@ -273,38 +270,50 @@ class RhosPrior(KernelParamPrior):
                  train=True, dtype=torch.float32):
         super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
                          dtype=dtype)
+        self.shape = (self.l, 1)
         if rho0 is None:
-            self.logit_rho0 = torch.tensor(np.zeros(self.l), dtype=self.dtype)
+            self.logit_rho0 = torch.zeros(self.shape, dtype=self.dtype)
         else:
-            self.logit_rho0 = torch.log(rho0 / (1 - rho0)).to(dtype=self.dtype)
-    
-    def get_logit_rho0(self):
-        return(self.logit_rho0)
+            logit_rho0 = torch.log(rho0 / (1 - rho0))
+            self.logit_rho0 = logit_rho0.to(dtype=self.dtype).reshape(self.shape)
     
     def set_params(self, kernel):
-        params = {'raw_rho': Parameter(self.get_logit_rho0(), requires_grad=self.train)}
-        # else:
-        #     logit_rho = self.get_logit_rho0()
-        #     logit_rho_mu, logit_rho_sd = logit_rho.mean(), logit_rho.std() + 0.01
-        #     params = {'raw_mu': Parameter(logit_rho_mu, requires_grad=self.train),
-        #               'raw_sigma': Parameter(torch.log(logit_rho_sd), requires_grad=self.train),
-        #               'raw_rho': Parameter((logit_rho - logit_rho_mu) / (logit_rho_sd),
-        #                                    requires_grad=self.train),}
+        params = {'logit_rho': Parameter(self.logit_rho0, requires_grad=self.train)}
         kernel.register_params(params=params, constraints={})
     
-    def calc_rho(self, raw_rho, mu=None, sigma=None):
-        if mu is not None and sigma is not None:
-            logit_rho = mu + sigma * raw_rho
-        else:
-            logit_rho = raw_rho
+    def calc_rho(self, logit_rho):
         rho = torch.exp(logit_rho) / (1 + torch.exp(logit_rho))
         return(rho)
     
     def get_rho(self, kernel):
-        return(self.calc_rho(kernel.raw_rho))
+        return(self.calc_rho(kernel.logit_rho))
 
-    def set_priors(self, kernel):
-        # if not self.sites_equal:
-        #     kernel.register_prior("raw_rho_prior", NormalPrior(0, 1),
-        #                           lambda module: module.raw_rho)
-        return()
+
+class EtaPrior(KernelParamPrior):
+    def __init__(self, seq_length, n_alleles, log_p0=None, sites_equal=False,
+                 train=True, dtype=torch.float32):
+        super().__init__(seq_length=seq_length, n_alleles=n_alleles, train=train,
+                         dtype=dtype)
+        self.sites_equal = sites_equal
+        self.shape = (1, self.alpha) if sites_equal else (self.l, self.alpha)
+        
+        if log_p0 is None:
+            log_p0 = -np.log(self.alpha)
+            self.log_p0 = torch.full(self.shape, log_p0, dtype=self.dtype)
+        else:
+            if log_p0.shape != self.shape:
+                msg = 'log_p0.shape should be {}'.format(self.shape)
+                raise ValueError(msg)
+            self.log_p0 = log_p0.reshape(self.shape)
+            
+    def set_params(self, kernel):
+        logp = {'log_p': Parameter(self.log_p0, requires_grad=self.train)}
+        kernel.register_params(logp)
+        
+    def calc_eta(self, log_p):
+        log_p = log_p - torch.logsumexp(log_p, 1)
+        eta = (1 - torch.exp(log_p)) / torch.exp(log_p)
+        return(eta)
+    
+    def get_eta(self, kernel):
+        return(self.calc_eta(kernel.log_p))
