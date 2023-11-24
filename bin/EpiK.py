@@ -88,6 +88,8 @@ def main():
                             help='Number of iterations for optimization (200)')
     comp_group.add_argument('-r', '--learning_rate', default=0.1, type=float,
                             help='Learning rate for optimization (0.1)')
+    comp_group.add_argument('-l', '--lbfgs', default=False,
+                            action='store_true', help='Use LBFGS optimizer instead of Adam')
 
     output_group = parser.add_argument_group('Output')
     output_group.add_argument('-o', '--output', required=True, help='Output file')
@@ -108,6 +110,7 @@ def main():
     n_iter = parsed_args.n_iter
     learning_rate = parsed_args.learning_rate
     use_float64 = parsed_args.use_float64
+    optimizer = 'lbfgs' if parsed_args.lbfgs else 'Adam'
 
     pred_fpath = parsed_args.pred
     out_fpath = parsed_args.output
@@ -147,7 +150,7 @@ def main():
     log.write('Building model for Gaussian Process regression')
     model = EpiK(kernel, dtype=dtype, track_progress=True,
                  device=device, n_devices=n_devices,
-                 learning_rate=learning_rate)
+                 learning_rate=learning_rate, optimizer=optimizer)
     model.set_data(X, y, y_var=y_var)
 
     # Fit by evidence maximization
