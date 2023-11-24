@@ -9,7 +9,9 @@ from gpytorch.kernels.multi_device_kernel import MultiDeviceKernel
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
 from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikelihood,
                                                       GaussianLikelihood)
+from epik.src.LBFGS import FullBatchLBFGS
 from epik.src.utils import get_tensor, to_device, split_training_test
+ 
 
 
 class GPModel(gpytorch.models.ExactGP):
@@ -41,7 +43,8 @@ class EpiK(object):
                  train_mean=False, train_noise=False,
                  learning_rate=0.1,
                  preconditioner_size=0, dtype=torch.float32,
-                 track_progress=False):
+                 track_progress=False, 
+                 optimizer='Adam'):
         self.kernel = kernel
         self.likelihood_type = likelihood_type
         self.device = device
@@ -53,6 +56,7 @@ class EpiK(object):
         self.train_noise = train_noise
         self.track_progress = track_progress
         self.fit_time = 0
+        self.optimizer_label = optimizer
     
     def set_likelihood(self, y_var=None):
         if self.likelihood_type == 'Gaussian':
@@ -97,7 +101,15 @@ class EpiK(object):
         return(gpytorch.settings.max_preconditioner_size(preconditioner_size))
     
     def define_optimizer(self):
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        if self.optimizer_label == 'Adam':
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+            self.fit = self.adam_fit
+        elif self.optimizer_label == 'LBFGS':
+            self.optimizer = FullBatchLBFGS(self.model.parameters(), lr=self.learning_rate)
+            self.fit = self.lbfgs_fit
+        else:
+            msg = 'Optimizer {} not allowed'.format(self.optimizer_label)
+            raise ValueError(msg)
     
     def define_loss(self):
         self.calc_mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
@@ -124,7 +136,7 @@ class EpiK(object):
         self.define_optimizer()
         self.define_loss()
     
-    def training_step(self, X, y):
+    def adam_training_step(self, X, y):
         self.optimizer.zero_grad()
         self.loss = -self.calc_mll(self.model(X), y)
         self.loss.backward()
@@ -134,7 +146,7 @@ class EpiK(object):
             self.params_history.append(self.get_params())
             self.loss_history.append(self.loss.detach().item())
     
-    def fit(self, n_iter=100):
+    def adam_fit(self, n_iter=100):
         self.set_training_mode()
         
         pbar = range(n_iter)
@@ -149,10 +161,46 @@ class EpiK(object):
             t0 = time()
             
             for _ in pbar:
-                self.training_step(self.X, self.y)
+                self.adam_training_step(self.X, self.y)
                 if n_iter > 1:
                     self.report_progress(pbar)
                     
+            self.fit_time = time() - t0
+    
+    def lbfgs_fit(self, n_iter=100):
+        
+        self.loss_history = []
+        self.params_history = []
+        
+        def closure():
+            self.optimizer.zero_grad()
+            loss =  -self.calc_mll(self.model(self.X), self.y)
+            return(loss)
+
+        loss = closure()
+        loss.backward()
+
+        with self.set_preconditioner_size():
+            pbar = range(n_iter)
+            
+            if n_iter > 1 and self.track_progress:
+                pbar = tqdm(pbar, desc='Maximizing Marginal Likelihood')
+                
+            t0 = time()
+            for i in pbar:
+                options = {'closure': closure, 'current_loss': loss, 'max_ls': 10}
+                self.loss, _, _, _, _, _, _, fail = self.optimizer.step(options)
+                
+                if n_iter > 1:
+                    self.report_progress(pbar)
+        
+                if hasattr(self.kernel, 'get_params'):
+                    self.params_history.append(self.get_params())
+                    self.loss_history.append(self.loss.detach().item())
+        
+                if fail:
+                    print('Convergence reached at iteration {}!'.format(i))
+                    break
             self.fit_time = time() - t0
     
     def predict(self, pred_X, calc_variance=False):

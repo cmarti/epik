@@ -96,9 +96,21 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, _, _, train_y_var = data
         
         # Train new model
-        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l))
+        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
+                     optimizer='Adam', track_progress=False)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
+        params = model.get_params()
+        loglambdas = np.log(params['lambdas'])
+        r = pearsonr(loglambdas, log_lambdas0)[0]
+        print(r, loglambdas)
+        assert(r > 0.8)
+        
+        # Train LBFGS optimizer
+        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
+                     optimizer='LBFGS', track_progress=False)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=300)
         params = model.get_params()
         loglambdas = np.log(params['lambdas'])
         r = pearsonr(loglambdas, log_lambdas0)[0]
@@ -775,5 +787,5 @@ class ModelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'ModelsTests.test_partitioning']
+    import sys;sys.argv = ['', 'ModelsTests']
     unittest.main()
