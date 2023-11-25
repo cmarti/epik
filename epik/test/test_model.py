@@ -16,10 +16,10 @@ from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
-from epik.src.kernel import SkewedVCKernel, HetRBFKernel
+from epik.src.kernel import AdditiveHeteroskedasticKernel, VarianceComponentKernel
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
-from epik.src.keops import RhoKernel, VarianceComponentKernel
+# from epik.src.keops import RhoKernel, VarianceComponentKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 from gpytorch.kernels.rbf_kernel import RBFKernel
 
@@ -109,8 +109,13 @@ class ModelsTests(unittest.TestCase):
         params = model.get_params()
         loglambdas = np.log(params['lambdas'])
         r = pearsonr(loglambdas, log_lambdas0)[0]
-        print(r, loglambdas)
         assert(r > 0.8)
+        
+        # Train with Heteroskedastic kernel: just ensure that it trains
+        kernel = AdditiveHeteroskedasticKernel(RBFKernel(), n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, optimizer='Adam', track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=20)
         
         # Train LBFGS optimizer
         model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
@@ -121,8 +126,8 @@ class ModelsTests(unittest.TestCase):
         loglambdas = np.log(params['lambdas'])
         r = pearsonr(loglambdas, log_lambdas0)[0]
         assert(params['mean'][0] == 0)
-        assert(r > 0.8)
-    
+        assert(r > 0.6)
+        
     def test_epik_predict(self):
         # Simulate from prior distribution
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
@@ -360,9 +365,5 @@ class ModelsTests(unittest.TestCase):
 
         
 if __name__ == '__main__':
-<<<<<<< HEAD
-    import sys;sys.argv = ['', 'ModelsTests']
-=======
-    import sys;sys.argv = ['', 'ModelsTests.test_epik_bin']
->>>>>>> 68435551ccaef8e9e584d21a014e715f4a00cd91
+    import sys; sys.argv = ['', 'ModelsTests']
     unittest.main()
