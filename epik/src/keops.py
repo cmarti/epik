@@ -24,54 +24,6 @@ class SequenceKernel(KeOpsKernel):
             self.register_constraint(param_name, constraint)
             
 
-class HetRBFKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, 
-                 log_lengthscale0=None, log_ds0=None, **kwargs):
-        super().__init__(n_alleles, seq_length, **kwargs)
-        self.log_ds0 = log_ds0
-        self.log_lengthscale0 = log_lengthscale0
-        self.set_params()
-
-    def set_params(self):
-        log_ds0 = torch.zeros((1, 1, self.l * self.alpha)) if self.log_ds0 is None else self.log_ds0
-        log_lengthscale0 = torch.zeros((1,)) if self.log_lengthscale0 is None else self.log_lengthscale0 
-        params = {'log_lengthscale': Parameter(log_lengthscale0, requires_grad=True),
-                  'log_ds': Parameter(log_ds0, requires_grad=True)}
-        self.register_params(params)
-        
-    def get_ds(self):
-        print(self.log_ds)
-        return(torch.exp(self.log_ds) * self.get_lengthscale())
-    
-    def get_lengthscale(self):
-        print(self.log_lengthscale)
-        return(torch.exp(self.log_lengthscale))
-    
-    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
-        ds = self.get_ds()
-        l = self.get_lengthscale()
-        x1_ = x1[..., :, None, :]
-        x2_ = x2[..., None, :, :]
-        d = self.l - (x1_ * x2_).sum(-1)
-        d1 = (x1_ * ds).sum(-1)
-        d2 = (x2_ * ds).sum(-1)
-        k = d1 * d2 * torch.exp(-l * d)
-        return(k)
-
-    def _covar_func(self, x1, x2, **kwargs):
-        ds = self.get_ds()
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-        k = ((x1_ * ds).sum(-1) + (x2_ * ds).sum(-1) + (x1_ * x2_).sum(-1)).exp()
-        return(k)
-    
-    def _keops_forward(self, x1, x2, **kwargs):
-        l = self.get_lengthscale()
-        x1_ = x1 / l
-        x2_ = x2 / l
-        return(KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
-
-
 class RhoPiKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, train_p=True,
                  logit_rho0=None, log_p0=None, **kwargs):
