@@ -7,7 +7,8 @@ import torch
 
 from os.path import join
 
-from epik.src.kernel import (VarianceComponentKernel, RhoPiKernel)
+from epik.src.kernel import (VarianceComponentKernel, RhoPiKernel,
+    AdditiveHeteroskedasticKernel)
 from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior, RhosPrior
 from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot,\
     get_full_space_one_hot
@@ -73,6 +74,20 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(d0, exp_d0))
         assert(d1 / d0 == d2 / d1)
     
+    def test_heteroskedastic_kernel(self):
+        l, a = 1, 2
+        x = get_full_space_one_hot(l, a)
+        
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l)
+        cov1 = kernel.forward(x, x)
+        assert(cov1[0, 0] == 0.75)
+        assert(cov1[0, 1] == 0.25)
+        
+        kernel = AdditiveHeteroskedasticKernel(kernel)
+        cov2 = kernel.forward(x, x)
+        assert(cov2[0, 0] < 0.75)
+        assert(cov2[0, 1] < 0.25)
+        
     def test_rho_pi_kernel(self):
         l, a = 1, 2
         kernel = RhoPiKernel(n_alleles=a, seq_length=l)
@@ -476,5 +491,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_rho_kernel']
+    import sys;sys.argv = ['', 'KernelsTests']
     unittest.main()
