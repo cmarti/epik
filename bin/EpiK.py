@@ -9,16 +9,15 @@ from gpytorch.settings import max_cg_iterations
 from gpytorch.kernels import ScaleKernel, RQKernel, LinearKernel
 from gpytorch.kernels.keops import RBFKernel, MaternKernel
 
-from epik.src.kernel import (VarianceComponentKernel, DeltaPKernel,
-                             HetRBFKernel)
-from epik.src.keops import (RhoPiKernel, RhoKernel)
-
-from epik.src.model import EpiK
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 from epik.src.plot import plot_training_history
+from epik.src.model import EpiK
+from epik.src.keops import RhoPiKernel, RhoKernel
+from epik.src.kernel import (VarianceComponentKernel, DeltaPKernel,
+                             HetRBFKernel, AdditiveHeteroskedasticKernel)
 
 
-def select_kernel(kernel, n_alleles, seq_length, dtype, P):
+def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
     if kernel == 'RBF':
         kernel = ScaleKernel(RBFKernel())
     elif kernel == 'ARD':
@@ -46,6 +45,11 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P):
         else:
             msg = 'Unknown kernel provided: {}'.format(kernel)
             raise ValueError(msg)
+
+    if add_het:
+        kernel = AdditiveHeteroskedasticKernel(kernel, n_alleles=n_alleles,
+                                               seq_length=seq_length)
+        
     return(kernel)
 
 
@@ -76,6 +80,8 @@ def main():
                                help='P for Delta(P) prior (2)')
     options_group.add_argument('--params', default=None,
                                help='Model parameters to use for predictions')
+    options_group.add_argument('--het', default=False, action='store_true',
+                               help='Add sequence dependent heteroskedasticity')
     
     comp_group = parser.add_argument_group('Computational options')
     comp_group.add_argument('--gpu', default=False, action='store_true',
@@ -104,6 +110,7 @@ def main():
 #     q = parsed_args.q
     P = parsed_args.P
     params_fpath = parsed_args.params
+    add_het = parsed_args.het
     
     gpu = parsed_args.gpu
     n_devices = parsed_args.n_devices
@@ -138,7 +145,7 @@ def main():
     # Get kernel
     log.write('Selected {} kernel'.format(kernel))
     kernel = select_kernel(kernel, n_alleles, config['seq_length'],
-                           dtype=dtype, P=P)
+                           dtype=dtype, P=P, add_het=add_het)
 
     # Define device
     device = torch.device('cuda') if gpu else None
