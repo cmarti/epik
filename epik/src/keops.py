@@ -63,16 +63,16 @@ class RhoPiKernel(SequenceKernel):
         return(torch.exp(c + (x1_ * x2_).sum(-1)))
 
     def _covar_func(self, x1, x2, **kwargs):
-        c = self.get_c()
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
-        K = (c + (x1_ * x2_).sum(-1)).exp()
+        K = (x1_ * x2_).sum(-1).exp()
         return(K)
     
     def _keops_forward(self, x1, x2, **kwargs):
         f = self.get_factor()
+        c = torch.exp(self.get_c())
         x1_, x2_ = x1 * f, x2 * f
-        return(KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
+        return(c * KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
     
 
 class RhoKernel(RhoPiKernel):
