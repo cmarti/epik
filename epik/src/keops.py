@@ -32,6 +32,9 @@ class RhoPiKernel(SequenceKernel):
         self.log_p0 = log_p0
         self.logit_rho0 = logit_rho0
         self.set_params()
+    
+    def zeros_like(self, x):
+        return(torch.zeros(x.shape).to(dtype=x.dtype, device=x.device))
 
     def set_params(self):
         log_p0 = -torch.ones((self.l, self.alpha)) if self.log_p0 is None else self.log_p0
@@ -39,18 +42,17 @@ class RhoPiKernel(SequenceKernel):
         params = {'logit_rho': Parameter(logit_rho0, requires_grad=True),
                   'log_p': Parameter(log_p0, requires_grad=self.train_p)}
         self.register_params(params)
-        
+    
     def get_factor(self):
-        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
+        log1mrho = torch.logaddexp(self.zeros_like(self.logit_rho), self.logit_rho)
+        log_rho = self.logit_rho + log1mrho
         log_p = self.log_p - torch.logsumexp(self.log_p, axis=1).unsqueeze(1)
-        p = torch.exp(log_p)
-        eta = (1 - p) / p
-        factor = torch.log(1 + eta * rho) - torch.log(1 - rho)
+        log_eta = torch.log(1 - torch.exp(log_p)) - log_p 
+        factor = torch.logaddexp(self.zeros_like(log_rho), log_rho + log_eta) - log1mrho
         return(torch.sqrt(factor.reshape(1, self.t)))
     
     def get_c(self):
-        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
-        return(torch.log(1 - rho).sum())
+        return(-torch.logaddexp(self.zeros_like(self.logit_rho), self.logit_rho).sum())
     
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         f = self.get_factor()
