@@ -157,3 +157,13 @@ def get_full_space_one_hot(seq_length, n_alleles, dtype=torch.float32):
         c = torch.div(c, n_alleles, rounding_mode='floor')
     X = torch.vstack(one_hot).T.to(dtype=dtype)
     return(X)
+
+
+def log1mexp(x):
+    """Numerically accurate evaluation of log(1 - exp(x)) for x < 0.
+    See [Maechler2012accurate]_ for details.
+    """
+    two = torch.tensor([2.], dtype=x.dtype).to(device=x.device)
+    mask = -torch.log(two) < x  # x < 0
+    return(torch.where(mask, (-x.expm1()).log(), (-x.exp()).log1p()))
+

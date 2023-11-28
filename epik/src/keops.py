@@ -5,6 +5,7 @@ from torch.nn import Parameter
 from pykeops.torch import LazyTensor
 from gpytorch.kernels.keops.keops_kernel import KeOpsKernel
 from linear_operator.operators import KernelLinearOperator
+from epik.src.utils import log1mexp
 
 
 class SequenceKernel(KeOpsKernel):
@@ -47,7 +48,7 @@ class RhoPiKernel(SequenceKernel):
         log1mrho = torch.logaddexp(self.zeros_like(self.logit_rho), self.logit_rho)
         log_rho = self.logit_rho + log1mrho
         log_p = self.log_p - torch.logsumexp(self.log_p, axis=1).unsqueeze(1)
-        log_eta = torch.log(1 - torch.exp(log_p)) - log_p 
+        log_eta = log1mexp(log_p) - log_p 
         factor = torch.logaddexp(self.zeros_like(log_rho), log_rho + log_eta) - log1mrho
         return(torch.sqrt(factor.reshape(1, self.t)))
     
