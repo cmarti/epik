@@ -12,7 +12,7 @@ from gpytorch.kernels.keops import RBFKernel, MaternKernel
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 from epik.src.plot import plot_training_history
 from epik.src.model import EpiK
-from epik.src.keops import RhoPiKernel, RhoKernel
+from epik.src.keops import RhoPiKernel, RhoKernel, AdditiveKernel
 from epik.src.kernel import (VarianceComponentKernel, DeltaPKernel,
                              HetRBFKernel, AdditiveHeteroskedasticKernel)
 
@@ -40,6 +40,8 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
                                   dims=n_alleles * seq_length)
         elif kernel == 'VC':
             kernel = VarianceComponentKernel(n_alleles, seq_length, dtype=dtype)
+        elif kernel == 'Additive':
+            kernel = AdditiveKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'DP':
             kernel = DeltaPKernel(n_alleles, seq_length, P=P, dtype=dtype)
         else:
@@ -73,7 +75,7 @@ def main():
 
     options_group = parser.add_argument_group('Kernel options')
     options_group.add_argument('-k', '--kernel', default='VC',
-                               help='Kernel function to use (VC, DP, Connectedness, RhoPi, RBF, ARD, RQ, matern, linear)')
+                               help='Kernel function to use (VC, DP, Connectedness, RhoPi, RBF, ARD, Additive, RQ, matern, linear)')
 #     options_group.add_argument('--q', default=None, type=float,
 #                                help='Probability of leaving under the discrete time chain in sVC prior (l-1)/l')
     options_group.add_argument('-P', '--P', default=2, type=int,
