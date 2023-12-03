@@ -5,6 +5,7 @@ from torch.nn import Parameter
 from pykeops.torch import LazyTensor
 from gpytorch.kernels.keops.keops_kernel import KeOpsKernel
 from linear_operator.operators import KernelLinearOperator
+from epik.src.utils import log1mexp
 
 
 class SequenceKernel(KeOpsKernel):
@@ -32,6 +33,9 @@ class RhoPiKernel(SequenceKernel):
         self.log_p0 = log_p0
         self.logit_rho0 = logit_rho0
         self.set_params()
+    
+    def zeros_like(self, x):
+        return(torch.zeros(x.shape).to(dtype=x.dtype, device=x.device))
 
     def set_params(self):
         log_p0 = -torch.ones((self.l, self.alpha)) if self.log_p0 is None else self.log_p0
@@ -39,18 +43,17 @@ class RhoPiKernel(SequenceKernel):
         params = {'logit_rho': Parameter(logit_rho0, requires_grad=True),
                   'log_p': Parameter(log_p0, requires_grad=self.train_p)}
         self.register_params(params)
-        
+    
     def get_factor(self):
-        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
+        log1mrho = torch.logaddexp(self.zeros_like(self.logit_rho), self.logit_rho)
+        log_rho = self.logit_rho + log1mrho
         log_p = self.log_p - torch.logsumexp(self.log_p, axis=1).unsqueeze(1)
-        p = torch.exp(log_p)
-        eta = (1 - p) / p
-        factor = torch.log(1 + eta * rho) - torch.log(1 - rho)
+        log_eta = log1mexp(log_p) - log_p 
+        factor = torch.logaddexp(self.zeros_like(log_rho), log_rho + log_eta) - log1mrho
         return(torch.sqrt(factor.reshape(1, self.t)))
     
     def get_c(self):
-        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
-        return(torch.log(1 - rho).sum())
+        return(-torch.logaddexp(self.zeros_like(self.logit_rho), self.logit_rho).sum())
     
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         f = self.get_factor()
@@ -60,16 +63,16 @@ class RhoPiKernel(SequenceKernel):
         return(torch.exp(c + (x1_ * x2_).sum(-1)))
 
     def _covar_func(self, x1, x2, **kwargs):
-        c = self.get_c()
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
-        K = (c + (x1_ * x2_).sum(-1)).exp()
+        K = (x1_ * x2_).sum(-1).exp()
         return(K)
     
     def _keops_forward(self, x1, x2, **kwargs):
         f = self.get_factor()
+        c = torch.exp(self.get_c())
         x1_, x2_ = x1 * f, x2 * f
-        return(KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
+        return(c * KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
     
 
 class RhoKernel(RhoPiKernel):
