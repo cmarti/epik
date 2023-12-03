@@ -183,3 +183,68 @@ class DeltaKernel(VarianceComponentKernel):
                   'k': Parameter(k, requires_grad=False)}
         self.register_params(params)
 
+
+class NKKernel(VarianceComponentKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, k=1,
+                 log_lambdas0=None, **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        self.n = self.alpha ** self.l
+        self.log_lambdas0 = log_lambdas0
+        self.set_params()
+    
+    def set_params(self):
+        log_lambdas0 = -torch.arange(self.s) if self.log_lambdas0 is None else self.log_lambdas0
+        log_lambdas0 = log_lambdas0.reshape((self.s, 1))
+        w_kd = self.calc_krawchouk_matrix()
+        d_powers_inv = self.calc_d_powers_matrix_inv()
+        k = torch.arange(self.s).to(dtype=torch.float).reshape(1, 1, self.s)
+        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
+                  'w_kd': Parameter(w_kd, requires_grad=False),
+                  'd_powers_inv': Parameter(d_powers_inv, requires_grad=False),
+                  'k': Parameter(k, requires_grad=False)}
+        self.register_params(params)
+    
+    
+class AdditiveKernel(VarianceComponentKernel): 
+    def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
+        self.n_k = 2
+        super().__init__(n_alleles, seq_length, log_lambdas0=log_lambdas0,
+                         **kwargs)
+    
+    def set_params(self):
+        log_lambdas0 = -torch.arange(self.n_k).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
+        log_lambdas0 = log_lambdas0.reshape((self.n_k, 1))
+        w_kd = self.calc_krawchouk_matrix()
+        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
+                  'w_kd': Parameter(w_kd, requires_grad=False)}
+        self.register_params(params)
+
+    def get_a(self):
+        lambdas = torch.exp(self.log_lambdas)
+        a = self.w_kd[0, 0] * lambdas[0] + self.w_kd[1, 0] * lambdas[1] 
+        return(a)
+    
+    def get_b(self):
+        lambdas = torch.exp(self.log_lambdas)
+        b = - (self.w_kd[1, 0] - self.w_kd[1, 1]) * lambdas[1]
+        return(b)
+
+    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
+        a = self.get_a()
+        b = self.get_b()
+        d = self.l - (x1 @ x2.T)
+        k = a + b * d
+        return(k)
+    
+    def _covar_func(self, x1, x2, **kwargs):
+        a = self.get_a()
+        b = self.get_b()
+        d = self.l - (x1 * x2).sum(-1)
+        k = a + b * d
+        return(k)
+        
+    def _keops_forward(self, x1, x2, **kwargs):
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        return(KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
