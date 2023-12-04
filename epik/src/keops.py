@@ -88,6 +88,16 @@ class VarianceComponentKernel(SequenceKernel):
         self.n = self.alpha ** self.l
         self.log_lambdas0 = log_lambdas0
         self.set_params()
+        
+    def log_factorial(self, x):
+        return(torch.lgamma(x+1))
+    
+    def log_comb(self, n, k):
+        '''
+        from https://stackoverflow.com/questions/4775029/finding-combinatorial-of-large-numbers
+        lngamma(n+1) - lngamma(k+1) - lngamma(n-k+1)
+        '''
+        return(self.log_factorial(n) - self.log_factorial(k) - self.log_factorial(n-k))
     
     def set_params(self):
         log_lambdas0 = -torch.arange(self.s).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
@@ -209,28 +219,28 @@ class NKKernel(VarianceComponentKernel):
         self.register_params(params)
     
     
-class AdditiveKernel(VarianceComponentKernel): 
+class AdditiveKernel(VarianceComponentKernel):
+    '''
+    Note: this kernel is not divided by alpha**l as in VC Kernel
+    ''' 
     def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
-        self.n_k = 2
         super().__init__(n_alleles, seq_length, log_lambdas0=log_lambdas0,
                          **kwargs)
     
     def set_params(self):
-        log_lambdas0 = -torch.arange(self.n_k).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
-        log_lambdas0 = log_lambdas0.reshape((self.n_k, 1))
-        w_kd = self.calc_krawchouk_matrix()
-        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
-                  'w_kd': Parameter(w_kd, requires_grad=False)}
+        log_lambdas0 = -torch.arange(2).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
+        log_lambdas0 = log_lambdas0.reshape((2, 1))
+        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True)}
         self.register_params(params)
 
     def get_a(self):
         lambdas = torch.exp(self.log_lambdas)
-        a = self.w_kd[0, 0] * lambdas[0] + self.w_kd[1, 0] * lambdas[1] 
+        a = lambdas[0] + self.l * (self.alpha - 1)   
         return(a)
     
     def get_b(self):
         lambdas = torch.exp(self.log_lambdas)
-        b = - (self.w_kd[1, 0] - self.w_kd[1, 1]) * lambdas[1]
+        b = - self.alpha * lambdas[1]
         return(b)
 
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
@@ -243,11 +253,11 @@ class AdditiveKernel(VarianceComponentKernel):
     def _covar_func(self, x1, x2, **kwargs):
         a = self.get_a()
         b = self.get_b()
-        d = self.l - (x1 * x2).sum(-1)
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        d = self.l - (x1_ * x2_).sum(-1)
         k = a + b * d
         return(k)
         
     def _keops_forward(self, x1, x2, **kwargs):
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-        return(KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
+        return(KernelLinearOperator(x1, x2, covar_func=self._covar_func, **kwargs))

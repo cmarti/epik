@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from epik.src.keops import (RhoPiKernel, RhoKernel, VarianceComponentKernel,
-                            HetRBFKernel)
+                            AdditiveKernel)
 from epik.src.utils import get_full_space_one_hot
 from pykeops.torch import LazyTensor
 
@@ -103,8 +103,23 @@ class KernelsTests(unittest.TestCase):
         cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
         cov2 = kernel._keops_forward(x, x).detach().numpy()
         assert(np.allclose(cov1, cov2))
+    
+    def test_additive_kernel(self):
+        l, a = 2, 2
+        I = torch.eye(a ** l)
+        x = get_full_space_one_hot(l, a)
+        
+        # Additive kernel
+        log_lambdas0 = torch.tensor([-10., 0])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1[0], [2, 0, 0, -2], atol=0.01))
+        
+        k = kernel._keops_forward(x, x)
+        cov2 = (k @ I).detach().numpy()
+        assert(np.allclose(cov1, cov2))
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_rho_kernel']
+    import sys;sys.argv = ['', 'KernelsTests']
     unittest.main()
