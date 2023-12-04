@@ -230,17 +230,19 @@ class AdditiveKernel(VarianceComponentKernel):
     def set_params(self):
         log_lambdas0 = -torch.arange(2).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
         log_lambdas0 = log_lambdas0.reshape((2, 1))
-        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True)}
+        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
+                  'l_raw': Parameter(torch.tensor([self.l]), requires_grad=False),
+                  'alpha_raw': Parameter(torch.tensor([self.alpha]), requires_grad=False)}
         self.register_params(params)
 
     def get_a(self):
         lambdas = torch.exp(self.log_lambdas)
-        a = lambdas[0] + self.l * (self.alpha - 1)   
+        a = lambdas[0] + self.l_raw * (self.alpha_raw - 1) * lambdas[1]   
         return(a)
     
     def get_b(self):
-        lambdas = torch.exp(self.log_lambdas)
-        b = - self.alpha * lambdas[1]
+        lambda1 = torch.exp(self.log_lambdas[1])
+        b = -self.alpha_raw * lambda1
         return(b)
 
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):

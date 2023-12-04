@@ -13,7 +13,6 @@ from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior, RhosPrior
 from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot,\
     get_full_space_one_hot
 from epik.src.settings import TEST_DATA_DIR
-from build.lib.epik.src.kernel import ConnectednessKernel
 
 
 
