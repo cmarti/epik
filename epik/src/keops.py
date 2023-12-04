@@ -237,7 +237,7 @@ class AdditiveKernel(VarianceComponentKernel):
 
     def get_a(self):
         lambdas = torch.exp(self.log_lambdas)
-        a = lambdas[0] + self.l_raw * (self.alpha_raw - 1) * lambdas[1]   
+        a = lambdas[0] - self.l_raw * lambdas[1]    
         return(a)
     
     def get_b(self):
@@ -248,8 +248,7 @@ class AdditiveKernel(VarianceComponentKernel):
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         a = self.get_a()
         b = self.get_b()
-        d = self.l - (x1 @ x2.T)
-        k = a + b * d
+        k = a - b * (x1 @ x2.T)
         return(k)
     
     def _covar_func(self, x1, x2, **kwargs):
@@ -257,8 +256,7 @@ class AdditiveKernel(VarianceComponentKernel):
         b = self.get_b()
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
-        d = self.l - (x1_ * x2_).sum(-1)
-        k = a + b * d
+        k = a - b * (x1_ * x2_).sum(-1)
         return(k)
         
     def _keops_forward(self, x1, x2, **kwargs):
