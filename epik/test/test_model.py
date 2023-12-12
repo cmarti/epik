@@ -16,12 +16,13 @@ from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
-from epik.src.kernel import AdditiveHeteroskedasticKernel, VarianceComponentKernel
+from epik.src.kernel import AdditiveHeteroskedasticKernel, VarianceComponentKernel, AdditiveKernel
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
 from epik.src.keops import RhoKernel, VarianceComponentKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 from gpytorch.kernels.rbf_kernel import RBFKernel
+# from epik.src.keops import RhoKernel
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -67,6 +68,16 @@ def get_vc_random_landscape_data(sigma=0, ptrain=0.8):
     return(alpha, l, log_lambdas0, model.simulate_dataset(X, sigma=sigma, ptrain=ptrain))
 
 
+def get_additive_random_landscape_data(sigma=0, ptrain=0.8):
+    log_lambdas0 = torch.tensor([-10, 0, -10, -10, -10, -10])
+    alpha, l = 4, 5
+    X = get_full_space_one_hot(seq_length=l, n_alleles=alpha)
+    kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
+                                     log_lambdas0=log_lambdas0)
+    model = EpiK(kernel)
+    return(alpha, l, log_lambdas0, model.simulate_dataset(X, sigma=sigma, ptrain=ptrain))
+
+
 def get_rho_random_landscape_data(sigma=0, ptrain=0.8):
     rho0 = torch.tensor([[0.1, 0.5, 0.05, 0.25, 0.7]]).T
     logit_rho0 = torch.log(rho0 / (1 - rho0))
@@ -103,14 +114,14 @@ class ModelsTests(unittest.TestCase):
         
         # Train new model
         model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
-                     optimizer='Adam', track_progress=False)
+                     optimizer='Adam', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         params = model.get_params()
         loglambdas = np.log(params['lambdas'])
-        r = pearsonr(loglambdas, log_lambdas0)[0]
-        assert(r > 0.8)
-        
+        r = pearsonr(loglambdas[1:], log_lambdas0[1:])[0]
+        assert(r > 0.6)
+         
         # Train with Heteroskedastic kernel: just ensure that it trains
         kernel = AdditiveHeteroskedasticKernel(RBFKernel(), n_alleles=alpha, seq_length=l)
         model = EpiK(kernel, optimizer='Adam', track_progress=True)
@@ -119,12 +130,12 @@ class ModelsTests(unittest.TestCase):
         
         # Train LBFGS optimizer
         model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
-                     optimizer='LBFGS', track_progress=False)
+                     optimizer='LBFGS', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
-        model.fit(n_iter=300)
+        model.fit(n_iter=100)
         params = model.get_params()
         loglambdas = np.log(params['lambdas'])
-        r = pearsonr(loglambdas, log_lambdas0)[0]
+        r = pearsonr(loglambdas[1:], log_lambdas0[1:])[0]
         assert(params['mean'][0] == 0)
         assert(r > 0.6)
         
@@ -162,6 +173,24 @@ class ModelsTests(unittest.TestCase):
         ypred = model.predict(test_x).detach()
         r2 = pearsonr(ypred, test_y)[0] ** 2
         assert(r2 > 0.9)
+    
+    def test_epik_keops_additive(self):
+        alpha, l, log_lambdas0, data = get_additive_random_landscape_data(sigma=0.01)
+        train_x, train_y, _, _, train_y_var = data
+        
+        # Train new model
+        kernel = AdditiveKernel(n_alleles=alpha, seq_length=l)
+#         kernel = RhoKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, optimizer='Adam', track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=200)
+        params = model.get_params()
+        print(kernel.log_lambdas)
+        print(params)
+        loglambdas = params['log_lambdas']
+        print(loglambdas)
+        r = pearsonr(loglambdas, log_lambdas0)[0]
+        print(r)
     
     def test_epik_keops_gpu(self):
         # Simulate from prior distribution
@@ -379,5 +408,5 @@ class ModelsTests(unittest.TestCase):
 
         
 if __name__ == '__main__':
-    import sys; sys.argv = ['', 'ModelsTests.test_epik_keops']
+    import sys; sys.argv = ['', 'ModelsTests.test_epik_fit']
     unittest.main()

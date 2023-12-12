@@ -7,7 +7,7 @@ import torch
 from epik.src.keops import (RhoPiKernel, RhoKernel, VarianceComponentKernel,
                             AdditiveKernel)
 from epik.src.utils import get_full_space_one_hot
-from pykeops.torch import LazyTensor
+
 
 
 class KernelsTests(unittest.TestCase):
@@ -93,24 +93,46 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(cov1, cov2))
         assert(np.allclose(cov1, cov3))
         
-    def test_het_rbf_kernel(self):
-        l, a = 2, 2
+    def test_additive_kernel(self):
+        l, a = 1, 2
+        I = torch.eye(a ** l)
         x = get_full_space_one_hot(l, a)
         
-        # Constant kernel
-        log_ds0 = torch.log(torch.tensor([1, 2, 1, 2]))
-        kernel = HetRBFKernel(n_alleles=a, seq_length=l, log_ds0=log_ds0)
+        # Additive kernel with lambdas1 = 0 should return a constant matrix
+        log_lambdas0 = torch.tensor([0., -10])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        cov2 = kernel._keops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, 1, atol=0.01))
+        
+        k = kernel._keops_forward(x, x)
+        cov2 = (k @ I).detach().numpy()
+        assert(np.allclose(cov1, cov2, atol=0.01))
+        
+        # Additive kernel with lambdas = 1 should return the identity
+        log_lambdas0 = torch.tensor([0., 0])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, I, atol=0.01))
+        
+        k = kernel._keops_forward(x, x)
+        cov2 = (k @ I).detach().numpy()
         assert(np.allclose(cov1, cov2))
-    
-    def test_additive_kernel(self):
+        
         l, a = 2, 2
         I = torch.eye(a ** l)
         x = get_full_space_one_hot(l, a)
         
         # Additive kernel
         log_lambdas0 = torch.tensor([-10., 0])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1[0], [1, 0, 0, -1], atol=0.01))
+        
+        k = kernel._keops_forward(x, x)
+        cov2 = (k @ I).detach().numpy()
+        assert(np.allclose(cov1, cov2))
+        
+        log_lambdas0 = torch.tensor([-10., np.log(2)]).to(dtype=torch.float32)
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
         assert(np.allclose(cov1[0], [2, 0, 0, -2], atol=0.01))
@@ -121,5 +143,5 @@ class KernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests']
+    import sys;sys.argv = ['', 'KernelsTests.test_additive_kernel']
     unittest.main()
