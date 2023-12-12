@@ -120,51 +120,33 @@ class AdditiveHeteroskedasticKernel(SequenceKernel):
         return self.base_kernel.prediction_strategy(train_inputs, train_prior_dist, train_labels, likelihood)
 
 
-
-class HetRBFKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, dims=1, train_het=True,
-                 log_lengthscale0=None, log_ds0=None, **kwargs):
+class AdditiveKernel(SequenceKernel):
+    def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
-        self.dims = dims
-        self.train_het = train_het
-        self.log_ds0 = log_ds0
-        self.log_lengthscale0 = log_lengthscale0
+        self.log_lambdas0 = log_lambdas0
         self.set_params()
-
+    
+    def get_matrix(self):
+        m = torch.tensor([[1, -1], [0., self.alpha - 1]])
+        return(m)  
+    
     def set_params(self):
-        log_lengthscale0 = torch.zeros((1, 1, self.dims)) if self.log_lengthscale0 is None else self.log_lengthscale0
-        
-        theta = torch.zeros((self.l, self.alpha)) if self.log_ds0 is None else self.log_ds0
-        params = {'log_lengthscale': Parameter(log_lengthscale0, requires_grad=True),
-                  'theta': Parameter(theta, requires_grad=self.train_het),
-                  'theta0': Parameter(torch.zeros((1,)), requires_grad=self.train_het),
-                  }
+        log_lambdas0 = torch.tensor([0, 0.]) if self.log_lambdas0 is None else self.log_lambdas0
+        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
+                  'm': Parameter(self.get_matrix(), requires_grad=False)}
         self.register_params(params)
-        
-    def get_lengthscale(self):
-        return(torch.exp(self.log_lengthscale))
     
-    def get_theta(self):
-        t = self.theta
-        return(t - t.mean(1).unsqueeze(1))
-    
-    def get_theta0(self):
-        return(self.theta0)
-    
-    def f(self, x, theta0, theta, a=1, b=1):
-        phi = theta0 + (x * theta.reshape(1, 1, self.l * self.alpha)).sum(-1)
-        r = a + b * torch.exp(phi) / (1 + torch.exp(phi))
-        return(r)
+    def lambdas_to_coeffs(self, lambdas):
+        print(lambdas.detach().numpy())
+        coeffs = self.m @ lambdas
+        return(coeffs)
+
+    def get_coeffs(self):
+        return(self.lambdas_to_coeffs(torch.exp(self.log_lambdas)))
     
     def forward(self, x1, x2, diag=False, **kwargs):
-        l = self.get_lengthscale()
-        theta = self.get_theta()
-        theta0 = self.get_theta0()
-        x1_, x2_ = x1[..., :, None, :], x2[..., None, :, :]
-        f1 = self.f(x1_, theta0=theta0, theta=theta)
-        f2 = self.f(x2_, theta0=theta0, theta=theta)
-        k = torch.exp((l * x1_ * x2_).sum(-1)) * f1 * f2
-        return(k)
+        coeffs = self.get_coeffs()
+        return(coeffs[0] + coeffs[1] * (x1 @ x2.T))
 
 
 class LambdasKernel(SequenceKernel):

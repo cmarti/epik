@@ -72,6 +72,7 @@ class RhoPiKernel(SequenceKernel):
         f = self.get_factor()
         c = torch.exp(self.get_c())
         x1_, x2_ = x1 * f, x2 * f
+        print(c)
         return(c * KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
     
 
@@ -219,45 +220,44 @@ class NKKernel(VarianceComponentKernel):
         self.register_params(params)
     
     
-class AdditiveKernel(VarianceComponentKernel):
-    '''
-    Note: this kernel is not divided by alpha**l as in VC Kernel
-    ''' 
+class AdditiveKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
-        super().__init__(n_alleles, seq_length, log_lambdas0=log_lambdas0,
-                         **kwargs)
+        super().__init__(n_alleles, seq_length, **kwargs)
+        self.log_lambdas0 = log_lambdas0
+        self.set_params()
+    
+    def get_matrix(self):
+        m = torch.tensor([[1, -1], [0., self.alpha - 1]])
+        return(m)  
     
     def set_params(self):
-        log_lambdas0 = -torch.arange(2).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
-        log_lambdas0 = log_lambdas0.reshape((2, 1))
+        log_lambdas0 = torch.tensor([0, 0.]) if self.log_lambdas0 is None else self.log_lambdas0
         params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
-                  'l_raw': Parameter(torch.tensor([self.l]), requires_grad=False),
-                  'alpha_raw': Parameter(torch.tensor([self.alpha]), requires_grad=False)}
+                  'm': Parameter(self.get_matrix(), requires_grad=False)}
         self.register_params(params)
-
-    def get_a(self):
-        lambdas = torch.exp(self.log_lambdas)
-        a = lambdas[0] - self.l_raw * lambdas[1]    
-        return(a)
     
-    def get_b(self):
-        lambda1 = torch.exp(self.log_lambdas[1])
-        b = -self.alpha_raw * lambda1
-        return(b)
+    def lambdas_to_coeffs(self, lambdas):
+        print(lambdas.detach().numpy())
+        coeffs = self.m @ lambdas
+        return(coeffs)
 
+    def get_coeffs(self):
+        return(self.lambdas_to_coeffs(torch.exp(self.log_lambdas)))
+    
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
-        a = self.get_a()
-        b = self.get_b()
-        k = a - b * (x1 @ x2.T)
-        return(k)
-    
+        coeffs = self.get_coeffs()
+        x1_ = x1[..., :, None, :]
+        x2_ = x2[..., None, :, :]
+        return(coeffs[0] + coeffs[1] * (x1_ * x2_).sum(-1))
+
     def _covar_func(self, x1, x2, **kwargs):
-        a = self.get_a()
-        b = self.get_b()
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
-        k = a - b * (x1_ * x2_).sum(-1)
-        return(k)
-        
+        K = (x1_ * x2_).sum(-1)
+        return(K)
+    
     def _keops_forward(self, x1, x2, **kwargs):
-        return(KernelLinearOperator(x1, x2, covar_func=self._covar_func, **kwargs))
+        coeffs = self.get_coeffs()
+        K1 = KernelLinearOperator(x1, x2, covar_func=self._covar_func, **kwargs)
+        K0 = torch.ones((x1.shape[0], x2.shape[0]), dtype=x1.dtype, device=x1.device)
+        return(coeffs[0] * K0 + coeffs[1] * K1)
