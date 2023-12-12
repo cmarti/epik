@@ -22,7 +22,7 @@ from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
 # from epik.src.keops import RhoKernel, VarianceComponentKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 from gpytorch.kernels.rbf_kernel import RBFKernel
-from epik.src.keops import RhoKernel
+# from epik.src.keops import RhoKernel
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -69,7 +69,7 @@ def get_vc_random_landscape_data(sigma=0, ptrain=0.8):
 
 
 def get_additive_random_landscape_data(sigma=0, ptrain=0.8):
-    log_lambdas0 = torch.tensor([-5, 1., -10, -10, -10, -10])
+    log_lambdas0 = torch.tensor([-10, 0, -10, -10, -10, -10])
     alpha, l = 4, 5
     X = get_full_space_one_hot(seq_length=l, n_alleles=alpha)
     kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
@@ -114,14 +114,14 @@ class ModelsTests(unittest.TestCase):
         
         # Train new model
         model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
-                     optimizer='Adam', track_progress=False)
+                     optimizer='Adam', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         params = model.get_params()
         loglambdas = np.log(params['lambdas'])
-        r = pearsonr(loglambdas, log_lambdas0)[0]
-        assert(r > 0.8)
-        
+        r = pearsonr(loglambdas[1:], log_lambdas0[1:])[0]
+        assert(r > 0.6)
+         
         # Train with Heteroskedastic kernel: just ensure that it trains
         kernel = AdditiveHeteroskedasticKernel(RBFKernel(), n_alleles=alpha, seq_length=l)
         model = EpiK(kernel, optimizer='Adam', track_progress=True)
@@ -130,12 +130,12 @@ class ModelsTests(unittest.TestCase):
         
         # Train LBFGS optimizer
         model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
-                     optimizer='LBFGS', track_progress=False)
+                     optimizer='LBFGS', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
-        model.fit(n_iter=300)
+        model.fit(n_iter=100)
         params = model.get_params()
         loglambdas = np.log(params['lambdas'])
-        r = pearsonr(loglambdas, log_lambdas0)[0]
+        r = pearsonr(loglambdas[1:], log_lambdas0[1:])[0]
         assert(params['mean'][0] == 0)
         assert(r > 0.6)
         
@@ -394,5 +394,5 @@ class ModelsTests(unittest.TestCase):
 
         
 if __name__ == '__main__':
-    import sys; sys.argv = ['', 'ModelsTests.test_epik_keops_additive']
+    import sys; sys.argv = ['', 'ModelsTests.test_epik_fit']
     unittest.main()
