@@ -72,7 +72,6 @@ class RhoPiKernel(SequenceKernel):
         f = self.get_factor()
         c = torch.exp(self.get_c())
         x1_, x2_ = x1 * f, x2 * f
-        print(c)
         return(c * KernelLinearOperator(x1_, x2_, covar_func=self._covar_func, **kwargs))
     
 
@@ -198,28 +197,6 @@ class DeltaKernel(VarianceComponentKernel):
         self.register_params(params)
 
 
-class NKKernel(VarianceComponentKernel):
-    is_stationary = True
-    def __init__(self, n_alleles, seq_length, k=1,
-                 log_lambdas0=None, **kwargs):
-        super().__init__(n_alleles, seq_length, **kwargs)
-        self.n = self.alpha ** self.l
-        self.log_lambdas0 = log_lambdas0
-        self.set_params()
-    
-    def set_params(self):
-        log_lambdas0 = -torch.arange(self.s) if self.log_lambdas0 is None else self.log_lambdas0
-        log_lambdas0 = log_lambdas0.reshape((self.s, 1))
-        w_kd = self.calc_krawchouk_matrix()
-        d_powers_inv = self.calc_d_powers_matrix_inv()
-        k = torch.arange(self.s).to(dtype=torch.float).reshape(1, 1, self.s)
-        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
-                  'w_kd': Parameter(w_kd, requires_grad=False),
-                  'd_powers_inv': Parameter(d_powers_inv, requires_grad=False),
-                  'k': Parameter(k, requires_grad=False)}
-        self.register_params(params)
-    
-    
 class AdditiveKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
@@ -227,7 +204,8 @@ class AdditiveKernel(SequenceKernel):
         self.set_params()
     
     def get_matrix(self):
-        m = torch.tensor([[1, -1], [0., self.alpha - 1]])
+        m = torch.tensor([[1, -self.l],
+                          [0., self.alpha]])
         return(m)  
     
     def set_params(self):
@@ -237,7 +215,6 @@ class AdditiveKernel(SequenceKernel):
         self.register_params(params)
     
     def lambdas_to_coeffs(self, lambdas):
-        print(lambdas.detach().numpy())
         coeffs = self.m @ lambdas
         return(coeffs)
 

@@ -4,120 +4,12 @@ import torch as torch
 from itertools import combinations
 from scipy.special._basic import comb
 from torch.nn import Parameter
-from gpytorch.kernels.kernel import Kernel
-from gpytorch.lazy.lazy_tensor import delazify
 
 from epik.src.utils import get_tensor
+from epik.src.kernel.base import SequenceKernel
 from epik.src.priors import (LambdasFlatPrior, LambdasDeltaPrior, RhosPrior,
                              AllelesProbPrior)
 
-
-
-class SequenceKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, dtype=torch.float32, **kwargs):
-        self.alpha = n_alleles
-        self.l = seq_length
-        self.s = self.l + 1
-        self.t = self.l * self.alpha
-        self.fdtype = dtype
-        self.n = float(self.alpha ** self.l)
-        super().__init__(**kwargs)
-    
-    def register_params(self, params={}, constraints={}):
-        self.params = params
-        for param_name, param in params.items():
-            self.register_parameter(name=param_name, parameter=param)
-            
-        for param_name, constraint in constraints.items():
-            self.register_constraint(param_name, constraint)
-    
-    def inner_product(self, x1, x2, metric=None, diag=False):
-        if metric is None:
-            metric = torch.eye(x2.shape[1], dtype=x2.dtype, device=x2.device)
-            
-        if diag:
-            min_size = min(x1.shape[0], x2.shape[0])
-            return((torch.matmul(x1[:min_size, :], metric) * x2[:min_size, :]).sum(1))
-        else:
-            return(torch.matmul(x1, torch.matmul(metric, x2.T)))
-    
-    def calc_hamming_distance(self, x1, x2):
-        return(self.l - self.inner_product(x1, x2))
-    
-
-class AdditiveHeteroskedasticKernel(SequenceKernel):
-    @property
-    def is_stationary(self) -> bool:
-        return self.base_kernel.is_stationary
-
-    def __init__( self, base_kernel, n_alleles=None, seq_length=None,
-                  log_ds0=None, a=0.5, **kwargs):
-        if base_kernel.active_dims is not None:
-            kwargs["active_dims"] = base_kernel.active_dims
-        
-        if hasattr(base_kernel, 'alpha'):
-            n_alleles = base_kernel.alpha
-        else:
-            if n_alleles is None:
-                msg = 'If the base kernel does not have n_alleles attribute, '
-                msg += 'it should be provided'
-                raise ValueError(msg)
-        
-        if hasattr(base_kernel, 'l'):
-            seq_length = base_kernel.l
-        else:
-            if seq_length is None:
-                msg = 'If the base kernel does not have seq_length attribute, '
-                msg += 'it should be provided'
-                raise ValueError(msg)
-        
-        super().__init__(n_alleles, seq_length, **kwargs)
-        self.log_ds0 = log_ds0
-        self.a = a
-        self.set_params()
-        self.base_kernel = base_kernel
-
-    def set_params(self):
-        theta = torch.zeros((self.l, self.alpha)) if self.log_ds0 is None else self.log_ds0
-        params = {'theta': Parameter(theta, requires_grad=True),
-                  'theta0': Parameter(5 * torch.ones((1,)), requires_grad=True)}
-        self.register_params(params)
-        
-    def get_theta(self):
-        t = self.theta
-        return(t - t.mean(1).unsqueeze(1))
-    
-    def get_theta0(self):
-        return(self.theta0)
-    
-    def f(self, x, theta0, theta, a=0, b=1):
-        phi = theta0 + (x * theta.reshape(1, 1, self.l * self.alpha)).sum(-1)
-        r = a + (b - a) * torch.exp(phi) / (1 + torch.exp(phi))
-        return(r)
-    
-    def forward(self, x1, x2, last_dim_is_batch=False, diag=False, **params):
-        orig_output = self.base_kernel.forward(x1, x2, diag=diag,
-                                               last_dim_is_batch=last_dim_is_batch,
-                                               **params)
-        theta0, theta = self.get_theta0(), self.get_theta()
-        f1 = self.f(x1, theta0, theta, a=self.a).T
-        f2 = self.f(x2, theta0, theta, a=self.a)
-        
-        if last_dim_is_batch:
-            f1 = f1.unsqueeze(-1)
-            f2 = f2.unsqueeze(-1)
-        if diag:
-            f1 = f1.unsqueeze(-1)
-            f2 = f2.unsqueeze(-1)
-            return(f1 * f2 * delazify(orig_output))
-        else:
-            return(f1 * f2 * orig_output)
-
-    def num_outputs_per_input(self, x1, x2):
-        return self.base_kernel.num_outputs_per_input(x1, x2)
-
-    def prediction_strategy(self, train_inputs, train_prior_dist, train_labels, likelihood):
-        return self.base_kernel.prediction_strategy(train_inputs, train_prior_dist, train_labels, likelihood)
 
 
 class AdditiveKernel(SequenceKernel):
@@ -127,7 +19,7 @@ class AdditiveKernel(SequenceKernel):
         self.set_params()
     
     def get_matrix(self):
-        m = torch.tensor([[1, -1], [0., self.alpha - 1]])
+        m = torch.tensor([[1, -self.l], [0., self.alpha]])
         return(m)  
     
     def set_params(self):
@@ -137,7 +29,6 @@ class AdditiveKernel(SequenceKernel):
         self.register_params(params)
     
     def lambdas_to_coeffs(self, lambdas):
-        print(lambdas.detach().numpy())
         coeffs = self.m @ lambdas
         return(coeffs)
 
@@ -149,7 +40,7 @@ class AdditiveKernel(SequenceKernel):
         return(coeffs[0] + coeffs[1] * (x1 @ x2.T))
 
 
-class LambdasKernel(SequenceKernel):
+class _LambdasKernel(SequenceKernel):
     def calc_polynomial_coeffs(self):
         lambdas = self.lambdas_p
         
@@ -180,7 +71,7 @@ class LambdasKernel(SequenceKernel):
         self.lambdas_prior.set(self)
 
 
-class VarianceComponentKernel(LambdasKernel):
+class VarianceComponentKernel(_LambdasKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, lambdas_prior=None,
                  **kwargs):
@@ -207,7 +98,7 @@ class VarianceComponentKernel(LambdasKernel):
         return(get_tensor(w_kd))
     
     def _forward(self, x1, x2, lambdas, diag=False):
-        w_d = torch.matmul(self.krawchouk_matrix, lambdas)
+        w_d = self.krawchouk_matrix @ lambdas
         hamming_dist = self.calc_hamming_distance(x1, x2).to(dtype=torch.long)
         kernel = w_d[0] * (hamming_dist == 0)
         for d in range(1, self.s):
@@ -245,7 +136,7 @@ class _GeneralizedSiteProductKernel(SequenceKernel):
         return(self.rho_prior.get_rho(self))
 
 
-class ConnectednessKernel(_GeneralizedSiteProductKernel):
+class RhoKernel(_GeneralizedSiteProductKernel):
     is_stationary = True
     def _forward(self, x1, x2, rho, diag=False):
         # TODO: make sure diag works here
@@ -307,7 +198,7 @@ class RhoPiKernel(_GeneralizedSiteProductKernel, _PiKernel):
         return({'rho': self.rho, 'beta': self.beta})
 
 
-class SkewedVCKernel(LambdasKernel, _PiKernel):
+class SkewedVCKernel(_LambdasKernel, _PiKernel):
     is_stationary = False
     def __init__(self, n_alleles, seq_length,
                  lambdas_prior=None, p_prior=None, q=None, **kwargs):
@@ -384,81 +275,3 @@ class SkewedVCKernel(LambdasKernel, _PiKernel):
     
     def get_params(self):
         return({'lambdas': self.lambdas, 'beta': self.beta})
-
-
-##########################################
-######### Diploid kernels ################
-##########################################
-
-
-class DiploidKernel(SequenceKernel):
-    is_stationary = True
-    def __init__(self, **kwargs):
-        super().__init__(n_alleles=2, seq_length=0, **kwargs)
-        self.define_kernel_params()
-    
-    def define_kernel_params(self):
-#         constraints = {'raw_log_lda': LessThan(upper_bound=0.),
-#                        'raw_log_eta': LessThan(upper_bound=0.)}
-        params = {'raw_log_lda': Parameter(torch.zeros(1)),
-                  'raw_log_eta': Parameter(torch.zeros(1)),
-                  'raw_log_mu': Parameter(torch.zeros(1))}
-        self.register_params(params=params) #constraints=constraints
-    
-    @property
-    def mu(self):
-        return(torch.exp(self.raw_log_mu))
-    
-    @property
-    def lda(self):
-#         return(torch.exp(self.raw_log_lda_constraint.transform(self.raw_log_lda)))
-        return(torch.exp(self.raw_log_lda))
-
-    @property
-    def eta(self):
-#         return(torch.exp(self.raw_log_eta_constraint.transform(self.raw_log_eta)))
-        return(torch.exp(self.raw_log_eta))
-
-    def dist(self, x1, x2):
-        return(x1.matmul(x2.transpose(-2, -1)))
-    
-    def calc_distance_classes(self, x1, x2):
-        l = x1.shape[1]
-        s1 = self.dist(x1[:, :, 1], x2[:, :, 1])
-        s2 = self.dist(x1[:, :, 0], x2[:, :, 0]) + self.dist(x1[:, :, 2], x2[:, :, 2])
-        d2 = self.dist(x1[:, :, 0], x2[:, :, 2]) + self.dist(x1[:, :, 2], x2[:, :, 0])
-        d1 = l - s1 - s2 - d2
-        return(s2, d2, s1, d1)
-    
-    def _forward(self, x1, x2, mu, lda, eta):
-        s2, d2, s1, d1 = self.calc_distance_classes(x1, x2)
-        kernel = ((mu + 2 * lda + eta)**s2) * ((mu - 2 * lda + eta)**d2) * ((mu + eta)**s1) * ((mu - eta)**d1)
-        return(kernel)
-
-    def forward(self, x1, x2, **params):
-        kernel = self._forward(x1, x2, self.mu, self.lda, self.eta)
-        return(kernel)
-
-
-class GeneralizedDiploidKernel(DiploidKernel):
-    def __init__(self, seq_length, **kwargs):
-        super().__init__(seq_length=seq_length, **kwargs)
-        self.define_kernel_params()
-    
-    def define_kernel_params(self):
-        super().define_kernel_params()
-        params = {'raw_logit_p': Parameter(torch.zeros(1))}
-        self.register_params(params=params)
-    
-    @property
-    def odds(self):
-        return(torch.exp(self.raw_logit_p))
-    
-    def _forward(self, x1, x2, mu, lda, eta, odds):
-        s2, d2, s1, d1 = self.calc_distance_classes(x1, x2)
-        kernel = (mu + (1 + odds) * lda + odds * eta)**s2 * (mu - (1 + odds) * lda + odds * eta)**d2 * (mu + odds * eta)**s1 * (mu - eta)**d1
-        return(kernel)
-
-    def forward(self, x1, x2, **params):
-        kernel = self._forward(x1, x2, self.mu, self.lda, self.eta, self.odds)
-        return(kernel)

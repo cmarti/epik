@@ -12,32 +12,29 @@ from gpytorch.kernels.keops import RBFKernel, MaternKernel
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 from epik.src.plot import plot_training_history
 from epik.src.model import EpiK
-from epik.src.keops import RhoPiKernel, RhoKernel, AdditiveKernel
-from epik.src.kernel import (VarianceComponentKernel, DeltaPKernel,
-                             HetRBFKernel, AdditiveHeteroskedasticKernel)
+from epik.src.kernel.base import AdditiveHeteroskedasticKernel
+from epik.src.kernel.keops import RhoPiKernel, RhoKernel, AdditiveKernel
+from epik.src.kernel.haploid import VarianceComponentKernel, DeltaPKernel
 
 
 def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
+    is_cor_kernel = False
     if kernel == 'RBF':
-        kernel = ScaleKernel(RBFKernel())
+        kernel = RBFKernel()
     elif kernel == 'ARD':
-        kernel = ScaleKernel(RBFKernel(ard_num_dims=n_alleles * seq_length))
+        kernel = RBFKernel(ard_num_dims=n_alleles * seq_length)
     elif kernel == 'matern':
-        kernel = ScaleKernel(MaternKernel())
+        kernel = MaternKernel()
     elif kernel == 'RQ':
-        kernel = ScaleKernel(RQKernel())
+        kernel = RQKernel()
     elif kernel == 'linear':
-        kernel = ScaleKernel(LinearKernel())
+        kernel = LinearKernel()
     else:
+        is_cor_kernel = False
         if kernel == 'Connectedness' or kernel == 'Rho':
             kernel = RhoKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'RhoPi':
             kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype)
-        elif kernel == 'HetRBF':
-            kernel = HetRBFKernel(n_alleles, seq_length, dtype=dtype)
-        elif kernel == 'HetARD':
-            kernel = HetRBFKernel(n_alleles, seq_length, dtype=dtype,
-                                  dims=n_alleles * seq_length)
         elif kernel == 'VC':
             kernel = VarianceComponentKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'Additive':
@@ -51,6 +48,8 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
     if add_het:
         kernel = AdditiveHeteroskedasticKernel(kernel, n_alleles=n_alleles,
                                                seq_length=seq_length)
+    elif is_cor_kernel:
+        kernel = ScaleKernel(kernel)
         
     return(kernel)
 

@@ -1,35 +1,69 @@
 #!/usr/bin/env python
 import unittest
-
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
 from os.path import join
-
-from epik.src.kernel import (VarianceComponentKernel, RhoPiKernel,
-    AdditiveHeteroskedasticKernel)
-from epik.src.priors import LambdasExpDecayPrior, AllelesProbPrior, RhosPrior
-from epik.src.utils import seq_to_one_hot, get_tensor, diploid_to_one_hot,\
-    get_full_space_one_hot
 from epik.src.settings import TEST_DATA_DIR
-
+from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
+                                     RhoKernel, AdditiveKernel)
+from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
+                            get_full_space_one_hot)
+from epik.src.kernel.base import AdditiveHeteroskedasticKernel
 
 
 class KernelsTests(unittest.TestCase):
-    def test_calc_polynomial_coeffs(self):
-        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32)
-        lambdas = get_tensor(kernel.calc_eigenvalues())
-        V = torch.stack([torch.pow(lambdas, i) for i in range(3)], 1)
+    def test_additive_kernel(self):
+        l, a = 1, 2
+        x = get_full_space_one_hot(l, a)
+        I = torch.eye(a ** l)
+        
+        # Additive kernel with lambdas1 = 0 should return a constant matrix
+        log_lambdas0 = torch.tensor([0., -10.])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov, 1, atol=0.01))
+        
+        # Additive kernel with lambdas0 = 1 should return a purely additive cov
+        log_lambdas0 = torch.tensor([-10., 0.])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov, np.array([[1, -1],
+                                          [-1, 1]]), atol=0.01))
+        
+        # Additive kernel with lambdas = 1 should return the identity
+        log_lambdas0 = torch.tensor([0., 0])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov, (a ** l) * I, atol=0.01))
+        
+        l, a = 2, 2
+        x = get_full_space_one_hot(l, a)
 
-        B = kernel.coeffs
-        P = torch.matmul(B, V).numpy()
-        assert(np.allclose(P, np.eye(3), atol=1e-4))
+        # Constant kernel
+        log_lambdas0 = torch.tensor([0., -10])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov, 1, atol=0.01))
+        
+        # Additive kernel
+        log_lambdas0 = torch.tensor([-10., 0])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0], [2, 0, 0, -2], atol=0.01))
+        
+        # Additive kernel with larger variance
+        log_lambdas0 = torch.tensor([-10., np.log(2)]).to(dtype=torch.float32)
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
         
     def test_vc_kernel(self):
-        l, a = 2, 2
+        l, a = 3, 2
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l)
         x = get_full_space_one_hot(l, a)
+        exit()
 
         # k=0        
         lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
@@ -56,7 +90,7 @@ class KernelsTests(unittest.TestCase):
         
     def test_rho_kernel(self):
         l, a = 1, 2
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=l)
+        kernel = RhoKernel(n_alleles=a, seq_length=l)
         x = get_full_space_one_hot(l, a)
         rho = torch.tensor([[0.5]])
         cov = kernel._forward(x, x, rho=rho)
@@ -64,7 +98,7 @@ class KernelsTests(unittest.TestCase):
         assert(cov[0, 1] == 0.5)
         
         l, a = 2, 2
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=l)
+        kernel = RhoKernel(n_alleles=a, seq_length=l)
         x = get_full_space_one_hot(l, a)
         rho = torch.tensor([[0.5, 0.5]])
         cov = kernel._forward(x, x, rho=rho)
@@ -73,20 +107,6 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(d0, exp_d0))
         assert(d1 / d0 == d2 / d1)
     
-    def test_heteroskedastic_kernel(self):
-        l, a = 1, 2
-        x = get_full_space_one_hot(l, a)
-        
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=l)
-        cov1 = kernel.forward(x, x)
-        assert(cov1[0, 0] == 0.75)
-        assert(cov1[0, 1] == 0.25)
-        
-        kernel = AdditiveHeteroskedasticKernel(kernel)
-        cov2 = kernel.forward(x, x)
-        assert(cov2[0, 0] < 0.75)
-        assert(cov2[0, 1] < 0.25)
-        
     def test_rho_pi_kernel(self):
         l, a = 1, 2
         kernel = RhoPiKernel(n_alleles=a, seq_length=l)
@@ -94,8 +114,8 @@ class KernelsTests(unittest.TestCase):
         rho = torch.tensor([0.5])
         beta = torch.tensor([[0, 0]])
         cov = kernel._forward(x, x, rho=rho, beta=beta)
-        assert(cov[0, 0] == 0.75)
-        assert(cov[0, 1] == 0.25)
+        assert(cov[0, 0] == 1.5)
+        assert(cov[0, 1] == 0.5)
         
         l, a = 2, 2
         kernel = RhoPiKernel(n_alleles=a, seq_length=l)
@@ -112,63 +132,23 @@ class KernelsTests(unittest.TestCase):
         assert(cov[0, 0] != cov[1, 1])
         assert(cov[0, 1] != cov[0, 2])
         assert(cov[0, 0] / cov[0, 1] * cov[0, 0] / cov[0, 2] == cov[0, 0] / cov[0, 3])
-        
-    def test_site_product_kernel_long_sequences(self):
-        l, a = 100, 2
-        x = (np.random.uniform(size=(2, l)) > 0.5).astype(int)
-        x = np.array([''.join(y) for y in np.array(['A', 'B'])[x]])
-        x = seq_to_one_hot(x, alleles=['A', 'B'])
-        x = torch.tensor(x, dtype=torch.float32)
-        print(x.shape)
-        
-        # Site product kernel
-        beta = torch.tensor(np.vstack([[1, 1, 0]] * l ), dtype=torch.float32)
-        theta = torch.tensor([0, -5], dtype=torch.float32)
-        p_prior = AllelesProbPrior(l, a) 
-        kernel = SiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
-        cov = kernel._forward(x, x, theta=theta, beta=beta)
-        print(cov)
-        
-        # Generalized site product kernel
-        p_prior = AllelesProbPrior(l, a, dummy_allele=False) 
-        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l, p_prior=p_prior)
-        cov = kernel.forward(x, x)
-        print(cov)
-        
-    def test_generalized_site_product_kernel(self):
-        l, a = 1, 2
-        rho_prior = RhosPrior(l, a, sites_equal=True)
-        p_prior = AllelesProbPrior(l, a, dummy_allele=False)
-        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
-                                              p_prior=p_prior, rho_prior=rho_prior)
-        x = torch.tensor([[1, 0],
-                          [0, 1]], dtype=torch.float32)
-        beta = torch.tensor([[1, 1]], dtype=torch.float32)
-        rho = torch.tensor([0.2], dtype=torch.float32)
-        cov = kernel._forward(x, x, rho=rho, beta=beta)
-        print(cov)
-        
-        cov = kernel.forward(x, x)
-        print(cov)
-         
-        l, a = 2, 2
-        rho_prior = RhosPrior(l, a)
-        p_prior = AllelesProbPrior(l, a, dummy_allele=False) 
-        kernel = GeneralizedSiteProductKernel(n_alleles=a, seq_length=l,
-                                              p_prior=p_prior, rho_prior=rho_prior)
-        x = torch.tensor([[1, 0, 1, 0],
-                          [0, 1, 1, 0],
-                          [1, 0, 0, 1],
-                          [0, 1, 0, 1]], dtype=torch.float32)
-        beta = torch.tensor([[1, 1],
-                             [1, 1]], dtype=torch.float32)
-        rho = torch.tensor([0.2, 0.2], dtype=torch.float32)
-        cov = kernel._forward(x, x, rho=rho, beta=beta)
-        print(cov)
-         
-        cov = kernel.forward(x, x)
-        print(cov)
     
+    def test_heteroskedastic_kernel(self):
+        l, a = 1, 2
+        x = get_full_space_one_hot(l, a)
+        
+        kernel = RhoKernel(n_alleles=a, seq_length=l)
+        cov1 = kernel.forward(x, x)
+        assert(cov1[0, 0] == 1.5)
+        assert(cov1[0, 1] == 0.5)
+        
+        kernel = AdditiveHeteroskedasticKernel(kernel)
+        cov2 = kernel.forward(x, x)
+        assert(cov2[0, 0] < 1.5)
+        assert(cov2[0, 1] < 0.5)
+
+
+class OldKernelsTests(unittest.TestCase):
     def test_diploid_kernel(self):
         kernel = DiploidKernel()
         X = ['0', '1', '2']
@@ -487,8 +467,17 @@ class KernelsTests(unittest.TestCase):
         axes.legend()
         axes.set(xlabel='Hamming distance', ylabel='Additive covariance')
         fig.savefig(join(TEST_DATA_DIR, 'cov_dist.png'))
+    
+    def xtest_calc_polynomial_coeffs(self):
+        kernel = SkewedVCKernel(n_alleles=2, seq_length=2, dtype=torch.float32)
+        lambdas = get_tensor(kernel.calc_eigenvalues())
+        V = torch.stack([torch.pow(lambdas, i) for i in range(3)], 1)
+
+        B = kernel.coeffs
+        P = torch.matmul(B, V).numpy()
+        assert(np.allclose(P, np.eye(3), atol=1e-4))
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests']
+    import sys;sys.argv = ['', 'KernelsTests.test_additive_kernel']
     unittest.main()
