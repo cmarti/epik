@@ -19,7 +19,7 @@ from epik.src.model import EpiK
 from epik.src.kernel import AdditiveHeteroskedasticKernel, VarianceComponentKernel
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
-# from epik.src.keops import RhoKernel, VarianceComponentKernel
+from epik.src.keops import RhoKernel, VarianceComponentKernel
 from gpytorch.kernels.scale_kernel import ScaleKernel
 from gpytorch.kernels.rbf_kernel import RBFKernel
 
@@ -288,6 +288,20 @@ class ModelsTests(unittest.TestCase):
             r2 = pearsonr(ypred, test_y)[0] ** 2
             assert(r2 > 0.9)
     
+    def test_bin_long_seqs(self):
+        bin_fpath = join(BIN_DIR, 'EpiK.py')
+        fpath = '/home/martigo/elzar/programs/epik_analysis/BBQ_data_for_VC_regression/train.csv'
+        
+        with NamedTemporaryFile() as fhand:
+            out_fpath = fhand.name
+            cmd = [sys.executable, bin_fpath, fpath, '-o', out_fpath,
+                   '-n', '50', '-k', 'Rho']
+            check_call(cmd)
+            
+            params_fpath = '{}.model_params.pth'.format(out_fpath)
+            state_dict = torch.load(params_fpath)
+            print(state_dict)
+    
     def test_epik_het(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)
         l, alpha = 7, 4
@@ -365,5 +379,5 @@ class ModelsTests(unittest.TestCase):
 
         
 if __name__ == '__main__':
-    import sys; sys.argv = ['', 'ModelsTests']
+    import sys; sys.argv = ['', 'ModelsTests.test_epik_keops']
     unittest.main()
