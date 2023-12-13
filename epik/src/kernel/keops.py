@@ -230,13 +230,12 @@ class AdditiveKernel(SequenceKernel):
         return(coeffs[0] + coeffs[1] * (x1_ * x2_).sum(-1))
 
     def _covar_func(self, x1, x2, **kwargs):
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-        K = (x1_ * x2_).sum(-1)
+        coeffs = self.get_coeffs()
+        b = torch.sqrt(coeffs[1])
+        x1_ = LazyTensor(x1[..., :, None, :] * b)
+        x2_ = LazyTensor(x2[..., None, :, :] * b)
+        K = (x1_ * x2_).sum(-1) + coeffs[0]
         return(K)
     
     def _keops_forward(self, x1, x2, **kwargs):
-        coeffs = self.get_coeffs()
-        K1 = KernelLinearOperator(x1, x2, covar_func=self._covar_func, **kwargs)
-        K0 = torch.ones((x1.shape[0], x2.shape[0]), dtype=x1.dtype, device=x1.device)
-        return(coeffs[0] * K0 + coeffs[1] * K1)
+        return(KernelLinearOperator(x1, x2, covar_func=self._covar_func, **kwargs))
