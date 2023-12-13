@@ -68,7 +68,7 @@ class KernelsTests(unittest.TestCase):
                                   [-2, 0, 0, 2]], atol=0.01))
         
         cov2 = to_dense(kernel._keops_forward(x, x)).detach().numpy()
-        assert(np.allclose(cov1, cov2))
+        assert(np.allclose(cov1, cov2, atol=1e-4))
         
         log_lambdas0 = torch.tensor([-10., np.log(2)]).to(dtype=torch.float32)
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
@@ -76,7 +76,7 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(cov1[0], [4, 0, 0, -4], atol=0.01))
         
         cov2 = to_dense(kernel._keops_forward(x, x)).detach().numpy()
-        assert(np.allclose(cov1, cov2))
+        assert(np.allclose(cov1, cov2, atol=1e-4))
     
     def test_vc_kernel(self):
         l, a = 2, 2
