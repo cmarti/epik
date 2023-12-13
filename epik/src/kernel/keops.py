@@ -1,3 +1,4 @@
+import numpy as np
 import torch as torch
 
 from scipy.special._basic import comb
@@ -201,6 +202,7 @@ class AdditiveKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         self.log_lambdas0 = log_lambdas0
+        self.logn = seq_length * np.log(n_alleles)
         self.set_params()
     
     def get_matrix(self):
@@ -209,7 +211,7 @@ class AdditiveKernel(SequenceKernel):
         return(m)  
     
     def set_params(self):
-        log_lambdas0 = torch.tensor([0, 0.]) if self.log_lambdas0 is None else self.log_lambdas0
+        log_lambdas0 = torch.tensor([0., 0.]) if self.log_lambdas0 is None else self.log_lambdas0
         params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
                   'm': Parameter(self.get_matrix(), requires_grad=False)}
         self.register_params(params)
