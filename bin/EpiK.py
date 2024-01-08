@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from gpytorch.settings import max_cg_iterations
+from linear_operator.settings import max_cg_iterations
 from gpytorch.kernels import ScaleKernel, RQKernel, LinearKernel
 from gpytorch.kernels.keops import RBFKernel, MaternKernel
 
@@ -154,35 +154,35 @@ def main():
     log.write('Running computations on {}'.format(device_label))
     
     # Create model
-    max_cg_iterations(3000)
-    log.write('Building model for Gaussian Process regression')
-    model = EpiK(kernel, dtype=dtype, track_progress=True,
-                 device=device, n_devices=n_devices,
-                 learning_rate=learning_rate, optimizer=optimizer)
-    model.set_data(X, y, y_var=y_var)
-
-    # Fit by evidence maximization
-    if params_fpath is None:
-        log.write('Estimate hyperparameters by maximizing the evidence')
-        model.fit(n_iter=n_iter)
-    else:
-        log.write('Load hyperparameters from {}'.format(params_fpath))
-        model.load(params_fpath)
-
-    # Write output parameters
-    fpath = '{}.model_params.pth'.format(out_fpath)
-    log.write('Storing model parameteres at {}'.format(fpath))
-    model.save(fpath)
+    with max_cg_iterations(3000):
+        log.write('Building model for Gaussian Process regression')
+        model = EpiK(kernel, dtype=dtype, track_progress=True,
+                     device=device, n_devices=n_devices,
+                     learning_rate=learning_rate, optimizer=optimizer)
+        model.set_data(X, y, y_var=y_var)
     
-    # Predict phenotype in new sequences
-    if test_seqs.shape[0] > 0:
-        log.write('Obtain phenotypic predictions for test data')
-        X_test = seq_to_one_hot(test_seqs, alleles=alleles)
-        y_test = model.to_numpy(model.predict(X_test))
-        result = pd.DataFrame({'y_pred': y_test}, index=test_seqs)
-        log.write('\tWriting predictions to {}'.format(out_fpath))
-        result.to_csv(out_fpath)
-
+        # Fit by evidence maximization
+        if params_fpath is None:
+            log.write('Estimate hyperparameters by maximizing the evidence')
+            model.fit(n_iter=n_iter)
+        else:
+            log.write('Load hyperparameters from {}'.format(params_fpath))
+            model.load(params_fpath)
+    
+        # Write output parameters
+        fpath = '{}.model_params.pth'.format(out_fpath)
+        log.write('Storing model parameteres at {}'.format(fpath))
+        model.save(fpath)
+        
+        # Predict phenotype in new sequences
+        if test_seqs.shape[0] > 0:
+            log.write('Obtain phenotypic predictions for test data')
+            X_test = seq_to_one_hot(test_seqs, alleles=alleles)
+            y_test = model.to_numpy(model.predict(X_test))
+            result = pd.DataFrame({'y_pred': y_test}, index=test_seqs)
+            log.write('\tWriting predictions to {}'.format(out_fpath))
+            result.to_csv(out_fpath)
+    
     # Write execution time for tracking performance
     fpath = '{}.time.txt'.format(out_fpath)
     log.write('Writing execution times to {}'.format(fpath))        
@@ -198,7 +198,7 @@ def main():
         plot_training_history(np.array(model.loss_history), fpath)
     
     log.finish()
-
-
+    
+    
 if __name__ == '__main__':
     main()
