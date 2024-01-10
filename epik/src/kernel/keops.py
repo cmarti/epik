@@ -40,7 +40,12 @@ class RhoPiKernel(SequenceKernel):
 
     def set_params(self):
         log_p0 = -torch.ones((self.l, self.alpha)) if self.log_p0 is None else self.log_p0
-        logit_rho0 = torch.full((self.l, 1), np.log(np.exp(1 / self.l) - 1)) if self.logit_rho0 is None else self.logit_rho0 
+        
+        # Choose rho0 so that correlation at l/2 is 0.1
+        t = np.exp(-2/self.l * np.log(10.))
+        v = np.log((1 - t) / (self.alpha * t))
+        
+        logit_rho0 = torch.full((self.l, 1), v) if self.logit_rho0 is None else self.logit_rho0 
         params = {'logit_rho': Parameter(logit_rho0, requires_grad=True),
                   'log_p': Parameter(log_p0, requires_grad=self.train_p)}
         self.register_params(params)
