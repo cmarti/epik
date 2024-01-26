@@ -120,7 +120,7 @@ def guess_space_configuration(seqs):
 
 def split_training_test(X, y, y_var=None, ptrain=0.8, dtype=None):
     ps = np.random.uniform(size=X.shape[0])
-    train = ps < ptrain
+    train = ps <= ptrain
     train_x, train_y = X[train, :], y[train]
     
     if y_var is None:
@@ -128,7 +128,7 @@ def split_training_test(X, y, y_var=None, ptrain=0.8, dtype=None):
     else:
         train_y_var = y_var[train] 
 
-    test = ps > (1 - ptrain)
+    test = ps > ptrain
     test_x, test_y = X[test, :], y[test]
     
     output = [train_x, train_y, test_x, test_y, train_y_var]

@@ -90,54 +90,68 @@ class KernelsTests(unittest.TestCase):
         
     def test_rho_kernel(self):
         l, a = 1, 2
-        kernel = RhoKernel(n_alleles=a, seq_length=l)
+        logit_rho0 = torch.tensor([0.])
+        kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         x = get_full_space_one_hot(l, a)
-        rho = torch.tensor([[0.5]])
-        cov = kernel._forward(x, x, rho=rho)
+        cov = kernel.forward(x, x)
         assert(cov[0, 0] == 1.5)
         assert(cov[0, 1] == 0.5)
         
         l, a = 2, 2
-        kernel = RhoKernel(n_alleles=a, seq_length=l)
+        logit_rho0 = torch.tensor([[0.], [0.]])
+        rho = np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))
+        kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         x = get_full_space_one_hot(l, a)
-        rho = torch.tensor([[0.5, 0.5]])
-        cov = kernel._forward(x, x, rho=rho)
-        d0, d1, d2 = cov[0][0], cov[0][1], cov[0][3]
-        exp_d0 = torch.prod(1 + rho)
-        assert(np.allclose(d0, exp_d0))
-        assert(d1 / d0 == d2 / d1)
+        cov = kernel.forward(x, x).detach().numpy()[0, :]
+        assert(np.allclose(cov, [1.5 ** 2, 1.5 * 0.5, 1.5 * 0.5, 0.5 ** 2]))
+
+        logit_rho0 = torch.tensor([[0.], [-np.log(3)]], dtype=torch.float32)
+        rho = (np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))).flatten()
+        kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
+        cov = kernel.forward(x, x).detach().numpy()[0, :]
+        expected = np.array([(1 + rho[0]) * (1 + rho[1]),
+                             (1 - rho[0]) * (1 + rho[1]),
+                             (1 + rho[0]) * (1 - rho[1]),
+                             (1 - rho[0]) * (1 - rho[1])])
+        assert(np.allclose(cov, expected))
     
     def test_rho_pi_kernel(self):
         l, a = 1, 2
-        kernel = RhoPiKernel(n_alleles=a, seq_length=l)
+        logit_rho0 = torch.tensor([[0.]])
+        log_p0 = torch.tensor(np.log([[0.2, 0.8]]), dtype=torch.float32)
+        kernel = RhoPiKernel(n_alleles=a, seq_length=l,
+                             logit_rho0=logit_rho0, log_p0=log_p0)
         x = get_full_space_one_hot(l, a)
-        rho = torch.tensor([0.5])
-        beta = torch.tensor([[0, 0]])
-        cov = kernel._forward(x, x, rho=rho, beta=beta)
-        assert(cov[0, 0] == 1.5)
-        assert(cov[0, 1] == 0.5)
+        cov = kernel.forward(x, x).detach().numpy()
+        expected = np.array([[3, 0.5],
+                             [0.5, 1.125]])
+        assert(np.allclose(cov, expected))
         
         l, a = 2, 2
-        kernel = RhoPiKernel(n_alleles=a, seq_length=l)
+        logit_rho0 = torch.tensor([[0.],
+                                   [0.]], dtype=torch.float32)
+        log_p0 = torch.tensor(np.log([[0.2, 0.8],
+                                      [0.5, 0.5]]), dtype=torch.float32)
+        kernel = RhoPiKernel(n_alleles=a, seq_length=l,
+                             logit_rho0=logit_rho0, log_p0=log_p0)
         x = get_full_space_one_hot(l, a)
-        rho = torch.tensor([0.5, 0.5])
-        beta = torch.tensor([[0, 0], [0, 0]])
-        cov = kernel._forward(x, x, rho=rho, beta=beta)
-        d0, d1, d2 = cov[0][0], cov[0][1], cov[0][3]
-        assert(d1 / d0 == d2 / d1)
+        rho = np.array([0.5, 0.5])
+        eta = np.array([[4., 0.25],
+                        [1., 1.  ]])
+        cov = kernel.forward(x, x).detach().numpy()[0, :]
+        expected = np.array([(1 + rho[0] * eta[0, 0]) * (1 + rho[1] * eta[1, 0]),
+                             (1 - rho[0])             * (1 + rho[1] * eta[1, 0]),
+                             (1 + rho[0] * eta[0, 0]) * (1 - rho[1]),
+                             (1 - rho[0])             * (1 - rho[1])])
+        assert(np.allclose(cov, expected))
         
-        # Ensure heterokedasticity
-        beta = torch.tensor([[0, 1], [1, 0]])
-        cov = kernel._forward(x, x, rho=rho, beta=beta)
-        assert(cov[0, 0] != cov[1, 1])
-        assert(cov[0, 1] != cov[0, 2])
-        assert(cov[0, 0] / cov[0, 1] * cov[0, 0] / cov[0, 2] == cov[0, 0] / cov[0, 3])
-    
     def test_heteroskedastic_kernel(self):
         l, a = 1, 2
         x = get_full_space_one_hot(l, a)
         
-        kernel = RhoKernel(n_alleles=a, seq_length=l)
+        logit_rho0 = torch.tensor([[0.]])
+        kernel = RhoKernel(n_alleles=a, seq_length=l,
+                           logit_rho0=logit_rho0)
         cov1 = kernel.forward(x, x)
         assert(cov1[0, 0] == 1.5)
         assert(cov1[0, 1] == 0.5)

@@ -65,9 +65,12 @@ class RhoPiKernel(SequenceKernel):
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         f = self.get_factor()
         c = self.get_c()
-        x1_ = x1[..., :, None, :] * f
-        x2_ = x2[..., None, :, :] * f
-        return(torch.exp(c + (x1_ * x2_).sum(-1)))
+        # x1_ = x1[..., :, None, :] * f
+        # x2_ = x2[..., None, :, :] * f
+        # return(torch.exp(c + (x1_ * x2_).sum(-1)))
+        x1_ = x1 * f
+        x2_ = x2 * f
+        return(torch.exp(c + (x1_ @ x2_.T)))
 
     def _covar_func(self, x1, x2, **kwargs):
         x1_ = LazyTensor(x1[..., :, None, :])

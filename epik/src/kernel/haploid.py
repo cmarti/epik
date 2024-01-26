@@ -4,12 +4,13 @@ import torch as torch
 from itertools import combinations
 from scipy.special._basic import comb
 from torch.nn import Parameter
+from pykeops.torch import LazyTensor
+from linear_operator.operators import KernelLinearOperator
 
-from epik.src.utils import get_tensor
+from epik.src.utils import get_tensor, log1mexp
 from epik.src.kernel.base import SequenceKernel
 from epik.src.priors import (LambdasFlatPrior, LambdasDeltaPrior, RhosPrior,
                              AllelesProbPrior)
-
 
 
 class AdditiveKernel(SequenceKernel):
@@ -120,40 +121,123 @@ class DeltaPKernel(VarianceComponentKernel):
                          **kwargs)
 
 
-class _GeneralizedSiteProductKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, rho_prior=None, **kwargs):
+class RhoPiKernel(SequenceKernel):
+    def __init__(self, n_alleles, seq_length,
+                 logit_rho0=None, log_p0=None,
+                 train_p=True, common_rho=False, correlation=False,
+                 **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
-        self.set_rho_prior(rho_prior)
+        self.logit_rho0 = logit_rho0
+        self.log_p0 = log_p0
+        self.train_p = train_p
+        self.correlation = correlation
+        self.common_rho = common_rho
+        self.set_params()
     
-    def set_rho_prior(self, rho_prior=None):
-        if rho_prior is None:
-            rho_prior = RhosPrior(seq_length=self.l, n_alleles=self.alpha)
-        self.rho_prior = rho_prior
-        self.rho_prior.set(self)
-
-    @property
-    def rho(self):
-        return(self.rho_prior.get_rho(self))
-
-
-class RhoKernel(_GeneralizedSiteProductKernel):
-    is_stationary = True
-    def _forward(self, x1, x2, rho, diag=False):
-        # TODO: make sure diag works here
-        # c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
-        constant = torch.log(1 - rho).sum()# - c
-        rho = torch.stack([rho] * self.alpha, axis=1)
-        log_factors = torch.flatten(torch.log(1 + rho * (self.alpha - 1)) - torch.log(1 - rho))
-        m = self.inner_product(x1, x2, torch.diag(log_factors), diag=diag)
-        kernel = torch.exp(m + constant)
+    def get_log_p0(self):
+        if self.log_p0 is None:
+            log_p0 = -torch.ones((self.l, self.alpha), dtype=self.dtype) 
+        else:
+            log_p0 = self.log_p0
+        return(log_p0)
+    
+    def get_logit_rho0(self):
+        # Choose rho0 so that correlation at l/2 is 0.1
+        shape = (1, 1) if self.common_rho else (self.l, 1)
+        t = np.exp(-2/self.l * np.log(10.))
+        v = np.log((1 - t) / (self.alpha * t))
+        logit_rho0 = torch.full(shape, v, dtype=self.dtype) if self.logit_rho0 is None else self.logit_rho0 
+        return(logit_rho0)
+    
+    def set_params(self):
+        logit_rho0 = self.get_logit_rho0()
+        log_p0 = self.get_log_p0()
+        params = {'logit_rho': Parameter(logit_rho0, requires_grad=True),
+                  'log_p': Parameter(log_p0, requires_grad=self.train_p)}
+        self.register_params(params)
+        
+    def get_log_eta(self):
+        log_p = self.log_p - torch.logsumexp(self.log_p, axis=1).unsqueeze(1)
+        log_eta = log1mexp(log_p) - log_p
+        return(log_eta)
+    
+    def get_log_one_minus_rho(self):
+        return(-torch.logaddexp(self.zeros_like(self.logit_rho), self.logit_rho))
+    
+    def get_factors(self):
+        log1mrho = self.get_log_one_minus_rho()
+        log_rho = self.logit_rho + log1mrho
+        log_eta = self.get_log_eta()
+        log_one_p_eta_rho = torch.logaddexp(self.zeros_like(log_rho), log_rho + log_eta)
+        factors = log_one_p_eta_rho - log1mrho
+        
+        constant = log1mrho.sum()
+        if self.common_rho:
+            constant *= self.l
+        
+        return(constant, factors, log_one_p_eta_rho)
+    
+    def _nonkeops_forward(self, x1, x2, diag=False, **params):
+        constant, factors, log_one_p_eta_rho = self.get_factors()
+        factors = factors.reshape(1, self.t)
+        log_one_p_eta_rho = log_one_p_eta_rho.reshape(self.t, 1)
+        
+        if self.correlation:
+            log_sd1 = 0.5 * (x1 @ log_one_p_eta_rho)
+            log_sd2 = 0.5 * (x2 @ log_one_p_eta_rho).reshape((1, x2.shape[0]))
+            kernel = torch.exp(constant + x1 @ (x2 * factors).T - log_sd1 - log_sd2)
+        else:
+            kernel = torch.exp(constant + x1 @ (x2 * factors).T)
+        # print(kernel)
         return(kernel)
     
-    def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, rho=self.rho, diag=diag))
+    def _covar_func(self, x1, x2, **kwargs):
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        kernel = ((x1_ * x2_).sum(-1)).exp()
+        return(kernel)
+    
+    def _keops_forward(self, x1, x2, **kwargs):
+        constant, factors, log_one_p_eta_rho = self.get_factors()
+        c = torch.exp(constant)
+        f = factors.T.reshape(1, self.t)
+        log_one_p_eta_rho = log_one_p_eta_rho.T.reshape(1, self.t)
+        
+        kernel = c * KernelLinearOperator(x1, x2 * f, covar_func=self._covar_func, **kwargs)
+        if self.correlation:
+            sd1 = torch.exp(0.5 * (x1 * log_one_p_eta_rho).sum(1)).reshape((x1.shape[0], 1))
+            sd2 = torch.exp(0.5 * (x2 * log_one_p_eta_rho).sum(1)).reshape((x2.shape[0], 1))
+            kernel = kernel / (sd1 * sd2.T)
+        return(kernel)
     
     def get_params(self):
-        return({'rho': self.rho})
+        return({'logit_rho': self.logit_rho,
+                'log_p': self.log_p})
+    
 
+class RhoKernel(RhoPiKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, logit_rho0=None,
+                 common_rho=False, **kwargs):
+        super().__init__(n_alleles, seq_length, logit_rho0=logit_rho0, common_rho=common_rho,
+                         train_p=False, log_p0=None, **kwargs)
+    
+    
+class RBFKernel(RhoKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, logit_rho0=None, **kwargs):
+        super().__init__(n_alleles, seq_length, logit_rho0=logit_rho0, common_rho=True, **kwargs)
+        
+        
+class ARDKernel(RhoPiKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, **kwargs):
+        super().__init__(n_alleles, seq_length, correlation=True, train_p=True, **kwargs)
+    
+    
+#################
+# Skewed kernel #
+#################
 
 class _PiKernel(SequenceKernel):
     def set_p_prior(self, p_prior, dummy_allele=False):
@@ -170,32 +254,6 @@ class _PiKernel(SequenceKernel):
         norm_logp = self.p_prior.normalize_logp(logp)
         beta = self.p_prior.norm_logp_to_beta(norm_logp)
         return(beta)
-
-
-class RhoPiKernel(_GeneralizedSiteProductKernel, _PiKernel):
-    is_stationary = False
-    def __init__(self, n_alleles, seq_length, p_prior=None, rho_prior=None,
-                 **kwargs):
-        super().__init__(n_alleles, seq_length, rho_prior=rho_prior, **kwargs)
-        self.set_p_prior(p_prior)
-
-    def _forward(self, x1, x2, rho, beta, diag=False):
-        # TODO: make sure diag works here
-        # c = torch.log(torch.tensor([self.n], dtype=x1.dtype, device=x1.device))
-        constant = torch.log(1 - rho).sum()# - c
-        rho = torch.stack([rho] * self.alpha, axis=1)
-        eta = torch.exp(beta)
-        log_factors = torch.flatten(torch.log(1 + rho * eta) - torch.log(1 - rho))
-        M = torch.diag(log_factors)
-        m = self.inner_product(x1, x2, M, diag=diag)
-        kernel = torch.exp(m + constant)
-        return(kernel)
-    
-    def forward(self, x1, x2, diag=False, **params):
-        return(self._forward(x1, x2, rho=self.rho, beta=self.beta, diag=diag))
-    
-    def get_params(self):
-        return({'rho': self.rho, 'beta': self.beta})
 
 
 class SkewedVCKernel(_LambdasKernel, _PiKernel):

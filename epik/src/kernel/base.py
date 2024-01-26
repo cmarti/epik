@@ -1,19 +1,24 @@
 import torch as torch
 
 from torch.nn import Parameter
+from gpytorch.settings import max_cholesky_size
 from gpytorch.kernels.kernel import Kernel
 from gpytorch.lazy.lazy_tensor import delazify
 
 
 class SequenceKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, dtype=torch.float32, **kwargs):
+    def __init__(self, n_alleles, seq_length, dtype=torch.float32, use_keops=False, **kwargs):
         self.alpha = n_alleles
         self.l = seq_length
         self.s = self.l + 1
         self.t = self.l * self.alpha
         self.fdtype = dtype
+        self.use_keops = use_keops
         self.n = float(self.alpha ** self.l)
         super().__init__(**kwargs)
+        
+    def zeros_like(self, x):
+        return(torch.zeros(x.shape).to(dtype=x.dtype, device=x.device))
     
     def register_params(self, params={}, constraints={}):
         self.params = params
@@ -31,10 +36,25 @@ class SequenceKernel(Kernel):
             min_size = min(x1.shape[0], x2.shape[0])
             return((torch.matmul(x1[:min_size, :], metric) * x2[:min_size, :]).sum(1))
         else:
-            return(torch.matmul(x1, torch.matmul(metric, x2.T)))
+            return(torch.matmul(x1, torch.matmul(metric, x2.permute())))
     
     def calc_hamming_distance(self, x1, x2):
         return(self.l - self.inner_product(x1, x2))
+    
+    def forward(self, x1, x2, diag=False, **kwargs):
+        if diag:
+            kernel = self._nonkeops_forward(x1, x2, diag=True, **kwargs)
+        else:
+            max_size = max_cholesky_size.value()
+            if self.use_keops or (x1.size(-2) > max_size or x2.size(-2) > max_size):
+                kernel = self._keops_forward(x1, x2, **kwargs)
+            else:
+                try:
+                    kernel = self._nonkeops_forward(x1, x2, diag=False, **kwargs)
+                except RuntimeError:
+                    torch.cuda.empty_cache()
+                    kernel = self._keops_forward(x1, x2, **kwargs)
+        return(kernel)
     
 
 class AdditiveHeteroskedasticKernel(SequenceKernel):

@@ -166,6 +166,11 @@ class EpiK(object):
             t0 = time()
             
             for _ in pbar:
+                # # x = self.kernel.logit_rho.detach().cpu().numpy()
+                # x = self.kernel.base_kernel.lengthscale.detach().cpu().numpy()[0]
+                # x = sorted(x.flatten())
+                # # print(x[:2], x[-2:], self.kernel.outputscale.detach().cpu().numpy())
+                # print(x, self.kernel.outputscale.detach().cpu().numpy())
                 self.adam_training_step(self.X, self.y)
                 if n_iter > 1:
                     self.report_progress(pbar)

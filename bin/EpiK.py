@@ -7,40 +7,49 @@ import torch
 
 from linear_operator.settings import max_cg_iterations
 from gpytorch.kernels import ScaleKernel, RQKernel, LinearKernel
-from gpytorch.kernels.keops import RBFKernel, MaternKernel
+from gpytorch.kernels.keops import MaternKernel
+from gpytorch.kernels.keops import RBFKernel as KeOpsRBF
 
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 from epik.src.plot import plot_training_history
 from epik.src.model import EpiK
 from epik.src.kernel.base import AdditiveHeteroskedasticKernel
-from epik.src.kernel.keops import RhoPiKernel, RhoKernel, AdditiveKernel
-from epik.src.kernel.haploid import VarianceComponentKernel, DeltaPKernel
+from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
+                                     RhoPiKernel, RhoKernel, AdditiveKernel,
+                                     RBFKernel, ARDKernel)
 
 
 def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
-    is_cor_kernel = False
-    if kernel == 'RBF':
-        kernel = RBFKernel()
-    elif kernel == 'ARD':
-        kernel = RBFKernel(ard_num_dims=n_alleles * seq_length)
-    elif kernel == 'matern':
+    is_cor_kernel = True
+    if kernel == 'matern':
         kernel = MaternKernel()
     elif kernel == 'RQ':
         kernel = RQKernel()
     elif kernel == 'linear':
         kernel = LinearKernel()
+    # elif kernel == 'ARD':
+    #     kernel = KeOpsRBF(ard_num_dims=n_alleles * seq_length)
     else:
         is_cor_kernel = False
-        if kernel == 'Connectedness' or kernel == 'Rho':
+        # Product kernels
+        if kernel == 'RBF':
+            kernel = RBFKernel(n_alleles, seq_length, dtype=dtype)
+        elif kernel == 'Connectedness' or kernel == 'Rho':
             kernel = RhoKernel(n_alleles, seq_length, dtype=dtype)
+        elif kernel == 'ARD':
+            kernel = ARDKernel(n_alleles, seq_length, dtype=dtype)
+            is_cor_kernel = True
         elif kernel == 'RhoPi':
             kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype)
+
+        # VC-like kernels
         elif kernel == 'VC':
             kernel = VarianceComponentKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'Additive':
             kernel = AdditiveKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'DP':
             kernel = DeltaPKernel(n_alleles, seq_length, P=P, dtype=dtype)
+            
         else:
             msg = 'Unknown kernel provided: {}'.format(kernel)
             raise ValueError(msg)
@@ -48,7 +57,9 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
     if add_het:
         kernel = AdditiveHeteroskedasticKernel(kernel, n_alleles=n_alleles,
                                                seq_length=seq_length)
+        
     elif is_cor_kernel:
+        print('Correlation kernel')
         kernel = ScaleKernel(kernel)
         
     return(kernel)
@@ -157,6 +168,7 @@ def main():
     with max_cg_iterations(3000):
         log.write('Building model for Gaussian Process regression')
         model = EpiK(kernel, dtype=dtype, track_progress=True,
+                     train_noise=True,
                      device=device, n_devices=n_devices,
                      learning_rate=learning_rate, optimizer=optimizer)
         model.set_data(X, y, y_var=y_var)

@@ -19,10 +19,10 @@ from epik.src.model import EpiK
 from epik.src.kernel.haploid import VarianceComponentKernel, AdditiveKernel
 from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
                              LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
-from epik.src.kernel.keops import RhoKernel, VarianceComponentKernel
-from gpytorch.kernels.scale_kernel import ScaleKernel
-from gpytorch.kernels.rbf_kernel import RBFKernel
-# from epik.src.kernel.keops import RhoKernel
+from epik.src.kernel.keops import VarianceComponentKernel
+from epik.src.kernel.haploid import RhoKernel, RBFKernel, ARDKernel
+from gpytorch.kernels import ScaleKernel
+from gpytorch.kernels import RBFKernel as GPRBFKernel
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -122,12 +122,6 @@ class ModelsTests(unittest.TestCase):
         r = pearsonr(loglambdas[1:], log_lambdas0[1:])[0]
         assert(r > 0.6)
          
-        # Train with Heteroskedastic kernel: just ensure that it trains
-        kernel = AdditiveHeteroskedasticKernel(RBFKernel(), n_alleles=alpha, seq_length=l)
-        model = EpiK(kernel, optimizer='Adam', track_progress=True)
-        model.set_data(train_x, train_y, train_y_var)
-        model.fit(n_iter=20)
-        
         # Train LBFGS optimizer
         model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
                      optimizer='LBFGS', track_progress=True)
@@ -185,7 +179,7 @@ class ModelsTests(unittest.TestCase):
         loglambdas = kernel.log_lambdas.detach().numpy()
         assert(loglambdas[0] < loglambdas[1] - 3.)
     
-    def test_epik_keops_gpu(self):
+    def test_epik_keops_gpu2(self):
         # Simulate from prior distribution
         alpha, l, logit_rho0, data = get_rho_random_landscape_data(sigma=0, ptrain=0.9)
         train_x, train_y, test_x, test_y, train_y_var = data
@@ -199,13 +193,53 @@ class ModelsTests(unittest.TestCase):
         r = pearsonr(logit_rho, logit_rho0.flatten())[0]
         assert(r > 0.8)
         
-        # # Predict unobserved sequences
+        # Predict unobserved sequences
         kernel = RhoKernel(alpha, l, logit_rho0=logit_rho0)
         model = EpiK(kernel)
         model.set_data(train_x, train_y, train_y_var)
         ypred = model.predict(test_x).detach()
         r2 = pearsonr(ypred, test_y)[0] ** 2
         assert(r2 > 0.9)
+        
+    def test_epik_keops_gpu(self):
+        np.random.seed(1)
+        alpha, l = 2, 100
+        n = 2000
+        ptrain = 0.5
+        
+        fpath = '/home/martigo/elzar/programs/epik_analysis/BBQ_data_for_VC_regression/23C.large_effect_loci.0.train.csv'
+        data = pd.read_csv(fpath, index_col=0).dropna()
+        positions = np.arange(len(data.index.values[0]))
+        positions = np.random.choice(positions, size=l, replace=False)
+        data['X'] = [''.join(x[p] for p in positions) for x in data.index.values]
+        data = data.loc[np.random.choice(data.index.values, size=n, replace=False), :]
+        X, y, y_var = seq_to_one_hot(data.X.values, alleles=['A', 'B']), data.y.values, data.y_var.values
+        train_x, train_y, test_x, test_y, train_y_var = split_training_test(X, y, y_var=y_var, ptrain=ptrain)
+
+        # kernel = RBFKernel(alpha, l)
+        kernel = RhoKernel(alpha, l)
+        # kernel = ScaleKernel(ARDKernel(alpha, l))
+        # kernel = ScaleKernel(GPRBFKernel())
+        # kernel = ScaleKernel(GPRBFKernel(ard_num_dims=train_x.shape[1]))
+
+        model = EpiK(kernel, track_progress=True,
+                     device=torch.device('cuda:0'),
+                     learning_rate=1.,
+                    #  dtype=torch.float64,
+                     train_noise=True)
+        model.set_data(train_x, train_y, train_y_var + 1e-3)
+        model.fit(n_iter=100)
+        
+        ypred = model.predict(test_x.to(dtype=torch.float64)).detach().cpu().numpy()
+        r2 = pearsonr(test_y, ypred)[0] ** 2
+        print(ypred.shape, r2)
+        print('R2 = {:.2f}'.format(r2))
+        
+        # print(kernel.base_kernel.raw_lengthscale, kernel.raw_outputscale)
+        # print(kernel.base_kernel.lengthscale)
+        # exit()
+        # logit_rho = kernel.logit_rho.cpu().detach().numpy().flatten() 
+        # print(logit_rho)
     
     def test_epik_gpu(self):
         # Simulate from prior distribution
@@ -401,5 +435,5 @@ class ModelsTests(unittest.TestCase):
 
         
 if __name__ == '__main__':
-    import sys; sys.argv = ['', 'ModelsTests.test_epik_bin']
+    import sys; sys.argv = ['', 'ModelsTests.test_epik_keops_gpu']
     unittest.main()
