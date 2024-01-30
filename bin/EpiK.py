@@ -8,7 +8,6 @@ import torch
 from linear_operator.settings import max_cg_iterations
 from gpytorch.kernels import ScaleKernel, RQKernel, LinearKernel
 from gpytorch.kernels.keops import MaternKernel
-from gpytorch.kernels.keops import RBFKernel as KeOpsRBF
 
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
 from epik.src.plot import plot_training_history
@@ -19,7 +18,7 @@ from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
                                      RBFKernel, ARDKernel)
 
 
-def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
+def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops):
     is_cor_kernel = True
     if kernel == 'matern':
         kernel = MaternKernel()
@@ -33,14 +32,17 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het):
         is_cor_kernel = False
         # Product kernels
         if kernel == 'RBF':
-            kernel = RBFKernel(n_alleles, seq_length, dtype=dtype)
+            kernel = RBFKernel(n_alleles, seq_length, dtype=dtype, 
+                               use_keops=use_keops)
         elif kernel == 'Connectedness' or kernel == 'Rho':
-            kernel = RhoKernel(n_alleles, seq_length, dtype=dtype)
+            kernel = RhoKernel(n_alleles, seq_length, dtype=dtype,
+                               use_keops=use_keops)
         elif kernel == 'ARD':
-            kernel = ARDKernel(n_alleles, seq_length, dtype=dtype)
-            is_cor_kernel = True
+            kernel = ARDKernel(n_alleles, seq_length, dtype=dtype,
+                               use_keops=use_keops)
         elif kernel == 'RhoPi':
-            kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype)
+            kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype,
+                                 use_keops=use_keops)
 
         # VC-like kernels
         elif kernel == 'VC':
@@ -106,6 +108,8 @@ def main():
                             help='Number of iterations for optimization (200)')
     comp_group.add_argument('-r', '--learning_rate', default=0.1, type=float,
                             help='Learning rate for optimization (0.1)')
+    comp_group.add_argument('--keops', default=False,
+                            action='store_true', help='Use KeOps backedn')
     comp_group.add_argument('-l', '--lbfgs', default=False,
                             action='store_true', help='Use LBFGS optimizer instead of Adam')
 
@@ -127,6 +131,7 @@ def main():
     gpu = parsed_args.gpu
     n_devices = parsed_args.n_devices
     n_iter = parsed_args.n_iter
+    use_keops = parsed_args.keops
     learning_rate = parsed_args.learning_rate
     use_float64 = parsed_args.use_float64
     optimizer = 'lbfgs' if parsed_args.lbfgs else 'Adam'
@@ -157,7 +162,7 @@ def main():
     # Get kernel
     log.write('Selected {} kernel'.format(kernel))
     kernel = select_kernel(kernel, n_alleles, config['seq_length'],
-                           dtype=dtype, P=P, add_het=add_het)
+                           dtype=dtype, P=P, add_het=add_het, use_keops=use_keops)
 
     # Define device
     device = torch.device('cuda') if gpu else None

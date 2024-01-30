@@ -7,7 +7,7 @@ import torch
 from os.path import join
 from epik.src.settings import TEST_DATA_DIR
 from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
-                                     RhoKernel, AdditiveKernel)
+                                     RhoKernel, AdditiveKernel, ARDKernel)
 from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
                             get_full_space_one_hot)
 from epik.src.kernel.base import AdditiveHeteroskedasticKernel
@@ -60,33 +60,46 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
         
     def test_vc_kernel(self):
-        l, a = 3, 2
-        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l)
+        l, a = 2, 2
         x = get_full_space_one_hot(l, a)
-        exit()
 
         # k=0        
-        lambdas = torch.tensor([1, 0, 0], dtype=torch.float32)
-        cov = kernel._forward(x, x, lambdas)
-        assert(np.allclose(cov, 0.25))
+        log_lambdas0 = torch.tensor([0, -10., -10.], dtype=torch.float32)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov, 0.25, atol=1e-4))
         
         # k=1        
-        lambdas = torch.tensor([0, 1, 0], dtype=torch.float32)
-        cov = kernel._forward(x, x, lambdas).numpy()
-        k1 = np.array([[2, 0, 0, -2],
-                       [0, 2, -2, 0],
-                       [0, -2, 2, 0],
-                       [-2, 0, 0, 2]], dtype=np.float32)
-        assert(np.allclose(cov,  k1 / 4, atol=1e-4))
+        log_lambdas0 = torch.tensor([-10., 0., -10.], dtype=torch.float32)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        k1 = np.array([[1, 0, 0, -1],
+                       [0, 1, -1, 0],
+                       [0, -1, 1, 0],
+                       [-1, 0, 0, 1]], dtype=np.float32)
+        assert(np.allclose(cov,  k1 / 2, atol=1e-4))
         
         # k=2
-        lambdas = torch.tensor([0, 0, 1], dtype=torch.float32)
-        cov = kernel._forward(x, x, lambdas).numpy()
+        log_lambdas0 = torch.tensor([-10., -10., 0.], dtype=torch.float32)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
         k2 = np.array([[1, -1, -1, 1],
                        [-1, 1, 1, -1],
                        [-1, 1, 1, -1],
                        [1, -1, -1, 1]], dtype=np.float32)
         assert(np.allclose(cov,  k2 / 4, atol=1e-4))
+        
+        # Using KeOops
+        I = torch.eye(a ** l)
+        log_lambdas0 = torch.log(torch.tensor([1, 0.5, 0.25]))
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         log_lambdas0=log_lambdas0)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov1, cov2))
         
     def test_rho_kernel(self):
         l, a = 1, 2
@@ -113,6 +126,11 @@ class KernelsTests(unittest.TestCase):
                              (1 - rho[0]) * (1 + rho[1]),
                              (1 + rho[0]) * (1 - rho[1]),
                              (1 - rho[0]) * (1 - rho[1])])
+        assert(np.allclose(cov, expected))
+        
+        # Test with KeOps backend
+        I = torch.eye(a ** l)
+        cov = (kernel._keops_forward(x, x) @ I).detach().numpy()[0, :]
         assert(np.allclose(cov, expected))
     
     def test_rho_pi_kernel(self):
@@ -143,6 +161,47 @@ class KernelsTests(unittest.TestCase):
                              (1 - rho[0])             * (1 + rho[1] * eta[1, 0]),
                              (1 + rho[0] * eta[0, 0]) * (1 - rho[1]),
                              (1 - rho[0])             * (1 - rho[1])])
+        assert(np.allclose(cov, expected))
+        
+        # Test with KeOps backend
+        I = torch.eye(a ** l)
+        cov = (kernel._keops_forward(x, x) @ I).detach().numpy()[0, :]
+        assert(np.allclose(cov, expected))
+        
+    def test_ARD_kernel(self):
+        l, a = 1, 2
+        logit_rho0 = torch.tensor([[0.]])
+        log_p0 = torch.tensor(np.log([[0.2, 0.8]]), dtype=torch.float32)
+        kernel = ARDKernel(n_alleles=a, seq_length=l,
+                           logit_rho0=logit_rho0, log_p0=log_p0, log_var0=0.)
+        x = get_full_space_one_hot(l, a)
+        cov = kernel.forward(x, x).detach().numpy()
+        expected = np.array([[1, 0.5 / np.sqrt(3 * 1.125)],
+                             [0.5 / np.sqrt(3 * 1.125), 1]])
+        assert(np.allclose(cov, expected))
+        
+        l, a = 2, 2
+        logit_rho0 = torch.tensor([[0.],
+                                   [0.]], dtype=torch.float32)
+        log_p0 = torch.tensor(np.log([[0.2, 0.8],
+                                      [0.5, 0.5]]), dtype=torch.float32)
+        kernel = ARDKernel(n_alleles=a, seq_length=l,
+                             logit_rho0=logit_rho0, log_p0=log_p0, log_var0=0.)
+        x = get_full_space_one_hot(l, a)
+        rho = np.array([0.5, 0.5])
+        eta = np.array([[4., 0.25],
+                        [1., 1.  ]])
+        cov = kernel.forward(x, x).detach().numpy()[0, :]
+        expected = np.array([1, 
+                             (1 - rho[0]) / np.sqrt((1 + rho[0] * eta[0, 0]) * (1 + rho[0] * eta[0, 1])),
+                             (1 - rho[1]) / np.sqrt((1 + rho[1] * eta[1, 0]) * (1 + rho[1] * eta[1, 1])),
+                             np.nan])
+        expected[3] = expected[1] * expected[2]
+        assert(np.allclose(cov, expected))
+        
+        # Test with KeOps backend
+        I = torch.eye(a ** l)
+        cov = (kernel._keops_forward(x, x) @ I).detach().numpy()[0, :]
         assert(np.allclose(cov, expected))
         
     def test_heteroskedastic_kernel(self):

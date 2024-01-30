@@ -217,8 +217,8 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = split_training_test(X, y, y_var=y_var, ptrain=ptrain)
 
         # kernel = RBFKernel(alpha, l)
-        kernel = RhoKernel(alpha, l)
-        # kernel = ScaleKernel(ARDKernel(alpha, l))
+        # kernel = RhoKernel(alpha, l)
+        kernel = ScaleKernel(ARDKernel(alpha, l))
         # kernel = ScaleKernel(GPRBFKernel())
         # kernel = ScaleKernel(GPRBFKernel(ard_num_dims=train_x.shape[1]))
 

@@ -36,7 +36,7 @@ class SequenceKernel(Kernel):
             min_size = min(x1.shape[0], x2.shape[0])
             return((torch.matmul(x1[:min_size, :], metric) * x2[:min_size, :]).sum(1))
         else:
-            return(torch.matmul(x1, torch.matmul(metric, x2.permute())))
+            return(torch.matmul(x1, torch.matmul(metric, x2.T)))
     
     def calc_hamming_distance(self, x1, x2):
         return(self.l - self.inner_product(x1, x2))

@@ -74,44 +74,73 @@ class _LambdasKernel(SequenceKernel):
 
 class VarianceComponentKernel(_LambdasKernel):
     is_stationary = True
-    def __init__(self, n_alleles, seq_length, lambdas_prior=None,
+    def __init__(self, n_alleles, seq_length, log_lambdas0=None,
                  **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
-        
-        self.define_aux_variables()
-        self.set_lambdas_prior(lambdas_prior)
+        self.n = self.alpha ** self.l
+        self.log_lambdas0 = log_lambdas0
+        self.set_params()
 
-    def define_aux_variables(self):
-        self.krawchouk_matrix = Parameter(self.calc_krawchouk_matrix(),
-                                          requires_grad=False)
-    
-    def calc_w_kd(self, k, d):
-        ss = 0
-        for q in range(self.s):
-            ss += (-1.)**q * (self.alpha-1.)**(k-q) * comb(d,q) * comb(self.l-d,k-q)
-        return(ss / self.n)
-    
     def calc_krawchouk_matrix(self):
-        w_kd = np.zeros((self.s, self.s))
-        for k in range(self.s):
-            for d in range(self.s):
-                w_kd[d, k] = self.calc_w_kd(k, d)
-        return(get_tensor(w_kd))
+        d = torch.arange(self.s).reshape((self.s, 1, 1))
+        k = torch.arange(self.s).reshape((1, self.s, 1))
+        q = torch.arange(self.s).reshape((1, 1, self.s))
+        w_kd = ((-1.)**q * (self.alpha-1.)**(k-q) * comb(d,q) * comb(self.l-d,k-q)).sum(-1) / self.n
+        return(w_kd.to(dtype=torch.float))
     
-    def _forward(self, x1, x2, lambdas, diag=False):
-        w_d = self.krawchouk_matrix @ lambdas
+    def calc_d_powers_matrix_inv(self):
+        p = torch.arange(self.s).reshape(1, self.s)
+        d = torch.arange(self.s).reshape(self.s, 1)
+        d_powers = (d ** p).to(dtype=torch.float)
+        return(torch.linalg.inv(d_powers))
+    
+    def set_params(self):
+        log_lambdas0 = -torch.arange(self.s).to(dtype=torch.float) if self.log_lambdas0 is None else self.log_lambdas0
+        log_lambdas0 = log_lambdas0.reshape((self.s, 1))
+        w_kd = self.calc_krawchouk_matrix()
+        d_powers_inv = self.calc_d_powers_matrix_inv()
+        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
+                  'w_kd': Parameter(w_kd, requires_grad=False),
+                  'd_powers_inv': Parameter(d_powers_inv, requires_grad=False)}
+        self.register_params(params)
+        
+    def get_w_d(self):
+        '''calculates the covariance for each hamming distance'''
+        lambdas = torch.exp(self.log_lambdas)
+        w_d = self.w_kd @ lambdas
+        return(w_d) # .reshape((1, 1, self.s))
+    
+    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
+        w_d = self.get_w_d()
         hamming_dist = self.calc_hamming_distance(x1, x2).to(dtype=torch.long)
         kernel = w_d[0] * (hamming_dist == 0)
         for d in range(1, self.s):
             kernel += w_d[d] * (hamming_dist == d)
         return(kernel)
     
-    def forward(self, x1, x2, diag=False, **params):
-        kernel = self._forward(x1, x2, lambdas=self.lambdas, diag=diag)
-        return(kernel)
+    def get_c_d(self):
+        '''calculates coefficients for the covariance as a polynomial in d'''
+        c_d = self.d_powers_inv @ self.get_w_d()
+        return(c_d)
+
+    def _covar_func(self, x1, x2, **kwargs):
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        d = self.l - (x1_ * x2_).sum(-1)
+        
+        c_d = self.get_c_d()
+        k = c_d[0]
+        d_power = 1
+        for i in range(1, self.s):
+            d_power = d_power * d
+            k += c_d[i] * d_power 
+        return(k)
+        
+    def _keops_forward(self, x1, x2, **kwargs):
+        return(KernelLinearOperator(x1, x2, covar_func=self._covar_func, **kwargs))
     
     def get_params(self):
-        return({'lambdas': self.lambdas})
+        return({'log_lambdas': self.log_lambdas})
 
 
 class DeltaPKernel(VarianceComponentKernel):
@@ -123,13 +152,16 @@ class DeltaPKernel(VarianceComponentKernel):
 
 class RhoPiKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length,
-                 logit_rho0=None, log_p0=None,
-                 train_p=True, common_rho=False, correlation=False,
+                 logit_rho0=None, log_p0=None, log_var0=None, 
+                 train_p=True, train_var=False,
+                 common_rho=False, correlation=False,
                  **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         self.logit_rho0 = logit_rho0
         self.log_p0 = log_p0
+        self.log_var0 = log_var0
         self.train_p = train_p
+        self.train_var = train_var
         self.correlation = correlation
         self.common_rho = common_rho
         self.set_params()
@@ -149,11 +181,24 @@ class RhoPiKernel(SequenceKernel):
         logit_rho0 = torch.full(shape, v, dtype=self.dtype) if self.logit_rho0 is None else self.logit_rho0 
         return(logit_rho0)
     
+    def get_log_var0(self, logit_rho0):
+        if self.log_var0 is None:
+            if self.correlation:
+                rho = torch.exp(logit_rho0) / (1 + torch.exp(logit_rho0))
+                log_var0 = torch.log(1 + (self.alpha - 1) * rho).sum()
+            else:
+                log_var0 = torch.tensor(0, dtype=self.dtype)    
+        else:
+            log_var0 = torch.tensor(self.log_var0, dtype=self.dtype)
+        return(log_var0)
+    
     def set_params(self):
         logit_rho0 = self.get_logit_rho0()
         log_p0 = self.get_log_p0()
+        log_var0 = self.get_log_var0(logit_rho0=logit_rho0)
         params = {'logit_rho': Parameter(logit_rho0, requires_grad=True),
-                  'log_p': Parameter(log_p0, requires_grad=self.train_p)}
+                  'log_p': Parameter(log_p0, requires_grad=self.train_p),
+                  'log_var': Parameter(log_var0, requires_grad=self.train_var)}
         self.register_params(params)
         
     def get_log_eta(self):
@@ -174,6 +219,7 @@ class RhoPiKernel(SequenceKernel):
         constant = log1mrho.sum()
         if self.common_rho:
             constant *= self.l
+        constant += self.log_var
         
         return(constant, factors, log_one_p_eta_rho)
     
@@ -200,39 +246,43 @@ class RhoPiKernel(SequenceKernel):
     def _keops_forward(self, x1, x2, **kwargs):
         constant, factors, log_one_p_eta_rho = self.get_factors()
         c = torch.exp(constant)
-        f = factors.T.reshape(1, self.t)
-        log_one_p_eta_rho = log_one_p_eta_rho.T.reshape(1, self.t)
+        f = factors.reshape(1, self.t)
+        log_one_p_eta_rho = log_one_p_eta_rho.reshape(1, self.t)
         
         kernel = c * KernelLinearOperator(x1, x2 * f, covar_func=self._covar_func, **kwargs)
         if self.correlation:
             sd1 = torch.exp(0.5 * (x1 * log_one_p_eta_rho).sum(1)).reshape((x1.shape[0], 1))
-            sd2 = torch.exp(0.5 * (x2 * log_one_p_eta_rho).sum(1)).reshape((x2.shape[0], 1))
-            kernel = kernel / (sd1 * sd2.T)
+            sd2 = torch.exp(0.5 * (x2 * log_one_p_eta_rho).sum(1)).reshape((1, x2.shape[0]))
+            kernel = (kernel / sd1) / sd2
         return(kernel)
     
     def get_params(self):
         return({'logit_rho': self.logit_rho,
                 'log_p': self.log_p})
+
+
+class RBFKernel(RhoPiKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, **kwargs):
+        super().__init__(n_alleles, seq_length,
+                         common_rho=True, train_p=False, train_var=False,
+                         **kwargs)
     
 
 class RhoKernel(RhoPiKernel):
     is_stationary = True
-    def __init__(self, n_alleles, seq_length, logit_rho0=None,
-                 common_rho=False, **kwargs):
-        super().__init__(n_alleles, seq_length, logit_rho0=logit_rho0, common_rho=common_rho,
-                         train_p=False, log_p0=None, **kwargs)
-    
-    
-class RBFKernel(RhoKernel):
-    is_stationary = True
-    def __init__(self, n_alleles, seq_length, logit_rho0=None, **kwargs):
-        super().__init__(n_alleles, seq_length, logit_rho0=logit_rho0, common_rho=True, **kwargs)
-        
+    def __init__(self, n_alleles, seq_length, **kwargs):
+        super().__init__(n_alleles, seq_length,
+                         common_rho=False, train_p=False, train_var=False,
+                         **kwargs)
+
         
 class ARDKernel(RhoPiKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
-        super().__init__(n_alleles, seq_length, correlation=True, train_p=True, **kwargs)
+        super().__init__(n_alleles, seq_length,
+                         correlation=True, train_p=True, train_var=True,
+                         **kwargs)
     
     
 #################
