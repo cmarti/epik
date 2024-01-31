@@ -1,11 +1,13 @@
 import numpy as np
 import torch as torch
 
+from functools import partial
 from itertools import combinations
 from scipy.special._basic import comb
 from torch.nn import Parameter
 from pykeops.torch import LazyTensor
-from linear_operator.operators import KernelLinearOperator
+from linear_operator.operators import (KernelLinearOperator, MatmulLinearOperator,
+                                       DiagLinearOperator)
 
 from epik.src.utils import get_tensor, log1mexp
 from epik.src.kernel.base import SequenceKernel
@@ -14,19 +16,33 @@ from epik.src.priors import (LambdasFlatPrior, LambdasDeltaPrior, RhosPrior,
 
 
 class AdditiveKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
+    def __init__(self, n_alleles, seq_length,
+                 log_lambdas0=None, log_var0=None,
+                 **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         self.log_lambdas0 = log_lambdas0
+        self.log_var0 = log_var0
         self.set_params()
     
     def get_matrix(self):
-        m = torch.tensor([[1, -self.l], [0., self.alpha]])
+        m = torch.tensor([[1, -self.l],
+                          [0., self.alpha]])
         return(m)  
     
     def set_params(self):
-        log_lambdas0 = torch.tensor([0, 0.]) if self.log_lambdas0 is None else self.log_lambdas0
+        m = self.get_matrix()
+
+        if self.log_lambdas0 is None: 
+            # log_var0 = 0. if self.log_var0 is None else self.log_var0
+            # var0 = np.exp(log_var0)
+            # coeffs0 = torch.tensor([0.5 * var0, var0 /(2 * self.l)]).to(dtype=self.dtype)
+            # log_lambdas0 = torch.log(torch.linalg.solve(m, coeffs0))
+            log_lambdas0 = torch.tensor([0., 0.], dtype=self.dtype)
+        else:
+            log_lambdas0 = self.log_lambdas0.to(dtype=self.dtype)
+
         params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
-                  'm': Parameter(self.get_matrix(), requires_grad=False)}
+                  'm': Parameter(m, requires_grad=False)}
         self.register_params(params)
     
     def lambdas_to_coeffs(self, lambdas):
@@ -38,8 +54,15 @@ class AdditiveKernel(SequenceKernel):
     
     def forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        return(coeffs[0] + coeffs[1] * (x1 @ x2.T))
-
+        # print(self.log_lambdas, coeffs.detach().cpu().numpy())
+        s = MatmulLinearOperator(x1, x2.T)
+        x1_ = torch.ones(size=(x1.shape[0], 1), dtype=coeffs.dtype, device=coeffs.device)
+        x2_ = torch.ones(size=(1, x2.shape[0]), dtype=coeffs.dtype, device=coeffs.device)
+        s0 = MatmulLinearOperator(x1_, x2_)
+        if diag:
+            return(coeffs[0] * x1_ + coeffs[1] * s.diagonal(dim1=-1, dim2=-2))
+        else:
+            return(coeffs[0] *  s0 + coeffs[1] * s)
 
 class _LambdasKernel(SequenceKernel):
     def calc_polynomial_coeffs(self):
@@ -176,7 +199,7 @@ class RhoPiKernel(SequenceKernel):
     def get_logit_rho0(self):
         # Choose rho0 so that correlation at l/2 is 0.1
         shape = (1, 1) if self.common_rho else (self.l, 1)
-        t = np.exp(-2/self.l * np.log(10.))
+        t = np.exp(-2 / self.l * np.log(10.))
         v = np.log((1 - t) / (self.alpha * t))
         logit_rho0 = torch.full(shape, v, dtype=self.dtype) if self.logit_rho0 is None else self.logit_rho0 
         return(logit_rho0)
@@ -220,7 +243,12 @@ class RhoPiKernel(SequenceKernel):
         if self.common_rho:
             constant *= self.l
         constant += self.log_var
-        
+        # print('Params')
+        # print('log_var', self.log_var.detach().cpu().numpy(), self.train_var)
+        # print('logit_rho', self.logit_rho.detach().cpu().numpy())
+        # print('log_p', self.log_p.detach().cpu().numpy())
+        # print('factors', factors.detach().cpu().numpy())
+        # input()
         return(constant, factors, log_one_p_eta_rho)
     
     def _nonkeops_forward(self, x1, x2, diag=False, **params):
@@ -228,32 +256,33 @@ class RhoPiKernel(SequenceKernel):
         factors = factors.reshape(1, self.t)
         log_one_p_eta_rho = log_one_p_eta_rho.reshape(self.t, 1)
         
+        log_kernel = constant + x1 @ (x2 * factors).T
         if self.correlation:
             log_sd1 = 0.5 * (x1 @ log_one_p_eta_rho)
             log_sd2 = 0.5 * (x2 @ log_one_p_eta_rho).reshape((1, x2.shape[0]))
-            kernel = torch.exp(constant + x1 @ (x2 * factors).T - log_sd1 - log_sd2)
-        else:
-            kernel = torch.exp(constant + x1 @ (x2 * factors).T)
-        # print(kernel)
+            log_kernel = log_kernel - log_sd1 - log_sd2
+        
+        kernel = torch.exp(log_kernel)
         return(kernel)
     
     def _covar_func(self, x1, x2, **kwargs):
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
-        kernel = ((x1_ * x2_).sum(-1)).exp()
+        kernel = (x1_ * x2_).sum(-1).exp()
         return(kernel)
     
     def _keops_forward(self, x1, x2, **kwargs):
         constant, factors, log_one_p_eta_rho = self.get_factors()
-        c = torch.exp(constant)
         f = factors.reshape(1, self.t)
         log_one_p_eta_rho = log_one_p_eta_rho.reshape(1, self.t)
+        c = torch.exp(constant)
         
         kernel = c * KernelLinearOperator(x1, x2 * f, covar_func=self._covar_func, **kwargs)
         if self.correlation:
-            sd1 = torch.exp(0.5 * (x1 * log_one_p_eta_rho).sum(1)).reshape((x1.shape[0], 1))
-            sd2 = torch.exp(0.5 * (x2 * log_one_p_eta_rho).sum(1)).reshape((1, x2.shape[0]))
-            kernel = (kernel / sd1) / sd2
+            sd1_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x1 * log_one_p_eta_rho).sum(1)))
+            sd2_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x2 * log_one_p_eta_rho).sum(1)))
+            kernel = sd1_inv_D @ kernel @ sd2_inv_D
+
         return(kernel)
     
     def get_params(self):

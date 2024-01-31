@@ -45,13 +45,14 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops):
                                  use_keops=use_keops)
 
         # VC-like kernels
-        elif kernel == 'VC':
-            kernel = VarianceComponentKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'Additive':
             kernel = AdditiveKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'DP':
-            kernel = DeltaPKernel(n_alleles, seq_length, P=P, dtype=dtype)
-            
+            kernel = DeltaPKernel(n_alleles, seq_length, P=P, dtype=dtype,
+                                  use_keops=use_keops)
+        elif kernel == 'VC':
+            kernel = VarianceComponentKernel(n_alleles, seq_length, dtype=dtype,
+                                             use_keops=use_keops)
         else:
             msg = 'Unknown kernel provided: {}'.format(kernel)
             raise ValueError(msg)
@@ -152,6 +153,7 @@ def main():
     n_alleles = alleles.shape[0]
     X = seq_to_one_hot(seqs, alleles=alleles)
     y = data.values[:, 0]
+    log_var0 = np.log(np.var(y) * 0.2)
     if data.shape[1] > 1:
         y_var = data.values[:, 1]
         y_var[y_var < 0.0001] = 0.0001

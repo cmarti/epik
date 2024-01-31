@@ -106,32 +106,39 @@ class KernelsTests(unittest.TestCase):
         logit_rho0 = torch.tensor([0.])
         kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         x = get_full_space_one_hot(l, a)
-        cov = kernel.forward(x, x)
+        cov = kernel.forward(x, x).detach().numpy()
         assert(cov[0, 0] == 1.5)
         assert(cov[0, 1] == 0.5)
+        
+        I = torch.eye(a ** l)
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
         
         l, a = 2, 2
         logit_rho0 = torch.tensor([[0.], [0.]])
         rho = np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))
         kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         x = get_full_space_one_hot(l, a)
-        cov = kernel.forward(x, x).detach().numpy()[0, :]
-        assert(np.allclose(cov, [1.5 ** 2, 1.5 * 0.5, 1.5 * 0.5, 0.5 ** 2]))
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0, :], [1.5 ** 2, 1.5 * 0.5, 1.5 * 0.5, 0.5 ** 2]))
+
+        I = torch.eye(a ** l)
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov, cov))
 
         logit_rho0 = torch.tensor([[0.], [-np.log(3)]], dtype=torch.float32)
         rho = (np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))).flatten()
         kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
-        cov = kernel.forward(x, x).detach().numpy()[0, :]
+        cov = kernel.forward(x, x).detach().numpy()
         expected = np.array([(1 + rho[0]) * (1 + rho[1]),
                              (1 - rho[0]) * (1 + rho[1]),
                              (1 + rho[0]) * (1 - rho[1]),
                              (1 - rho[0]) * (1 - rho[1])])
-        assert(np.allclose(cov, expected))
+        assert(np.allclose(cov[0, :], expected))
         
-        # Test with KeOps backend
         I = torch.eye(a ** l)
-        cov = (kernel._keops_forward(x, x) @ I).detach().numpy()[0, :]
-        assert(np.allclose(cov, expected))
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
     
     def test_rho_pi_kernel(self):
         l, a = 1, 2
@@ -144,6 +151,10 @@ class KernelsTests(unittest.TestCase):
         expected = np.array([[3, 0.5],
                              [0.5, 1.125]])
         assert(np.allclose(cov, expected))
+
+        I = torch.eye(a ** l)
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
         
         l, a = 2, 2
         logit_rho0 = torch.tensor([[0.],
@@ -156,17 +167,16 @@ class KernelsTests(unittest.TestCase):
         rho = np.array([0.5, 0.5])
         eta = np.array([[4., 0.25],
                         [1., 1.  ]])
-        cov = kernel.forward(x, x).detach().numpy()[0, :]
+        cov = kernel.forward(x, x).detach().numpy()
         expected = np.array([(1 + rho[0] * eta[0, 0]) * (1 + rho[1] * eta[1, 0]),
                              (1 - rho[0])             * (1 + rho[1] * eta[1, 0]),
                              (1 + rho[0] * eta[0, 0]) * (1 - rho[1]),
                              (1 - rho[0])             * (1 - rho[1])])
-        assert(np.allclose(cov, expected))
-        
-        # Test with KeOps backend
+        assert(np.allclose(cov[0, :], expected))
+
         I = torch.eye(a ** l)
-        cov = (kernel._keops_forward(x, x) @ I).detach().numpy()[0, :]
-        assert(np.allclose(cov, expected))
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
         
     def test_ARD_kernel(self):
         l, a = 1, 2
@@ -179,6 +189,10 @@ class KernelsTests(unittest.TestCase):
         expected = np.array([[1, 0.5 / np.sqrt(3 * 1.125)],
                              [0.5 / np.sqrt(3 * 1.125), 1]])
         assert(np.allclose(cov, expected))
+
+        I = torch.eye(a ** l)
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
         
         l, a = 2, 2
         logit_rho0 = torch.tensor([[0.],
@@ -191,18 +205,17 @@ class KernelsTests(unittest.TestCase):
         rho = np.array([0.5, 0.5])
         eta = np.array([[4., 0.25],
                         [1., 1.  ]])
-        cov = kernel.forward(x, x).detach().numpy()[0, :]
+        cov = kernel.forward(x, x).detach().numpy()
         expected = np.array([1, 
                              (1 - rho[0]) / np.sqrt((1 + rho[0] * eta[0, 0]) * (1 + rho[0] * eta[0, 1])),
                              (1 - rho[1]) / np.sqrt((1 + rho[1] * eta[1, 0]) * (1 + rho[1] * eta[1, 1])),
                              np.nan])
         expected[3] = expected[1] * expected[2]
-        assert(np.allclose(cov, expected))
+        assert(np.allclose(cov[0, :], expected))
         
-        # Test with KeOps backend
         I = torch.eye(a ** l)
-        cov = (kernel._keops_forward(x, x) @ I).detach().numpy()[0, :]
-        assert(np.allclose(cov, expected))
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
         
     def test_heteroskedastic_kernel(self):
         l, a = 1, 2

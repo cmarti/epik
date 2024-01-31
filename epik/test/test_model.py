@@ -11,18 +11,15 @@ from subprocess import check_call
 from tempfile import NamedTemporaryFile
 
 from scipy.stats import pearsonr
+from gpytorch.kernels import ScaleKernel
+from gpytorch.kernels import RBFKernel as GPRBFKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
-from epik.src.kernel.haploid import VarianceComponentKernel, AdditiveKernel
-from epik.src.priors import (LambdasExpDecayPrior, AllelesProbPrior,
-                             LambdasDeltaPrior, LambdasFlatPrior, RhosPrior)
-from epik.src.kernel.keops import VarianceComponentKernel
-from epik.src.kernel.haploid import RhoKernel, RBFKernel, ARDKernel
-from gpytorch.kernels import ScaleKernel
-from gpytorch.kernels import RBFKernel as GPRBFKernel
+from epik.src.kernel.haploid import (VarianceComponentKernel, AdditiveKernel,
+                                     RhoKernel, RBFKernel, ARDKernel)
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -216,9 +213,10 @@ class ModelsTests(unittest.TestCase):
         X, y, y_var = seq_to_one_hot(data.X.values, alleles=['A', 'B']), data.y.values, data.y_var.values
         train_x, train_y, test_x, test_y, train_y_var = split_training_test(X, y, y_var=y_var, ptrain=ptrain)
 
+        kernel = AdditiveKernel(alpha, l)
         # kernel = RBFKernel(alpha, l)
         # kernel = RhoKernel(alpha, l)
-        kernel = ScaleKernel(ARDKernel(alpha, l))
+        # kernel = ARDKernel(alpha, l)
         # kernel = ScaleKernel(GPRBFKernel())
         # kernel = ScaleKernel(GPRBFKernel(ard_num_dims=train_x.shape[1]))
 
