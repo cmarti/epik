@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import time
 import sys
-from _collections import defaultdict
+
+from collections import defaultdict
 
 
 def get_alleles(c, alleles=None):
@@ -19,7 +20,7 @@ def seq_to_one_hot(X, alleles=None):
         c = m[:, i]
         for allele in get_alleles(c, alleles=alleles):
             onehot.append(get_tensor(c == allele))
-    onehot = torch.stack(onehot, 1)
+    onehot = torch.stack(onehot, 1).contiguous()
     return(onehot)
 
 
@@ -155,7 +156,7 @@ def get_full_space_one_hot(seq_length, n_alleles, dtype=torch.float32):
         for j in range(n_alleles):
             one_hot.append(r == j)
         c = torch.div(c, n_alleles, rounding_mode='floor')
-    X = torch.vstack(one_hot).T.to(dtype=dtype)
+    X = torch.vstack(one_hot).T.to(dtype=dtype).contiguous()
     return(X)
 
 
