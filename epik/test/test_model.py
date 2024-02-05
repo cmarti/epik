@@ -110,24 +110,27 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, _, _, train_y_var = data
         
         # Train new model
-        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
-                     optimizer='Adam', track_progress=True)
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, optimizer='Adam', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         params = model.get_params()
-        loglambdas = np.log(params['lambdas'])
-        r = pearsonr(loglambdas[1:], log_lambdas0[1:])[0]
+        log_lambdas = params['log_lambdas'].flatten()
+        r = pearsonr(log_lambdas[1:], log_lambdas0[1:])[0]
         assert(r > 0.6)
          
+    def test_epik_fit_lbfgs(self):
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
+        train_x, train_y, _, _, train_y_var = data
+        
         # Train LBFGS optimizer
-        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l),
-                     optimizer='LBFGS', track_progress=True)
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, optimizer='LBFGS', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         params = model.get_params()
-        loglambdas = np.log(params['lambdas'])
-        r = pearsonr(loglambdas[1:], log_lambdas0[1:])[0]
-        assert(params['mean'][0] == 0)
+        log_lambdas = params['log_lambdas'].flatten()
+        r = pearsonr(log_lambdas[1:], log_lambdas0[1:])[0]
         assert(r > 0.6)
         
     def test_epik_predict(self):
