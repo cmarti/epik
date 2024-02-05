@@ -144,6 +144,7 @@ def main():
     log = LogTrack()
     log.write('Start analysis')
     data = pd.read_csv(data_fpath, index_col=0).dropna()
+    log.write('Loaded {} sequences from {}'.format(data.shape[0], data_fpath))
     
     # Get processed data
     seqs = data.index.values
