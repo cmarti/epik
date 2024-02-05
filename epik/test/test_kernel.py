@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import torch
 
 from os.path import join
+from scipy.linalg import cholesky
+
 from epik.src.settings import TEST_DATA_DIR
 from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
                                      RhoKernel, AdditiveKernel, ARDKernel)
@@ -58,6 +60,25 @@ class KernelsTests(unittest.TestCase):
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
+    
+    def test_vc_kernel_w_d(self):
+        l, a = 2, 2
+        x = get_full_space_one_hot(l, a)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l)
+        
+        # Test that the log W_kd is well calculated
+        w_kd = kernel.calc_krawchouk_matrix()
+        sign, log_w_kd = kernel.calc_log_w_kd()
+        w_kd_2 = (sign * torch.exp(log_w_kd)).sum(-1)
+        assert(np.allclose(w_kd, w_kd_2))
+        
+        # Test that the corresponding w_d are well calculated in both cases
+        log_lambdas = torch.tensor([0, -10., -10.], dtype=torch.float32)
+        lambdas = torch.exp(log_lambdas)
+        w_d_1 = w_kd @ lambdas
+        w_d_2 = kernel.calc_w_d(sign, log_w_kd, log_lambdas)
+        assert(np.allclose(w_d_1, w_d_2))
+        assert(np.allclose(w_d_1.numpy(), 1/4, atol=1e-4))
         
     def test_vc_kernel(self):
         l, a = 2, 2
@@ -70,6 +91,10 @@ class KernelsTests(unittest.TestCase):
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov, 0.25, atol=1e-4))
         
+        I = torch.eye(a ** l)
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
+        
         # k=1        
         log_lambdas0 = torch.tensor([-10., 0., -10.], dtype=torch.float32)
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
@@ -80,6 +105,10 @@ class KernelsTests(unittest.TestCase):
                        [0, -1, 1, 0],
                        [-1, 0, 0, 1]], dtype=np.float32)
         assert(np.allclose(cov,  k1 / 2, atol=1e-4))
+        
+        I = torch.eye(a ** l)
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=1e-4))
         
         # k=2
         log_lambdas0 = torch.tensor([-10., -10., 0.], dtype=torch.float32)
@@ -92,14 +121,27 @@ class KernelsTests(unittest.TestCase):
                        [1, -1, -1, 1]], dtype=np.float32)
         assert(np.allclose(cov,  k2 / 4, atol=1e-4))
         
-        # Using KeOops
         I = torch.eye(a ** l)
-        log_lambdas0 = torch.log(torch.tensor([1, 0.5, 0.25]))
-        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
-                                         log_lambdas0=log_lambdas0)
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov))
+    
+    def test_vc_kernel_bigger(self):
+        l, a = 6, 4
+        I = torch.eye(a ** l)
+        x = get_full_space_one_hot(l, a)
+
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l)
         cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
-        assert(np.allclose(cov1, cov2))
+        w_d = kernel.get_w_d().detach().numpy()
+        
+        # Make sure we can compute cholesky factorization for PSD
+        cholesky(cov1)
+        cholesky(cov2)
+
+        assert(np.allclose(np.unique(w_d), np.unique(cov1), atol=1e-4))
+        assert(np.allclose(cov2, cov1, atol=1e-4))
+        
         
     def test_rho_kernel(self):
         l, a = 1, 2
