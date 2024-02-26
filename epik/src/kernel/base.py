@@ -1,3 +1,4 @@
+import numpy as np
 import torch as torch
 
 from torch.nn import Parameter
@@ -14,7 +15,8 @@ class SequenceKernel(Kernel):
         self.t = self.l * self.alpha
         self.fdtype = dtype
         self.use_keops = use_keops
-        self.n = float(self.alpha ** self.l)
+        self.logn = self.l * np.log(self.alpha)
+        self.logam1 = np.log(self.alpha - 1)
         super().__init__(**kwargs)
         
     def zeros_like(self, x):

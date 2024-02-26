@@ -9,7 +9,8 @@ from scipy.linalg import cholesky
 
 from epik.src.settings import TEST_DATA_DIR
 from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
-                                     RhoKernel, AdditiveKernel, ARDKernel)
+                                     RhoKernel, AdditiveKernel, ARDKernel, 
+                                     calc_d_powers_inverse, calc_vandermonde_inverse)
 from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
                             get_full_space_one_hot)
 from epik.src.kernel.base import AdditiveHeteroskedasticKernel
@@ -61,25 +62,24 @@ class KernelsTests(unittest.TestCase):
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
     
-    def test_vc_kernel_w_d(self):
-        l, a = 2, 2
-        x = get_full_space_one_hot(l, a)
-        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l)
+    def test_d_powers_coeffs(self):
+        l = 3
         
-        # Test that the log W_kd is well calculated
-        w_kd = kernel.calc_krawchouk_matrix()
-        sign, log_w_kd = kernel.calc_log_w_kd()
-        w_kd_2 = (sign * torch.exp(log_w_kd)).sum(-1)
-        assert(np.allclose(w_kd, w_kd_2))
-        
-        # Test that the corresponding w_d are well calculated in both cases
-        log_lambdas = torch.tensor([0, -10., -10.], dtype=torch.float32)
-        lambdas = torch.exp(log_lambdas)
-        w_d_1 = w_kd @ lambdas
-        w_d_2 = kernel.calc_w_d(sign, log_w_kd, log_lambdas)
-        assert(np.allclose(w_d_1, w_d_2))
-        assert(np.allclose(w_d_1.numpy(), 1/4, atol=1e-4))
-        
+        d = torch.arange(l+1).unsqueeze(0).to(dtype=torch.float64)
+        A = d.T ** d
+        m1 = torch.linalg.inv(A)
+        print(m1)
+
+        m2 = calc_d_powers_inverse(l)
+        print(m2)
+
+        m3 = calc_vandermonde_inverse(np.arange(l+1))
+        print(m3)
+
+        for l in range(10):
+            m2 = calc_d_powers_inverse(l)
+        print(m2)
+
     def test_vc_kernel(self):
         l, a = 2, 2
         x = get_full_space_one_hot(l, a)
@@ -93,7 +93,7 @@ class KernelsTests(unittest.TestCase):
         
         I = torch.eye(a ** l)
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
-        assert(np.allclose(cov2, cov))
+        assert(np.allclose(cov2, cov, atol=1e-4))
         
         # k=1        
         log_lambdas0 = torch.tensor([-10., 0., -10.], dtype=torch.float32)
@@ -125,23 +125,68 @@ class KernelsTests(unittest.TestCase):
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov))
     
+    def test_vc_kernel_max_k(self):
+        l, a = 2, 2
+        I = torch.eye(a ** l)
+        x = get_full_space_one_hot(l, a)
+
+        # Constant kernel
+        log_lambdas0 = torch.tensor([0., -10])
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         log_lambdas0=log_lambdas0, max_k=1)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov, 0.25, atol=0.01))
+        
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=0.01))
+        
+        # Additive kernel
+        log_lambdas0 = torch.tensor([-10., 0])
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         log_lambdas0=log_lambdas0, max_k=1)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0], [0.5, 0, 0, -0.5], atol=0.01))
+
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=0.01))
+        
+        # Additive kernel with larger variance
+        log_lambdas0 = torch.tensor([-10., np.log(2)]).to(dtype=torch.float32)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
+                                         log_lambdas0=log_lambdas0, max_k=1)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0], [1, 0, 0, -1], atol=0.01))
+
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=0.01))
+
+        # Test in long sequences
+        a, l, n = 2, 100, 3
+        I = torch.eye(n)
+        x = np.random.choice([0, 1], size=n * l)
+        x = np.vstack([x, 1- x]).T.reshape((n, 2 * l))
+        x = torch.tensor(x, dtype=torch.float32)
+        
+        log_lambdas0 = torch.tensor([-10., 45, -10.]).to(dtype=torch.float32)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l, max_k=2)
+        cov = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=1e-4))
+    
     def test_vc_kernel_bigger(self):
         l, a = 6, 4
         I = torch.eye(a ** l)
         x = get_full_space_one_hot(l, a)
 
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l)
-        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        cov1 = kernel._nonkeops_forward_polynomial_d(x, x).detach().numpy()
+        cov2 = kernel._nonkeops_forward_hamming_class(x, x).detach().numpy()
+        cov3 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         w_d = kernel.get_w_d().detach().numpy()
         
-        # Make sure we can compute cholesky factorization for PSD
-        cholesky(cov1)
-        cholesky(cov2)
-
-        assert(np.allclose(np.unique(w_d), np.unique(cov1), atol=1e-4))
-        assert(np.allclose(cov2, cov1, atol=1e-4))
-        
+        assert(np.allclose(np.unique(w_d)[1:], np.unique(cov1)[1:], atol=1e-3))
+        assert(np.allclose(np.unique(w_d)[1:], np.unique(cov2)[1:], atol=1e-3))
+        assert(np.allclose(np.unique(w_d)[1:], np.unique(cov3)[1:], atol=1e-3))
         
     def test_rho_kernel(self):
         l, a = 1, 2

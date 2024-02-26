@@ -108,15 +108,24 @@ class ModelsTests(unittest.TestCase):
     def test_epik_fit(self):
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
         train_x, train_y, _, _, train_y_var = data
-        
+
         # Train new model
         kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l)
         model = EpiK(kernel, optimizer='Adam', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
-        params = model.get_params()
-        log_lambdas = params['log_lambdas'].flatten()
+        log_lambdas = kernel.log_lambdas.detach().cpu().numpy().flatten()
         r = pearsonr(log_lambdas[1:], log_lambdas0[1:])[0]
+        assert(r > 0.6)
+
+        # Test with limited components
+        max_k = 3
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l, max_k=max_k)
+        model = EpiK(kernel, optimizer='Adam', track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=100)
+        log_lambdas = kernel.log_lambdas.detach().cpu().numpy().flatten()
+        r = pearsonr(log_lambdas[1:max_k + 1], log_lambdas0[1:max_k + 1])[0]
         assert(r > 0.6)
          
     def test_epik_fit_lbfgs(self):

@@ -15,7 +15,7 @@ from epik.src.model import EpiK
 from epik.src.kernel.base import AdditiveHeteroskedasticKernel
 from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
                                      RhoPiKernel, RhoKernel, AdditiveKernel,
-                                     RBFKernel, ARDKernel)
+                                     RBFKernel, ARDKernel, PairwiseKernel)
 
 
 def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops):
@@ -47,6 +47,8 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops):
         # VC-like kernels
         elif kernel == 'Additive':
             kernel = AdditiveKernel(n_alleles, seq_length, dtype=dtype)
+        elif kernel == 'Pairwise':
+            kernel = PairwiseKernel(n_alleles, seq_length, dtype=dtype)
         elif kernel == 'DP':
             kernel = DeltaPKernel(n_alleles, seq_length, P=P, dtype=dtype,
                                   use_keops=use_keops)

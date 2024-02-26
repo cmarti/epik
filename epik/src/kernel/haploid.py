@@ -15,6 +15,39 @@ from epik.src.priors import (LambdasFlatPrior, LambdasDeltaPrior, RhosPrior,
                              AllelesProbPrior)
 
 
+def calc_d_powers_inverse(l, max_k=None):
+    if max_k is None:
+        max_k = l
+    q = torch.arange(max_k + 1).unsqueeze(1)
+    d = torch.arange(l + 1).unsqueeze(0)
+    log_distances = torch.log(d)
+
+    norm_factors = torch.prod((d - q).fill_diagonal_(1), axis=0)
+    print(norm_factors)
+    print(torch.exp(log_comb(torch.tensor([l]), d)))
+
+
+def calc_vandermonde_inverse(values, n=None):
+        s = values.shape[0]
+        if n is None:
+            n = s
+        
+        B = np.zeros((n, s))
+        idx = np.arange(s)
+        sign = np.zeros((n, s))
+
+        for k in range(s):
+            v_k = values[idx != k]
+            norm_factor = 1 / np.prod(v_k - values[k])
+        
+            for power in range(n):
+                v_k_combs = list(combinations(v_k, s - power - 1))
+                p = np.sum([np.prod(v) for v in v_k_combs])
+                B[power, k] = sign[power, k] * p * norm_factor
+                sign[power, k] = (-1) ** (power)
+                print(1/norm_factor, p)
+        return(B)
+
 class AdditiveKernel(SequenceKernel):
     def __init__(self, n_alleles, seq_length,
                  log_lambdas0=None, log_var0=None,
@@ -63,7 +96,7 @@ class AdditiveKernel(SequenceKernel):
             return(coeffs[0] * x1_ + coeffs[1] * s.diagonal(dim1=-1, dim2=-2))
         else:
             return(coeffs[0] *  s0 + coeffs[1] * s)
-
+        
 class _LambdasKernel(SequenceKernel):
     def calc_polynomial_coeffs(self):
         lambdas = self.lambdas_p
@@ -81,11 +114,9 @@ class _LambdasKernel(SequenceKernel):
                 B[power, k] = (-1) ** (power) * p * norm_factor
 
         return(B)
-    
 
 def log_factorial(x):
     return(torch.lgamma(x + 1))
-
 
 def log_comb(n, k):
     return(log_factorial(n) - log_factorial(k) - log_factorial(n - k))
@@ -94,27 +125,25 @@ def log_comb(n, k):
 class VarianceComponentKernel(_LambdasKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, log_lambdas0=None,
-                 log_var0=2., **kwargs):
+                 log_var0=2., max_k=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
-        self.n = self.alpha ** self.l
+        self.max_k = self.l if max_k is None else min(max_k, self.l)
         self.log_lambdas0 = log_lambdas0
         self.log_var0 = log_var0
         self.set_params()
 
-    def calc_krawchouk_matrix(self):
-        d = torch.arange(self.s).reshape((self.s, 1, 1))
-        k = torch.arange(self.s).reshape((1, self.s, 1))
-        q = torch.arange(self.s).reshape((1, 1, self.s))
-        w_kd = ((-1.)**q * (self.alpha-1.)**(k-q) * comb(d,q) * comb(self.l-d,k-q)).sum(-1) / self.n
-        return(w_kd.to(dtype=self.dtype))
+    def calc_d_k_q(self, s, max_k):
+        if max_k is None:
+            max_k = s
+        d = torch.arange(s).reshape((s, 1, 1))
+        k = torch.arange(max_k + 1).reshape((1, max_k + 1, 1))
+        q = torch.arange(max_k + 1).reshape((1, 1, max_k + 1))
+        return(d, k, q)
     
     def calc_log_w_kd(self):
-        d = torch.arange(self.s).reshape((self.s, 1, 1))
-        k = torch.arange(self.s).reshape((1, self.s, 1))
-        q = torch.arange(self.s).reshape((1, 1, self.s))
-        
-        log_w_kd = (k-q) * np.log(self.alpha-1.) + log_comb(d, q)
-        log_w_kd += log_comb(self.l-d, k-q) - np.log(self.n)
+        d, k, q = self.calc_d_k_q(self.s, self.max_k)
+        log_w_kd = (k-q) * self.logam1 + log_comb(d, q)
+        log_w_kd += log_comb(self.l-d, k-q) - self.logn
         sign = (-1.)**q
         return(sign, log_w_kd)
     
@@ -122,29 +151,53 @@ class VarianceComponentKernel(_LambdasKernel):
         log_w_d_ = log_w_kd + log_lambdas.reshape((1, log_lambdas.shape[0], 1))
         w_d = (w_kd_sign * torch.exp(log_w_d_)).sum((1, 2))
         return(w_d)
-    
+
     def calc_d_powers_matrix_inv(self):
-        p = torch.arange(self.s).reshape(1, self.s)
-        d = torch.arange(self.s).reshape(self.s, 1)
-        d_powers = (d ** p).to(dtype=torch.float64)
-        return(torch.linalg.inv(d_powers).to(dtype=self.dtype))
+        d = torch.arange(self.l + 1).unsqueeze(0).to(dtype=torch.float64)
+        A = d.T ** d
+        d_powers_inv = torch.linalg.inv(A)[:self.max_k + 1]
+        return(d_powers_inv)
     
-    def set_params(self):
+    def calc_d_polynomial_coeffs_matrix_log(self, w_kd_sign, log_w_kd):
+        d_powers_inv = self.calc_d_powers_matrix_inv()
+        n, m = d_powers_inv.shape
+        d_powers_inv = d_powers_inv.reshape((n, m, 1, 1))
+        d_powers_inv_sign = torch.sign(d_powers_inv)
+        d_powers_inv_log = torch.log(torch.abs(d_powers_inv))
+        log_c_p = d_powers_inv_log + log_w_kd.unsqueeze(0)
+        sign = w_kd_sign * d_powers_inv_sign
+        return(sign, log_c_p)
+    
+    def calc_c_d(self, c_p_sign, log_c_p, log_lambdas):
+        log_lambdas = log_lambdas.reshape((1, 1, self.max_k + 1, 1))
+        c_d = (c_p_sign * torch.exp(log_c_p + log_lambdas)).sum((1, 2, 3)).flatten()
+        return(c_d)
+    
+    def calc_log_lambdas0(self, c_p_sign, log_c_p):
         if self.log_lambdas0 is None:
-            # Match exponentially decaying correlations with variance=1
-            w_kd = self.calc_krawchouk_matrix()
-            w_d0 = torch.exp(torch.linspace(self.log_var0, -10, self.s, dtype=self.dtype))
-            log_lambdas0 = torch.log(torch.linalg.solve(w_kd, w_d0))
+            # Match linearly decaying correlations with specified variance
+            exp_coeffs = torch.zeros((log_c_p.shape[0], 1))
+            exp_coeffs[0] = np.exp(self.log_var0)
+            exp_coeffs[1] = -np.exp(self.log_var0) / self.l
+            c_p = (c_p_sign * torch.exp(log_c_p)).sum((1, 3))
+            log_lambdas0 = np.log(torch.linalg.solve_triangular(c_p, exp_coeffs, upper=True)+1e-10)
         else:
             log_lambdas0 = self.log_lambdas0
-        log_lambdas0 = log_lambdas0.reshape((self.s, 1))
-        
+        log_lambdas0 = log_lambdas0.reshape((self.max_k + 1, 1))
+        return(log_lambdas0)
+
+    def set_params(self):
         w_kd_sign, log_w_kd = self.calc_log_w_kd()
-        d_powers_inv = self.calc_d_powers_matrix_inv()
-        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
-                  'log_w_kd': Parameter(log_w_kd, requires_grad=False),
-                  'w_kd_sign': Parameter(w_kd_sign, requires_grad=False),
-                  'd_powers_inv': Parameter(d_powers_inv, requires_grad=False)}
+        c_p_sign, log_c_p = self.calc_d_polynomial_coeffs_matrix_log(w_kd_sign, log_w_kd)
+        log_lambdas0 = self.calc_log_lambdas0(c_p_sign, log_c_p)
+
+        params = {'log_lambdas': Parameter(log_lambdas0.to(dtype=self.dtype), requires_grad=True),
+                  
+                  'log_w_kd': Parameter(log_w_kd.to(dtype=self.dtype), requires_grad=False),
+                  'w_kd_sign': Parameter(w_kd_sign.to(dtype=self.dtype), requires_grad=False),
+                  
+                  'log_c_p': Parameter(log_c_p.to(dtype=self.dtype), requires_grad=False),
+                  'c_p_sign': Parameter(c_p_sign.to(dtype=self.dtype), requires_grad=False)}
         self.register_params(params)
         
     def get_w_d(self):
@@ -152,7 +205,7 @@ class VarianceComponentKernel(_LambdasKernel):
         w_d = self.calc_w_d(self.w_kd_sign, self.log_w_kd, self.log_lambdas)
         return(w_d)
     
-    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
+    def _nonkeops_forward_hamming_class(self, x1, x2, diag=False, **kwargs):
         w_d = self.get_w_d()
         hamming_dist = self.calc_hamming_distance(x1, x2).to(dtype=torch.long)
         kernel = w_d[0] * (hamming_dist == 0)
@@ -161,10 +214,26 @@ class VarianceComponentKernel(_LambdasKernel):
         return(kernel)
     
     def get_c_d(self):
-        '''calculates coefficients for the covariance as a polynomial in d'''
-        c_d = self.d_powers_inv @ self.get_w_d()
+        c_d = self.calc_c_d(self.c_p_sign, self.log_c_p, self.log_lambdas)
         return(c_d)
 
+    def _nonkeops_forward_polynomial_d(self, x1, x2, diag=False, **kwargs):
+        c_d = self.get_c_d()
+        
+        d = self.l - x1 @ x2.T
+        k = torch.full_like(d, fill_value=c_d[0].item())
+        d_power = 1
+        for i in range(1, self.max_k + 1):
+            d_power = d_power * d
+            k += c_d[i] * d_power 
+        return(k)
+
+    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
+        if self.max_k < self.l:
+            return(self._nonkeops_forward_polynomial_d(x1, x2, diag=diag, **kwargs))
+        else:
+            return(self._nonkeops_forward_hamming_class(x1, x2, diag=diag, **kwargs))
+    
     def _covar_func(self, x1, x2, c_d, **kwargs):
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
@@ -172,7 +241,7 @@ class VarianceComponentKernel(_LambdasKernel):
         
         k = c_d[0]
         d_power = 1
-        for i in range(1, self.s):
+        for i in range(1, self.max_k + 1):
             d_power = d_power * d
             k += c_d[i] * d_power 
         return(k)
@@ -181,6 +250,13 @@ class VarianceComponentKernel(_LambdasKernel):
         c_d = self.get_c_d()
         return(KernelLinearOperator(x1, x2, covar_func=self._covar_func,
                                     c_d=c_d, **kwargs))
+    
+
+class PairwiseKernel(VarianceComponentKernel):
+    def __init__(self, n_alleles, seq_length, log_lambdas0=None,
+                 log_var0=2., **kwargs):
+        super().__init__(n_alleles, seq_length, log_lambdas0=log_lambdas0,
+                         log_var0=log_var0, max_k=2, **kwargs)
 
 
 class DeltaPKernel(VarianceComponentKernel):

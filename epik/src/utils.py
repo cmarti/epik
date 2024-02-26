@@ -167,4 +167,3 @@ def log1mexp(x):
     two = torch.tensor([2.], dtype=x.dtype).to(device=x.device)
     mask = -torch.log(two) < x  # x < 0
     return(torch.where(mask, (-x.expm1()).log(), (-x.exp()).log1p()))
-
