@@ -10,6 +10,7 @@ from scipy.linalg import cholesky
 from epik.src.settings import TEST_DATA_DIR
 from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
                                      RhoKernel, AdditiveKernel, ARDKernel, 
+                                     PairwiseKernel,
                                      calc_d_powers_inverse, calc_vandermonde_inverse)
 from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
                             get_full_space_one_hot)
@@ -85,11 +86,11 @@ class KernelsTests(unittest.TestCase):
         x = get_full_space_one_hot(l, a)
 
         # k=0        
-        log_lambdas0 = torch.tensor([0, -10., -10.], dtype=torch.float32)
+        log_lambdas0 = torch.tensor([0, -20., -20.], dtype=torch.float32)
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
                                          log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
-        assert(np.allclose(cov, 0.25, atol=1e-4))
+        assert(np.allclose(cov, 1, atol=1e-4))
         
         I = torch.eye(a ** l)
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
@@ -104,14 +105,14 @@ class KernelsTests(unittest.TestCase):
                        [0, 1, -1, 0],
                        [0, -1, 1, 0],
                        [-1, 0, 0, 1]], dtype=np.float32)
-        assert(np.allclose(cov,  k1 / 2, atol=1e-4))
+        assert(np.allclose(cov,  k1 * 2, atol=1e-4))
         
         I = torch.eye(a ** l)
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov, atol=1e-4))
         
         # k=2
-        log_lambdas0 = torch.tensor([-10., -10., 0.], dtype=torch.float32)
+        log_lambdas0 = torch.tensor([-20., -20., 0.], dtype=torch.float32)
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
                                          log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
@@ -119,7 +120,7 @@ class KernelsTests(unittest.TestCase):
                        [-1, 1, 1, -1],
                        [-1, 1, 1, -1],
                        [1, -1, -1, 1]], dtype=np.float32)
-        assert(np.allclose(cov,  k2 / 4, atol=1e-4))
+        assert(np.allclose(cov,  k2, atol=1e-4))
         
         I = torch.eye(a ** l)
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
@@ -135,17 +136,17 @@ class KernelsTests(unittest.TestCase):
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
                                          log_lambdas0=log_lambdas0, max_k=1)
         cov = kernel.forward(x, x).detach().numpy()
-        assert(np.allclose(cov, 0.25, atol=0.01))
+        assert(np.allclose(cov, 1, atol=0.01))
         
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov, atol=0.01))
         
         # Additive kernel
-        log_lambdas0 = torch.tensor([-10., 0])
+        log_lambdas0 = torch.tensor([-20., 0])
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
                                          log_lambdas0=log_lambdas0, max_k=1)
         cov = kernel.forward(x, x).detach().numpy()
-        assert(np.allclose(cov[0], [0.5, 0, 0, -0.5], atol=0.01))
+        assert(np.allclose(cov[0], [2, 0, 0, -2], atol=0.01))
 
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov, atol=0.01))
@@ -155,7 +156,7 @@ class KernelsTests(unittest.TestCase):
         kernel = VarianceComponentKernel(n_alleles=a, seq_length=l,
                                          log_lambdas0=log_lambdas0, max_k=1)
         cov = kernel.forward(x, x).detach().numpy()
-        assert(np.allclose(cov[0], [1, 0, 0, -1], atol=0.01))
+        assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
 
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov, atol=0.01))
@@ -167,8 +168,62 @@ class KernelsTests(unittest.TestCase):
         x = np.vstack([x, 1- x]).T.reshape((n, 2 * l))
         x = torch.tensor(x, dtype=torch.float32)
         
-        log_lambdas0 = torch.tensor([-10., 45, -10.]).to(dtype=torch.float32)
-        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l, max_k=2)
+        log_lambdas0 = torch.tensor([-10., 1, -30.]).to(dtype=torch.float32)
+        kernel = VarianceComponentKernel(n_alleles=a, seq_length=l, max_k=2,
+                                         log_lambdas0=log_lambdas0)
+        cov = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=1e-4))
+
+    def test_pairwise_kernel(self):
+        l, a = 2, 2
+        I = torch.eye(a ** l)
+        x = get_full_space_one_hot(l, a)
+
+        # Constant kernel
+        log_lambdas0 = torch.tensor([0., -10, -10])
+        kernel = PairwiseKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov, 1, atol=0.01))
+        
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=0.01))
+        
+        # Additive kernel
+        log_lambdas0 = torch.tensor([-10., 0, -10.])
+        kernel = PairwiseKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0], [2, 0, 0, -2], atol=0.01))
+
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=0.01))
+        
+        # Additive kernel with larger variance
+        log_lambdas0 = torch.tensor([-10., np.log(2), -10.]).to(dtype=torch.float32)
+        kernel = PairwiseKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
+
+        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        assert(np.allclose(cov2, cov, atol=0.01))
+
+        # Verify pairwise model with VC kernel
+        log_lambdas0 = torch.tensor([1., np.log(2), -1.]).to(dtype=torch.float32)
+        kernel1 = PairwiseKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov1 = kernel1.forward(x, x).detach().numpy()
+        kernel2 = VarianceComponentKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
+        cov2 = kernel2.forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, cov2, atol=0.01))
+
+        # Test in long sequences
+        a, l, n = 2, 100, 3
+        I = torch.eye(n)
+        x = np.random.choice([0, 1], size=n * l)
+        x = np.vstack([x, 1- x]).T.reshape((n, 2 * l))
+        x = torch.tensor(x, dtype=torch.float32)
+        
+        log_lambdas0 = torch.tensor([-10., 0, -30.]).to(dtype=torch.float32)
+        kernel = PairwiseKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel._nonkeops_forward(x, x).detach().numpy()
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov, atol=1e-4))

@@ -127,6 +127,7 @@ class VarianceComponentKernel(_LambdasKernel):
     def __init__(self, n_alleles, seq_length, log_lambdas0=None,
                  log_var0=2., max_k=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
+        self.use_polynomial = max_k is not None
         self.max_k = self.l if max_k is None else min(max_k, self.l)
         self.log_lambdas0 = log_lambdas0
         self.log_var0 = log_var0
@@ -143,7 +144,7 @@ class VarianceComponentKernel(_LambdasKernel):
     def calc_log_w_kd(self):
         d, k, q = self.calc_d_k_q(self.s, self.max_k)
         log_w_kd = (k-q) * self.logam1 + log_comb(d, q)
-        log_w_kd += log_comb(self.l-d, k-q) - self.logn
+        log_w_kd += log_comb(self.l-d, k-q) #- self.logn
         sign = (-1.)**q
         return(sign, log_w_kd)
     
@@ -229,7 +230,7 @@ class VarianceComponentKernel(_LambdasKernel):
         return(k)
 
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
-        if self.max_k < self.l:
+        if self.use_polynomial:
             return(self._nonkeops_forward_polynomial_d(x1, x2, diag=diag, **kwargs))
         else:
             return(self._nonkeops_forward_hamming_class(x1, x2, diag=diag, **kwargs))
@@ -257,6 +258,42 @@ class PairwiseKernel(VarianceComponentKernel):
                  log_var0=2., **kwargs):
         super().__init__(n_alleles, seq_length, log_lambdas0=log_lambdas0,
                          log_var0=log_var0, max_k=2, **kwargs)
+    
+    def calc_log_lambdas0(self, c_p):
+        if self.log_lambdas0 is None:
+            # Match linearly decaying correlations with specified variance
+            exp_coeffs = torch.zeros((c_p.shape[0], 1))
+            exp_coeffs[0] = np.exp(self.log_var0)
+            exp_coeffs[1] = -np.exp(self.log_var0) / self.l
+            log_lambdas0 = np.log(torch.linalg.solve_triangular(c_p, exp_coeffs, upper=True)+1e-10)
+        else:
+            log_lambdas0 = self.log_lambdas0
+
+        log_lambdas0 = log_lambdas0.reshape((3, 1))
+        return(log_lambdas0)
+    
+    def calc_c_p(self):
+        a, l = self.alpha, self.l
+        c13 = a * l - 0.5 * a ** 2 * l - 0.5 * l - a * l ** 2 + 0.5 * a ** 2 * l ** 2 + 0.5 * l ** 2
+        c23 = -a + 0.5 * a ** 2 + a * l - a ** 2 * l
+        c_p = torch.tensor([[1, l * (a - 1),          c13],
+                            [0,          -a,          c23],
+                            [0,           0, 0.5 * a ** 2]])
+        return(c_p)
+    
+    def calc_c_d(self, log_lambdas):
+        c_d = self.c_p @ torch.exp(log_lambdas)
+        return(c_d)
+    
+    def get_c_d(self):
+        return(self.calc_c_d(self.log_lambdas))
+
+    def set_params(self):
+        c_p = self.calc_c_p()
+        log_lambdas0 = self.calc_log_lambdas0(c_p)
+        params = {'log_lambdas': Parameter(log_lambdas0.to(dtype=self.dtype), requires_grad=True),
+                  'c_p': Parameter(c_p.to(dtype=self.dtype), requires_grad=False)}
+        self.register_params(params)
 
 
 class DeltaPKernel(VarianceComponentKernel):

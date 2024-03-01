@@ -19,7 +19,7 @@ from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
 from epik.src.kernel.haploid import (VarianceComponentKernel, AdditiveKernel,
-                                     RhoKernel, RBFKernel, ARDKernel)
+                                     RhoKernel, RBFKernel, ARDKernel, PairwiseKernel)
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -118,14 +118,17 @@ class ModelsTests(unittest.TestCase):
         r = pearsonr(log_lambdas[1:], log_lambdas0[1:])[0]
         assert(r > 0.6)
 
-        # Test with limited components
-        max_k = 3
-        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l, max_k=max_k)
+    def test_epik_fit_pairwise(self):
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
+        train_x, train_y, _, _, train_y_var = data
+
+        # Train new model
+        kernel = PairwiseKernel(n_alleles=alpha, seq_length=l)
         model = EpiK(kernel, optimizer='Adam', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         log_lambdas = kernel.log_lambdas.detach().cpu().numpy().flatten()
-        r = pearsonr(log_lambdas[1:max_k + 1], log_lambdas0[1:max_k + 1])[0]
+        r = pearsonr(log_lambdas[1:3 + 1], log_lambdas0[1:3])[0]
         assert(r > 0.6)
          
     def test_epik_fit_lbfgs(self):
