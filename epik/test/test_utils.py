@@ -2,12 +2,84 @@
 import unittest
 
 import numpy as np
+from timeit import timeit
 
 from epik.src.utils import (seq_to_one_hot, diploid_to_one_hot,
-                            get_full_space_one_hot, one_hot_to_seq)
+                            get_full_space_one_hot, one_hot_to_seq, 
+                            encode_seq, get_one_hot_subseq_key,
+                            get_binary_subseq_key, encode_seqs,
+                            seq_to_binary)
 
 
 class UtilsTests(unittest.TestCase):
+    def test_encode_seq(self):
+        # Binary encoding
+        seq = 'ABBA'
+        subseq_key = get_binary_subseq_key(alphabet='AB')
+        assert(len(subseq_key) == 2)
+        
+        encoding = encode_seq(seq, subseq_key)
+        assert(encoding == [1, -1, -1, 1])
+        assert(len(subseq_key) == 5)
+        
+        # Odd length
+        seq = 'ABBAB'
+        encoding = encode_seq(seq, subseq_key)
+        assert(encoding == [1, -1, -1, 1, -1])
+        assert(len(subseq_key) > 5)
+        
+        # Fail with missing characters
+        seq = 'ABBAC'
+        try:
+            encoding = encode_seq(seq, subseq_key)
+            self.fail()
+        except ValueError:
+            pass
+        
+        # One hot encoding
+        seq = 'ACGT'
+        subseq_key = get_one_hot_subseq_key(alphabet=seq)
+        assert(len(subseq_key) == 4)
+        
+        encoding = encode_seq(seq, subseq_key)
+        assert(encoding == [1, 0, 0, 0,
+                            0, 1, 0, 0,
+                            0, 0, 1, 0,
+                            0, 0, 0, 1])
+        assert(len(subseq_key) == 7)
+        
+        encoding = encode_seq(seq[:3], subseq_key)
+        assert(encoding == [1, 0, 0, 0,
+                            0, 1, 0, 0,
+                            0, 0, 1, 0])
+    
+    def test_encode_seqs(self):
+        seqs = np.array(['AA', 'AB', 'BA', 'BB'])
+        alphabet = 'AB'
+        
+        onehot = np.array([[1, 0, 1, 0],
+                           [1, 0, 0, 1],
+                           [0, 1, 1, 0],
+                           [0, 1, 0, 1.]])
+        X = encode_seqs(seqs, alphabet, encoding_type='one_hot')
+        assert(np.allclose(X, onehot))
+        
+        binary = np.array([[ 1,  1],
+                           [ 1, -1],
+                           [-1,  1],
+                           [-1, -1]])
+        X = encode_seqs(seqs, alphabet, encoding_type='binary')
+        assert(np.allclose(X, binary))
+        
+    def test_time_encoding(self):
+        alphabet = [a for a in 'ACGT']
+        l = 10
+        n = 100
+        seqs = np.array([''.join(x) for x in np.random.choice(alphabet, size=(n, l))])
+    
+        print(timeit(lambda: encode_seqs(seqs, alphabet, max_n=4), number=10))
+        print(timeit(lambda: seq_to_one_hot(seqs, alphabet), number=10))
+        
     def test_one_hot_encoding(self):
         X = np.array(['AA', 'AB', 'BA', 'BB'])
         x = seq_to_one_hot(X).numpy()
@@ -16,6 +88,15 @@ class UtilsTests(unittest.TestCase):
                            [0, 1, 1, 0],
                            [0, 1, 0, 1.]])
         assert(np.allclose(x - onehot, 0))
+        
+    def test_binary_encoding(self):
+        X = np.array(['AA', 'AB', 'BA', 'BB'])
+        x = seq_to_binary(X, ref='A').numpy()
+        onehot = np.array([[ 1, 1.],
+                           [ 1,-1],
+                           [-1, 1],
+                           [-1,-1]])
+        assert(np.allclose(x, onehot))
     
     def test_one_hot_encoding_to_seq(self):
         x = np.array([[1, 0, 1, 0],

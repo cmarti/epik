@@ -3,16 +3,77 @@ import torch
 import time
 import sys
 
+from itertools import product, chain
 from collections import defaultdict
 
+
+def get_one_hot_subseq_key(alphabet, max_l=1):
+    subseq_key = {}
+    for i, c in enumerate(alphabet):
+        z = [0] * len(alphabet) 
+        z[i] = 1
+        subseq_key[c] = z
+        
+    if max_l > 1:
+        for k in range(2, max_l):
+            for alleles in product(alphabet, repeat=k):
+                seq = ''.join(alleles)
+                subseq_key[seq] = []
+                for c in alleles:
+                    subseq_key[seq] += subseq_key[c]
+    return(subseq_key)
+
+
+def get_binary_subseq_key(alphabet):
+    if len(alphabet) != 2:
+        raise ValueError('Alphabet length must be 2')
+    
+    subseq_key = {alphabet[0]: [1],
+                  alphabet[1]: [-1]}
+    return(subseq_key)
+
+
+def encode_seq(seq, subseq_key, max_l=4):
+    try:
+        return(subseq_key[seq])
+    
+    except:
+        l = len(seq)
+        if l == 1:
+            raise ValueError('Missing characters in `subseq_key`')
+        
+        i = l // 2
+        enc1 = encode_seq(seq[:i], subseq_key=subseq_key)
+        enc2 = encode_seq(seq[i:], subseq_key=subseq_key)
+        encoding = enc1 + enc2
+        
+        if l <= max_l:
+            subseq_key[seq] = encoding
+            
+        return(encoding)
+        
 
 def get_alleles(c, alleles=None):
         if alleles is not None:
             return(alleles)
         else:
             return(np.unique(c))
-
         
+
+def encode_seqs(seqs, alphabet, encoding_type='one_hot', max_n=500):
+    max_l = max_n // len(alphabet)
+    if encoding_type == 'one_hot':
+        subseq_key = get_one_hot_subseq_key(alphabet)
+    elif encoding_type == 'binary':
+        subseq_key = get_binary_subseq_key(alphabet)
+    else:
+        raise ValueError('encoding_type can only be `one_hot` or `binary`')    
+    
+    X = get_tensor([encode_seq(seq, subseq_key=subseq_key, max_l=max_l)
+                    for seq in seqs])
+    return(X)
+
+
 def seq_to_one_hot(X, alleles=None):
     m = np.array([[a for a in x] for x in X])
     onehot = []
@@ -20,6 +81,16 @@ def seq_to_one_hot(X, alleles=None):
         c = m[:, i]
         for allele in get_alleles(c, alleles=alleles):
             onehot.append(get_tensor(c == allele))
+    onehot = torch.stack(onehot, 1).contiguous()
+    return(onehot)
+
+
+def seq_to_binary(X, ref):
+    m = np.array([[a for a in x] for x in X])
+    onehot = []
+    for i in range(m.shape[1]):
+        c = m[:, i]
+        onehot.append(2 * get_tensor(c == ref) - 1)
     onehot = torch.stack(onehot, 1).contiguous()
     return(onehot)
 
