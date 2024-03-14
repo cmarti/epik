@@ -18,7 +18,7 @@ from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
                                      RBFKernel, ARDKernel, PairwiseKernel)
 
 
-def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops):
+def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, add_scale=False):
     is_cor_kernel = True
     if kernel == 'matern':
         kernel = MaternKernel()
@@ -63,7 +63,7 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops):
         kernel = AdditiveHeteroskedasticKernel(kernel, n_alleles=n_alleles,
                                                seq_length=seq_length)
         
-    elif is_cor_kernel:
+    elif is_cor_kernel or add_scale:
         print('Correlation kernel')
         kernel = ScaleKernel(kernel)
         
@@ -95,6 +95,8 @@ def main():
 #                                help='Probability of leaving under the discrete time chain in sVC prior (l-1)/l')
     options_group.add_argument('-P', '--P', default=2, type=int,
                                help='P for Delta(P) prior (2)')
+    options_group.add_argument('-N', '--n_kernels', default=1, type=int,
+                               help='Number of kernels to learn')
     options_group.add_argument('--params', default=None,
                                help='Model parameters to use for predictions')
     options_group.add_argument('--het', default=False, action='store_true',
@@ -125,9 +127,10 @@ def main():
     parsed_args = parser.parse_args()
     data_fpath = parsed_args.data
     
-    kernel = parsed_args.kernel
+    kernel_label = parsed_args.kernel
 #     q = parsed_args.q
     P = parsed_args.P
+    n_kernels = parsed_args.n_kernels
     params_fpath = parsed_args.params
     add_het = parsed_args.het
     
@@ -165,9 +168,15 @@ def main():
     dtype = torch.float64 if use_float64 else torch.float32
       
     # Get kernel
-    log.write('Selected {} kernel'.format(kernel))
-    kernel = select_kernel(kernel, n_alleles, config['seq_length'],
-                           dtype=dtype, P=P, add_het=add_het, use_keops=use_keops)
+    log.write('Selected {} kernel (N={})'.format(kernel_label, n_kernels))
+    add_scale = n_kernels > 1
+    kernel = select_kernel(kernel_label, n_alleles, config['seq_length'],
+                           dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
+                           add_scale=add_scale)
+    for i in range(1, n_kernels):
+        kernel += select_kernel(kernel_label, n_alleles, config['seq_length'],
+                                dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
+                                add_scale=add_scale)
 
     # Define device
     device = torch.device('cuda') if gpu else None
