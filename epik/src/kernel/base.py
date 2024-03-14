@@ -1,6 +1,7 @@
 import numpy as np
 import torch as torch
 
+from linear_operator.operators import MatmulLinearOperator
 from torch.nn import Parameter
 from gpytorch.settings import max_cholesky_size
 from gpytorch.kernels.kernel import Kernel
@@ -42,6 +43,16 @@ class SequenceKernel(Kernel):
     
     def calc_hamming_distance(self, x1, x2):
         return(self.l - self.inner_product(x1, x2))
+    
+    def _constant_linop(self, x1, x2):
+        z1 = torch.ones((x1.shape[0], 1), device=x1.device, dtype=x1.dtype)
+        z2 = torch.ones((1, x2.shape[0]), device=x2.device, dtype=x2.dtype)
+        c = MatmulLinearOperator(z1, z2)
+        return(c)
+    
+    def _dist_linop(self, x1, x2):
+        d = torch.tensor([[float(self.l)]]) - MatmulLinearOperator(x1, x2.T)
+        return(d)
     
     def forward(self, x1, x2, diag=False, **kwargs):
         if diag:
