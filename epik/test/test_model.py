@@ -118,6 +118,16 @@ class ModelsTests(unittest.TestCase):
         r = pearsonr(log_lambdas[1:], log_lambdas0[1:])[0]
         assert(r > 0.6)
 
+    def test_epik_fit_additive(self):
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
+        train_x, train_y, _, _, train_y_var = data
+
+        # Train new model
+        kernel = AdditiveKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, optimizer='Adam', track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=100)
+
     def test_epik_fit_pairwise(self):
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
         train_x, train_y, _, _, train_y_var = data

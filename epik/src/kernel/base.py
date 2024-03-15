@@ -2,12 +2,28 @@ import numpy as np
 import torch as torch
 
 from pykeops.torch import LazyTensor
-from linear_operator.operators import MatmulLinearOperator
+from linear_operator.operators import MatmulLinearOperator, LinearOperator
 from torch.nn import Parameter
 from gpytorch.settings import max_cholesky_size
 from gpytorch.kernels.kernel import Kernel
 from gpytorch.lazy.lazy_tensor import delazify
 
+class ConstantLinearOperator(LinearOperator):
+    def __init__(self, c, n):
+        self.c = c
+        self.n = n
+        self.ones = torch.ones((self.n, 1), device=c.device, dtype=c.dtype)
+        super().__init__(self.c, torch.tensor([n]))
+    
+    def _matmul(self, rhs):
+        return(self.ones * (self.c * rhs).sum(0))
+    
+    def _size(self):
+        return(torch.Size((self.n, self.n)))
+    
+    def _transpose_nonbatch(self):
+        return(ConstantLinearOperator(self.c, self.n))
+    
 
 class SequenceKernel(Kernel):
     def __init__(self, n_alleles, seq_length, binary=False,
@@ -60,13 +76,13 @@ class SequenceKernel(Kernel):
         d = self.s_to_d(s)
         return(d)
     
-    def calc_hamming_distance_linop(self, x1, x2):
+    def calc_hamming_distance_linop(self, x1, x2, scale=1., shift=0.):
         if self.binary:
-            a = torch.tensor([[self.l / 2.0]], device=x1.device, dtype=x1.dtype)
-            d = a - MatmulLinearOperator(x1 / np.sqrt(2), x2.T / np.sqrt(2))
+            a = torch.tensor([shift + scale * self.l / 2.0], device=x1.device, dtype=x1.dtype)
+            d = ConstantLinearOperator(a, x1.shape[0]) + MatmulLinearOperator(x1, -scale * x2.T / 2)
         else:
-            a = torch.tensor([[float(self.l)]], device=x1.device, dtype=x1.dtype)
-            d = a - MatmulLinearOperator(x1, x2.T)
+            a = torch.tensor([shift + scale * self.l], device=x1.device, dtype=x1.dtype)
+            d = ConstantLinearOperator(a, x1.shape[0]) + MatmulLinearOperator(x1, -scale * x2.T)
         return(d)
     
     def calc_hamming_distance_keops(self, x1, x2):

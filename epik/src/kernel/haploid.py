@@ -1,3 +1,4 @@
+from jaxtyping import Float
 import numpy as np
 import torch as torch
 
@@ -7,7 +8,7 @@ from scipy.special._basic import comb
 from torch.nn import Parameter
 from pykeops.torch import LazyTensor
 from linear_operator.operators import (KernelLinearOperator, MatmulLinearOperator,
-                                       DiagLinearOperator)
+                                       DiagLinearOperator, LinearOperator)
 
 from epik.src.utils import get_tensor, log1mexp
 from epik.src.kernel.base import SequenceKernel
@@ -88,21 +89,15 @@ class LowOrderKernel(SequenceKernel):
     
 class AdditiveKernel(LowOrderKernel):
     def calc_c_p(self):
-        c_p = torch.tensor([[1, self.l * (self.alpha - 1)],
-                            [0,          -self.alpha]])
+        a, l = self.alpha, self.l
+        c_p = torch.tensor([[1., l * (a - 1)],
+                            [0,          -a]])
         return(c_p)  
     
     def forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        d = self.calc_hamming_distance_linop(x1, x2)
-        if diag:
-            c = torch.full(size=(x1.shape[0], 1), fill_value=coeffs[0],
-                           dtype=coeffs.dtype, device=coeffs.device)
-            return(coeffs[0] * c + coeffs[1] * d.diagonal(dim1=-1, dim2=-2))
-        else:
-            c = self._constant_linop(x1, x2)
-            return(coeffs[0] * c + coeffs[1] * d)
-
+        kernel = self.calc_hamming_distance_linop(x1, x2, scale=coeffs[1], shift=coeffs[0])
+        return(kernel)
 
 class PairwiseKernel(LowOrderKernel):
     def calc_c_p(self):
@@ -116,10 +111,9 @@ class PairwiseKernel(LowOrderKernel):
     
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        d = self.calc_hamming_distance_linop(x1, x2)
-        d2 = self.calc_hamming_distance(x1, x2) ** 2
-        k = coeffs[0] + coeffs[1] * d + coeffs[2] * d2
-        return(k)
+        kernel = self.calc_hamming_distance_linop(x1, x2, shift=coeffs[0], scale=coeffs[1])
+        kernel += coeffs[2] * self.calc_hamming_distance(x1, x2) ** 2
+        return(kernel)
 
     def _covar_func(self, x1, x2, coeffs, **kwargs):
         x1_ = LazyTensor(x1[..., :, None, :])
