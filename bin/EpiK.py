@@ -5,11 +5,12 @@ import numpy as np
 import pandas as pd
 import torch
 
+from os.path import exists
 from linear_operator.settings import max_cg_iterations
 from gpytorch.kernels import ScaleKernel, RQKernel, LinearKernel
 from gpytorch.kernels.keops import MaternKernel
 
-from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot
+from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot, seq_to_binary
 from epik.src.plot import plot_training_history
 from epik.src.model import EpiK
 from epik.src.kernel.base import AdditiveHeteroskedasticKernel
@@ -18,7 +19,8 @@ from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
                                      RBFKernel, ARDKernel, PairwiseKernel)
 
 
-def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, add_scale=False):
+def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, add_scale=False,
+                  binary=False):
     is_cor_kernel = True
     if kernel == 'matern':
         kernel = MaternKernel()
@@ -29,35 +31,18 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, a
     # elif kernel == 'ARD':
     #     kernel = KeOpsRBF(ard_num_dims=n_alleles * seq_length)
     else:
-        is_cor_kernel = False
-        # Product kernels
-        if kernel == 'RBF':
-            kernel = RBFKernel(n_alleles, seq_length, dtype=dtype, 
-                               use_keops=use_keops)
-        elif kernel == 'Connectedness' or kernel == 'Rho':
-            kernel = RhoKernel(n_alleles, seq_length, dtype=dtype,
-                               use_keops=use_keops)
-        elif kernel == 'ARD':
-            kernel = ARDKernel(n_alleles, seq_length, dtype=dtype,
-                               use_keops=use_keops)
-        elif kernel == 'RhoPi':
-            kernel = RhoPiKernel(n_alleles, seq_length, dtype=dtype,
-                                 use_keops=use_keops)
+        kernels = {'RBF': RBFKernel, 'Connectedness': RhoKernel, 'Rho': RhoKernel,
+                   'ARD': ARDKernel, 'RhoPi': RhoPiKernel,
+                   'Additive': AdditiveKernel, 'Pairwise': PairwiseKernel,
+                   'DP': DeltaPKernel, 'VC': VarianceComponentKernel}
 
-        # VC-like kernels
-        elif kernel == 'Additive':
-            kernel = AdditiveKernel(n_alleles, seq_length, dtype=dtype)
-        elif kernel == 'Pairwise':
-            kernel = PairwiseKernel(n_alleles, seq_length, dtype=dtype)
-        elif kernel == 'DP':
-            kernel = DeltaPKernel(n_alleles, seq_length, P=P, dtype=dtype,
-                                  use_keops=use_keops)
-        elif kernel == 'VC':
-            kernel = VarianceComponentKernel(n_alleles, seq_length, dtype=dtype,
-                                             use_keops=use_keops)
-        else:
+        is_cor_kernel = False
+        if kernel not in kernels:
             msg = 'Unknown kernel provided: {}'.format(kernel)
             raise ValueError(msg)
+
+        kwargs = {'dtype': dtype, 'use_keops': use_keops, 'binary': binary, 'P': P}
+        kernel = kernels[kernel](n_alleles, seq_length, **kwargs)
 
     if add_het:
         kernel = AdditiveHeteroskedasticKernel(kernel, n_alleles=n_alleles,
@@ -115,6 +100,8 @@ def main():
                             help='Learning rate for optimization (0.1)')
     comp_group.add_argument('--keops', default=False,
                             action='store_true', help='Use KeOps backedn')
+    comp_group.add_argument('-b', '--binary', default=False, action='store_true',
+                            help='Use binary encoding if number of alleles is 2')
     comp_group.add_argument('-l', '--lbfgs', default=False,
                             action='store_true', help='Use LBFGS optimizer instead of Adam')
 
@@ -140,6 +127,7 @@ def main():
     use_keops = parsed_args.keops
     learning_rate = parsed_args.learning_rate
     use_float64 = parsed_args.use_float64
+    binary = parsed_args.binary
     optimizer = 'lbfgs' if parsed_args.lbfgs else 'Adam'
 
     pred_fpath = parsed_args.pred
@@ -157,9 +145,14 @@ def main():
     config = guess_space_configuration(np.append(seqs, test_seqs))
     alleles = np.unique(np.hstack(config['alphabet']))
     n_alleles = alleles.shape[0]
-    X = seq_to_one_hot(seqs, alleles=alleles)
+
+    if n_alleles == 2 and binary:
+        X = seq_to_binary(seqs, ref=alleles[0]) # May want to make this more explicit
+    else:
+        X = seq_to_one_hot(seqs, alleles=alleles)
+        binary = False
+
     y = data.values[:, 0]
-    log_var0 = np.log(np.var(y) * 0.2)
     if data.shape[1] > 1:
         y_var = data.values[:, 1]
         y_var[y_var < 0.0001] = 0.0001
@@ -172,11 +165,11 @@ def main():
     add_scale = n_kernels > 1
     kernel = select_kernel(kernel_label, n_alleles, config['seq_length'],
                            dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
-                           add_scale=add_scale)
+                           add_scale=add_scale, binary=binary)
     for i in range(1, n_kernels):
         kernel += select_kernel(kernel_label, n_alleles, config['seq_length'],
                                 dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
-                                add_scale=add_scale)
+                                add_scale=add_scale, binary=binary)
 
     # Define device
     device = torch.device('cuda') if gpu else None
@@ -192,13 +185,17 @@ def main():
                      learning_rate=learning_rate, optimizer=optimizer)
         model.set_data(X, y, y_var=y_var)
     
+        # Load hyperparameters if provided
+        if params_fpath is not None:
+            if not exists(params_fpath):
+                log.write('Hyperparameters file not found: {}'.format(params_fpath))
+            else:
+                log.write('Load hyperparameters from {}'.format(params_fpath))
+                model.load(params_fpath)
+        
         # Fit by evidence maximization
-        if params_fpath is None:
-            log.write('Estimate hyperparameters by maximizing the evidence')
-            model.fit(n_iter=n_iter)
-        else:
-            log.write('Load hyperparameters from {}'.format(params_fpath))
-            model.load(params_fpath)
+        log.write('Train hyperparameters by maximizing the evidence')
+        model.fit(n_iter=n_iter)
     
         # Write output parameters
         fpath = '{}.model_params.pth'.format(out_fpath)
@@ -222,12 +219,6 @@ def main():
         if hasattr(model, 'pred_time'):
             fhand.write('pred,{}\n'.format(model.pred_time))
             
-    # Save plot with training history
-    if hasattr(model, 'loss_history'):
-        fpath = '{}.training.png'.format(out_fpath)
-        log.write('Saving plot with loss history to {}'.format(fpath))
-        plot_training_history(np.array(model.loss_history), fpath)
-    
     log.finish()
     
     

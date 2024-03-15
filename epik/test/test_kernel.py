@@ -62,6 +62,15 @@ class KernelsTests(unittest.TestCase):
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
+
+        # Binary encoding
+        x = torch.tensor([[1., 1],
+                          [-1, 1],
+                          [1, -1],
+                          [-1, -1]])
+        kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0, binary=True)
+        cov = kernel.forward(x, x).detach().numpy()
+        assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
     
     def test_pairwise_kernel(self):
         l, a = 2, 2
@@ -102,6 +111,18 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel2.forward(x, x).detach().numpy()
         assert(np.allclose(cov1, cov2, atol=0.01))
 
+        # Binary encoding
+        x = torch.tensor([[1., 1],
+                          [-1, 1],
+                          [1, -1],
+                          [-1, -1]])
+        kernel = PairwiseKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0, binary=True)
+        cov3 = kernel._nonkeops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, cov3, atol=0.01))
+
+        cov4 = kernel._keops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, cov4, atol=0.01))
+
         # Test in long sequences
         a, l, n = 2, 100, 3
         I = torch.eye(n)
@@ -114,7 +135,6 @@ class KernelsTests(unittest.TestCase):
         cov = kernel._nonkeops_forward(x, x).detach().numpy()
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert(np.allclose(cov2, cov, atol=1e-4))
-    
     
     def test_d_powers_coeffs(self):
         l = 3

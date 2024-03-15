@@ -1,6 +1,7 @@
 import numpy as np
 import torch as torch
 
+from pykeops.torch import LazyTensor
 from linear_operator.operators import MatmulLinearOperator
 from torch.nn import Parameter
 from gpytorch.settings import max_cholesky_size
@@ -9,8 +10,14 @@ from gpytorch.lazy.lazy_tensor import delazify
 
 
 class SequenceKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, dtype=torch.float32, use_keops=False, **kwargs):
+    def __init__(self, n_alleles, seq_length, binary=False,
+                 dtype=torch.float32, use_keops=False, **kwargs):
         self.alpha = n_alleles
+
+        if binary and n_alleles != 2:
+            raise ValueError('binary encoding can only be used with 2 alleles')
+        
+        self.binary = binary
         self.l = seq_length
         self.s = self.l + 1
         self.t = self.l * self.alpha
@@ -41,18 +48,45 @@ class SequenceKernel(Kernel):
         else:
             return(torch.matmul(x1, torch.matmul(metric, x2.T)))
     
+    def s_to_d(self, s):
+        if self.binary:
+            d = self.l / 2. - 0.5 * s
+        else:
+            d = float(self.l) - s
+        return(d)
+
     def calc_hamming_distance(self, x1, x2):
-        return(self.l - self.inner_product(x1, x2))
+        s = self.inner_product(x1, x2)
+        d = self.s_to_d(s)
+        return(d)
+    
+    def calc_hamming_distance_linop(self, x1, x2):
+        if self.binary:
+            a = torch.tensor([[self.l / 2.0]], device=x1.device, dtype=x1.dtype)
+            d = a - MatmulLinearOperator(x1 / np.sqrt(2), x2.T / np.sqrt(2))
+        else:
+            a = torch.tensor([[float(self.l)]], device=x1.device, dtype=x1.dtype)
+            d = a - MatmulLinearOperator(x1, x2.T)
+        return(d)
+    
+    def calc_hamming_distance_keops(self, x1, x2):
+        if self.binary:
+            x1_ = LazyTensor(x1[..., :, None, :] / np.sqrt(2))
+            x2_ = LazyTensor(x2[..., None, :, :] / np.sqrt(2))
+            s = (x1_ * x2_).sum(-1)
+            d = self.l / 2. - s
+        else:
+            x1_ = LazyTensor(x1[..., :, None, :])
+            x2_ = LazyTensor(x2[..., None, :, :])
+            s = (x1_ * x2_).sum(-1)
+            d = float(self.l) - s
+        return(d)
     
     def _constant_linop(self, x1, x2):
         z1 = torch.ones((x1.shape[0], 1), device=x1.device, dtype=x1.dtype)
         z2 = torch.ones((1, x2.shape[0]), device=x2.device, dtype=x2.dtype)
         c = MatmulLinearOperator(z1, z2)
         return(c)
-    
-    def _dist_linop(self, x1, x2):
-        d = torch.tensor([[float(self.l)]]) - MatmulLinearOperator(x1, x2.T)
-        return(d)
     
     def forward(self, x1, x2, diag=False, **kwargs):
         if diag:

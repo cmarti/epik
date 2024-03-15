@@ -48,57 +48,8 @@ def calc_vandermonde_inverse(values, n=None):
                 print(1/norm_factor, p)
         return(B)
 
-class AdditiveKernel(SequenceKernel):
-    def __init__(self, n_alleles, seq_length,
-                 log_lambdas0=None, log_var0=None,
-                 **kwargs):
-        super().__init__(n_alleles, seq_length, **kwargs)
-        self.log_lambdas0 = log_lambdas0
-        self.log_var0 = log_var0
-        self.set_params()
-    
-    def get_matrix(self):
-        m = torch.tensor([[1, -self.l],
-                          [0., self.alpha]])
-        return(m)  
-    
-    def set_params(self):
-        m = self.get_matrix()
 
-        if self.log_lambdas0 is None: 
-            # log_var0 = 0. if self.log_var0 is None else self.log_var0
-            # var0 = np.exp(log_var0)
-            # coeffs0 = torch.tensor([0.5 * var0, var0 /(2 * self.l)]).to(dtype=self.dtype)
-            # log_lambdas0 = torch.log(torch.linalg.solve(m, coeffs0))
-            log_lambdas0 = torch.tensor([0., 0.], dtype=self.dtype)
-        else:
-            log_lambdas0 = self.log_lambdas0.to(dtype=self.dtype)
-
-        params = {'log_lambdas': Parameter(log_lambdas0, requires_grad=True),
-                  'm': Parameter(m, requires_grad=False)}
-        self.register_params(params)
-    
-    def lambdas_to_coeffs(self, lambdas):
-        coeffs = self.m @ lambdas
-        return(coeffs)
-
-    def get_coeffs(self):
-        return(self.lambdas_to_coeffs(torch.exp(self.log_lambdas)))
-    
-    def forward(self, x1, x2, diag=False, **kwargs):
-        coeffs = self.get_coeffs()
-        # print(self.log_lambdas, coeffs.detach().cpu().numpy())
-        s = MatmulLinearOperator(x1, x2.T)
-        x1_ = torch.ones(size=(x1.shape[0], 1), dtype=coeffs.dtype, device=coeffs.device)
-        x2_ = torch.ones(size=(1, x2.shape[0]), dtype=coeffs.dtype, device=coeffs.device)
-        s0 = MatmulLinearOperator(x1_, x2_)
-        if diag:
-            return(coeffs[0] * x1_ + coeffs[1] * s.diagonal(dim1=-1, dim2=-2))
-        else:
-            return(coeffs[0] *  s0 + coeffs[1] * s)
-        
-        
-class PairwiseKernel(SequenceKernel):
+class LowOrderKernel(SequenceKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, log_lambdas0=None,
                  log_var0=2., **kwargs):
@@ -108,26 +59,18 @@ class PairwiseKernel(SequenceKernel):
         self.set_params()
     
     def calc_log_lambdas0(self, c_p):
+        n_components = c_p.shape[0]
         if self.log_lambdas0 is None:
             # Match linearly decaying correlations with specified variance
-            exp_coeffs = torch.zeros((c_p.shape[0], 1))
+            exp_coeffs = torch.zeros((n_components, 1))
             exp_coeffs[0] = np.exp(self.log_var0)
             exp_coeffs[1] = -np.exp(self.log_var0) / self.l
             log_lambdas0 = np.log(torch.linalg.solve_triangular(c_p, exp_coeffs, upper=True)+1e-10)
         else:
             log_lambdas0 = self.log_lambdas0
 
-        log_lambdas0 = log_lambdas0.reshape((3, 1))
+        log_lambdas0 = log_lambdas0.reshape((n_components, 1))
         return(log_lambdas0)
-    
-    def calc_c_p(self):
-        a, l = self.alpha, self.l
-        c13 = a * l - 0.5 * a ** 2 * l - 0.5 * l - a * l ** 2 + 0.5 * a ** 2 * l ** 2 + 0.5 * l ** 2
-        c23 = -a + 0.5 * a ** 2 + a * l - a ** 2 * l
-        c_p = torch.tensor([[1, l * (a - 1),          c13],
-                            [0,          -a,          c23],
-                            [0,           0, 0.5 * a ** 2]])
-        return(c_p)
     
     def calc_c_d(self, log_lambdas):
         c_d = self.c_p @ torch.exp(log_lambdas)
@@ -143,20 +86,59 @@ class PairwiseKernel(SequenceKernel):
                   'c_p': Parameter(c_p.to(dtype=self.dtype), requires_grad=False)}
         self.register_params(params)
     
+class AdditiveKernel(LowOrderKernel):
+    def calc_c_p(self):
+        c_p = torch.tensor([[1, self.l * (self.alpha - 1)],
+                            [0,          -self.alpha]])
+        return(c_p)  
+    
+    def forward(self, x1, x2, diag=False, **kwargs):
+        coeffs = self.get_coeffs()
+        d = self.calc_hamming_distance_linop(x1, x2)
+        if diag:
+            c = torch.full(size=(x1.shape[0], 1), fill_value=coeffs[0],
+                           dtype=coeffs.dtype, device=coeffs.device)
+            return(coeffs[0] * c + coeffs[1] * d.diagonal(dim1=-1, dim2=-2))
+        else:
+            c = self._constant_linop(x1, x2)
+            return(coeffs[0] * c + coeffs[1] * d)
+
+
+class PairwiseKernel(LowOrderKernel):
+    def calc_c_p(self):
+        a, l = self.alpha, self.l
+        c13 = a * l - 0.5 * a ** 2 * l - 0.5 * l - a * l ** 2 + 0.5 * a ** 2 * l ** 2 + 0.5 * l ** 2
+        c23 = -a + 0.5 * a ** 2 + a * l - a ** 2 * l
+        c_p = torch.tensor([[1, l * (a - 1),          c13],
+                            [0,          -a,          c23],
+                            [0,           0, 0.5 * a ** 2]])
+        return(c_p)
+    
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        d = self._dist_linop(x1, x2)
-        d2 = (self.l - x1 @ x2.T) ** 2
+        d = self.calc_hamming_distance_linop(x1, x2)
+        d2 = self.calc_hamming_distance(x1, x2) ** 2
         k = coeffs[0] + coeffs[1] * d + coeffs[2] * d2
         return(k)
 
     def _covar_func(self, x1, x2, coeffs, **kwargs):
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
-        d = float(self.l) - (x1_ * x2_).sum(-1)
+
+        if self.binary:
+            d = self.l / 2. - 0.5 * (x1_ * x2_).sum(-1)
+        else:
+            d = float(self.l) - (x1_ * x2_).sum(-1)
+
         d2 = d ** 2
         k = coeffs[0] + coeffs[1] * d + coeffs[2] * d2
         return(k)
+    
+    def _keops_forward(self, x1, x2, **kwargs):
+        coeffs = self.get_coeffs()
+        kernel = KernelLinearOperator(x1, x2, covar_func=self._covar_func,
+                                      coeffs=coeffs, **kwargs)
+        return(kernel)    
     
     def _square_dist(self, x1, x2, **kwargs):
         x1_ = LazyTensor(x1[..., :, None, :])
@@ -166,16 +148,14 @@ class PairwiseKernel(SequenceKernel):
     
     def _keops_forward2(self, x1, x2, **kwargs):
         coeffs = self.get_coeffs()
-        kernel = KernelLinearOperator(x1, x2, covar_func=self._covar_func,
-                                      coeffs=coeffs, **kwargs)
-        return(kernel)    
-    
-    def _keops_forward(self, x1, x2, **kwargs):
-        coeffs = self.get_coeffs()
         c = self._constant_linop(x1, x2)
         d = self._dist_linop(x1, x2)
-        d2 = KernelLinearOperator(x1, x2, covar_func=self._square_dist, **kwargs)
-        kernel = coeffs[0] * c + coeffs[1] * d + coeffs[2] * d2
+        # kernel = coeffs[0].reshape((1, 1)) * c
+        # print(coeffs[1], d)
+        kernel =  d
+        # d2 = KernelLinearOperator(x1, x2, covar_func=self._square_dist, **kwargs)
+        # kernel += coeffs[2] * d2
+        # kernel = coeffs[0].reshape((1, 1)) * c + coeffs[1].reshape((1, 1)) * d + coeffs[2].reshape((1, 1)) * d2
         return(kernel)
         
         
