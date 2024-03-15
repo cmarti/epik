@@ -205,7 +205,11 @@ def main():
         # Predict phenotype in new sequences
         if test_seqs.shape[0] > 0:
             log.write('Obtain phenotypic predictions for test data')
-            X_test = seq_to_one_hot(test_seqs, alleles=alleles)
+            if binary:
+                X_test = seq_to_binary(test_seqs, ref=alleles[0])
+            else:
+                X_test = seq_to_one_hot(test_seqs, alleles=alleles)
+                
             y_test = model.to_numpy(model.predict(X_test))
             result = pd.DataFrame({'y_pred': y_test}, index=test_seqs)
             log.write('\tWriting predictions to {}'.format(out_fpath))
