@@ -2,27 +2,17 @@ import numpy as np
 import torch as torch
 
 from pykeops.torch import LazyTensor
-from linear_operator.operators import MatmulLinearOperator, LinearOperator
+from linear_operator.operators import MatmulLinearOperator
 from torch.nn import Parameter
 from gpytorch.settings import max_cholesky_size
 from gpytorch.kernels.kernel import Kernel
 from gpytorch.lazy.lazy_tensor import delazify
 
-class ConstantLinearOperator(LinearOperator):
-    def __init__(self, c, n):
-        self.c = c
-        self.n = n
-        self.ones = torch.ones((self.n, 1), device=c.device, dtype=c.dtype)
-        super().__init__(self.c, torch.tensor([n]))
-    
-    def _matmul(self, rhs):
-        return(self.ones * (self.c * rhs).sum(0))
-    
-    def _size(self):
-        return(torch.Size((self.n, self.n)))
-    
-    def _transpose_nonbatch(self):
-        return(ConstantLinearOperator(self.c, self.n))
+
+def get_constant_linop(c, shape, device, dtype):
+    v1 = torch.ones(size=(shape[0], 1)).to(device=device, dtype=dtype)
+    v2 = torch.full(size=(1, shape[1]), fill_value=c).to(device=device, dtype=dtype)
+    return(MatmulLinearOperator(v1, v2))
     
 
 class SequenceKernel(Kernel):
@@ -78,11 +68,11 @@ class SequenceKernel(Kernel):
     
     def calc_hamming_distance_linop(self, x1, x2, scale=1., shift=0.):
         if self.binary:
-            a = torch.tensor([shift + scale * self.l / 2.0], device=x1.device, dtype=x1.dtype)
-            d = ConstantLinearOperator(a, x1.shape[0]) + MatmulLinearOperator(x1, -scale * x2.T / 2)
+            d = MatmulLinearOperator(x1, -scale * x2.T / 2)
+            d += get_constant_linop(shift + scale * self.l / 2.0, d.shape, x1.device, x1.dtype)
         else:
-            a = torch.tensor([shift + scale * self.l], device=x1.device, dtype=x1.dtype)
-            d = ConstantLinearOperator(a, x1.shape[0]) + MatmulLinearOperator(x1, -scale * x2.T)
+            d = MatmulLinearOperator(x1, -scale * x2.T)
+            d += get_constant_linop(shift + scale * self.l, d.shape, x1.device, x1.dtype)
         return(d)
     
     def calc_hamming_distance_keops(self, x1, x2):

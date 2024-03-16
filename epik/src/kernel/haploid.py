@@ -96,7 +96,9 @@ class AdditiveKernel(LowOrderKernel):
     
     def forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        kernel = self.calc_hamming_distance_linop(x1, x2, scale=coeffs[1], shift=coeffs[0])
+        kernel = self.calc_hamming_distance_linop(x1, x2,
+                                                  scale=coeffs[1].item(),
+                                                  shift=coeffs[0].item())
         return(kernel)
 
 class PairwiseKernel(LowOrderKernel):
@@ -111,7 +113,9 @@ class PairwiseKernel(LowOrderKernel):
     
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        kernel = self.calc_hamming_distance_linop(x1, x2, shift=coeffs[0], scale=coeffs[1])
+        kernel = self.calc_hamming_distance_linop(x1, x2,
+                                                  shift=coeffs[0].item(),
+                                                  scale=coeffs[1].item())
         kernel += coeffs[2] * self.calc_hamming_distance(x1, x2) ** 2
         return(kernel)
 

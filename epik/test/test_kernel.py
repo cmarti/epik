@@ -14,15 +14,16 @@ from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
                                      calc_d_powers_inverse, calc_vandermonde_inverse)
 from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
                             get_full_space_one_hot)
-from epik.src.kernel.base import AdditiveHeteroskedasticKernel, ConstantLinearOperator
+from epik.src.kernel.base import AdditiveHeteroskedasticKernel, get_constant_linop
 
 
 class KernelsTests(unittest.TestCase):
     def test_constant_linop(self):
         n = 10
+        shape = (n, n)
         c = torch.tensor(1.)
         v = torch.tensor(np.random.normal(size=(n, 2)))
-        C = ConstantLinearOperator(c, n)
+        C = get_constant_linop(c, shape, device=v.device, dtype=v.dtype)
 
         u = C @ v
         expected = v.sum(0).numpy()
