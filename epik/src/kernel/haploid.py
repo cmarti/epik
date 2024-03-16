@@ -87,6 +87,7 @@ class LowOrderKernel(SequenceKernel):
                   'c_p': Parameter(c_p.to(dtype=self.dtype), requires_grad=False)}
         self.register_params(params)
     
+    
 class AdditiveKernel(LowOrderKernel):
     def calc_c_p(self):
         a, l = self.alpha, self.l
@@ -281,12 +282,10 @@ class VarianceComponentKernel(_LambdasKernel):
     def _nonkeops_forward_polynomial_d(self, x1, x2, diag=False, **kwargs):
         c_d = self.get_c_d()
         
-        d = self.l - x1 @ x2.T
+        d = self.calc_hamming_distance(x1, x2)
         k = torch.full_like(d, fill_value=c_d[0].item())
-        d_power = 1
         for i in range(1, self.max_k + 1):
-            d_power = d_power * d
-            k += c_d[i] * d_power 
+            k += c_d[i] * d ** i
         return(k)
 
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
@@ -296,15 +295,11 @@ class VarianceComponentKernel(_LambdasKernel):
             return(self._nonkeops_forward_hamming_class(x1, x2, diag=diag, **kwargs))
     
     def _covar_func(self, x1, x2, c_d, **kwargs):
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-        d = self.l - (x1_ * x2_).sum(-1)
+        d = self.calc_hamming_distance_keops(x1, x2)
         
         k = c_d[0]
-        d_power = 1
         for i in range(1, self.max_k + 1):
-            d_power = d_power * d
-            k += c_d[i] * d_power 
+            k += c_d[i] * d ** i
         return(k)
         
     def _keops_forward(self, x1, x2, **kwargs):

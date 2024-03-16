@@ -147,24 +147,6 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert(np.allclose(cov2, cov, atol=1e-4))
     
-    def test_d_powers_coeffs(self):
-        l = 3
-        
-        d = torch.arange(l+1).unsqueeze(0).to(dtype=torch.float64)
-        A = d.T ** d
-        m1 = torch.linalg.inv(A)
-        print(m1)
-
-        m2 = calc_d_powers_inverse(l)
-        print(m2)
-
-        m3 = calc_vandermonde_inverse(np.arange(l+1))
-        print(m3)
-
-        for l in range(10):
-            m2 = calc_d_powers_inverse(l)
-        print(m2)
-
     def test_vc_kernel(self):
         l, a = 2, 2
         x = get_full_space_one_hot(l, a)
