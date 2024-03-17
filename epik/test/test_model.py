@@ -110,7 +110,8 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, _, _, train_y_var = data
 
         # Train new model
-        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l)
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
+                                         log_lambdas0=log_lambdas0)
         model = EpiK(kernel, optimizer='Adam', track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)

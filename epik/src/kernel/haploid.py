@@ -98,9 +98,10 @@ class AdditiveKernel(LowOrderKernel):
     def forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
         kernel = self.calc_hamming_distance_linop(x1, x2,
-                                                  scale=coeffs[1].item(),
-                                                  shift=coeffs[0].item())
+                                                  scale=coeffs[1],
+                                                  shift=coeffs[0])
         return(kernel)
+
 
 class PairwiseKernel(LowOrderKernel):
     def calc_c_p(self):
@@ -115,20 +116,13 @@ class PairwiseKernel(LowOrderKernel):
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
         kernel = self.calc_hamming_distance_linop(x1, x2,
-                                                  shift=coeffs[0].item(),
-                                                  scale=coeffs[1].item())
+                                                  shift=coeffs[0],
+                                                  scale=coeffs[1])
         kernel += coeffs[2] * self.calc_hamming_distance(x1, x2) ** 2
         return(kernel)
 
     def _covar_func(self, x1, x2, coeffs, **kwargs):
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-
-        if self.binary:
-            d = self.l / 2. - 0.5 * (x1_ * x2_).sum(-1)
-        else:
-            d = float(self.l) - (x1_ * x2_).sum(-1)
-
+        d = self.calc_hamming_distance_keops(x1, x2)
         d2 = d ** 2
         k = coeffs[0] + coeffs[1] * d + coeffs[2] * d2
         return(k)
@@ -340,11 +334,14 @@ class RhoPiKernel(SequenceKernel):
     
     def get_logit_rho0(self):
         # Choose rho0 so that correlation at l/2 is 0.1
-        shape = (1, 1) if self.common_rho else (self.l, 1)
-        t = np.exp(-2 / self.l * np.log(10.))
-        v = np.log((1 - t) / (self.alpha * t))
-        logit_rho0 = torch.full(shape, v, dtype=self.dtype) if self.logit_rho0 is None else self.logit_rho0 
-        logit_rho0 = torch.normal(logit_rho0, std=1.)
+        if self.logit_rho0 is None:
+            shape = (1, 1) if self.common_rho else (self.l, 1)
+            t = np.exp(-2 / self.l * np.log(10.))
+            v = np.log((1 - t) / (self.alpha * t))
+            logit_rho0 = torch.full(shape, v, dtype=self.dtype) if self.logit_rho0 is None else self.logit_rho0 
+            logit_rho0 = torch.normal(logit_rho0, std=1.)
+        else:
+            logit_rho0 = self.logit_rho0
         return(logit_rho0)
     
     def get_log_var0(self, logit_rho0):
@@ -422,20 +419,52 @@ class RhoPiKernel(SequenceKernel):
 
         return(kernel)
     
-
-class RBFKernel(RhoPiKernel):
-    is_stationary = True
-    def __init__(self, n_alleles, seq_length, **kwargs):
-        super().__init__(n_alleles, seq_length,
-                         common_rho=True, train_p=False, train_var=False,
-                         **kwargs)
-    
-
 class RhoKernel(RhoPiKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
         super().__init__(n_alleles, seq_length,
                          common_rho=False, train_p=False, train_var=False,
+                         **kwargs)
+    
+    def _nonkeops_forward_binary(self, x1, x2, diag=False, **params):
+        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
+        kernel = torch.prod(1 + x1.unsqueeze(0) * (x2 * rho.reshape((1, self.l))).unsqueeze(1), axis=2)
+        if self.correlation:
+            kernel  = kernel / torch.prod(1 + rho)
+        return(kernel)
+    
+    def _covar_func_binary(self, x1, x2, **kwargs):
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        kernel = (1 + x1_ * x2_).log().sum(-1).exp()
+        return(kernel)
+    
+    def _keops_forward_binary(self, x1, x2, **kwargs):
+        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
+        kernel = KernelLinearOperator(x1, x2 * rho.reshape((1, self.l)),
+                                      covar_func=self._covar_func_binary, **kwargs)
+        if self.correlation:
+            c = 1 / torch.prod(1 + rho)
+            kernel = c * kernel
+        return(kernel)
+    
+    def _keops_forward(self, x1, x2, **kwargs):
+        if self.binary:
+            return(self._keops_forward_binary(x1, x2, **kwargs))
+        else:
+            return(super()._keops_forward(x1, x2, **kwargs))
+    
+    def _nonkeops_forward(self, x1, x2, **kwargs):
+        if self.binary:
+            return(self._nonkeops_forward_binary(x1, x2, **kwargs))
+        else:
+            return(super()._nonkeops_forward(x1, x2, **kwargs))
+    
+
+class RBFKernel(RhoKernel):
+    def __init__(self, n_alleles, seq_length, **kwargs):
+        super().__init__(n_alleles, seq_length,
+                         common_rho=True, train_p=False, train_var=False,
                          **kwargs)
 
         

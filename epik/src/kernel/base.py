@@ -11,7 +11,7 @@ from gpytorch.lazy.lazy_tensor import delazify
 
 def get_constant_linop(c, shape, device, dtype):
     v1 = torch.ones(size=(shape[0], 1)).to(device=device, dtype=dtype)
-    v2 = torch.full(size=(1, shape[1]), fill_value=c).to(device=device, dtype=dtype)
+    v2 = c * torch.ones(size=(1, shape[1])).to(device=device, dtype=dtype)
     return(MatmulLinearOperator(v1, v2))
     
 
@@ -67,12 +67,13 @@ class SequenceKernel(Kernel):
         return(d)
     
     def calc_hamming_distance_linop(self, x1, x2, scale=1., shift=0.):
+        shape = (x1.shape[0], x2.shape[0])
         if self.binary:
             d = MatmulLinearOperator(x1, -scale * x2.T / 2)
-            d += get_constant_linop(shift + scale * self.l / 2.0, d.shape, x1.device, x1.dtype)
+            d += get_constant_linop(shift + scale * self.l / 2.0, shape, x1.device, x1.dtype)
         else:
             d = MatmulLinearOperator(x1, -scale * x2.T)
-            d += get_constant_linop(shift + scale * self.l, d.shape, x1.device, x1.dtype)
+            d += get_constant_linop(shift + scale * self.l, shape, x1.device, x1.dtype)
         return(d)
     
     def calc_hamming_distance_keops(self, x1, x2):

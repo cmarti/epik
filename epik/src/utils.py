@@ -231,6 +231,18 @@ def get_full_space_one_hot(seq_length, n_alleles, dtype=torch.float32):
     return(X)
 
 
+def get_full_space_binary(seq_length, dtype=torch.float32):
+    if seq_length == 1:
+        return(torch.tensor([[ 1],
+                             [-1]], dtype=dtype))
+    else:
+        b1 = get_full_space_binary(seq_length-1, dtype=dtype)
+        ones = torch.ones((b1.shape[0], 1), dtype=dtype)
+        
+        return(torch.vstack([torch.hstack([b1,  ones]),
+                             torch.hstack([b1, -ones])]))
+    
+
 def log1mexp(x):
     """Numerically accurate evaluation of log(1 - exp(x)) for x < 0.
     See [Maechler2012accurate]_ for details.

@@ -13,7 +13,7 @@ from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
                                      PairwiseKernel,
                                      calc_d_powers_inverse, calc_vandermonde_inverse)
 from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
-                            get_full_space_one_hot)
+                            get_full_space_one_hot, get_full_space_binary)
 from epik.src.kernel.base import AdditiveHeteroskedasticKernel, get_constant_linop
 
 
@@ -261,14 +261,22 @@ class KernelsTests(unittest.TestCase):
         logit_rho0 = torch.tensor([0.])
         kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         x = get_full_space_one_hot(l, a)
-        cov = kernel.forward(x, x).detach().numpy()
+        cov = kernel._nonkeops_forward(x, x).detach().numpy()
         assert(cov[0, 0] == 1.5)
         assert(cov[0, 1] == 0.5)
         
-        I = torch.eye(a ** l)
-        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert(np.allclose(cov2, cov))
         
+        # With binary encoding
+        z = get_full_space_binary(l)
+        cov3 = kernel._nonkeops_forward_binary(z, z).detach().numpy()
+        assert(np.allclose(cov3, cov))
+        
+        cov4 = kernel._keops_forward_binary(z, z).to_dense().detach().numpy()
+        assert(np.allclose(cov4, cov))
+        
+        # with 2 sites
         l, a = 2, 2
         logit_rho0 = torch.tensor([[0.], [0.]])
         rho = np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))
@@ -277,8 +285,7 @@ class KernelsTests(unittest.TestCase):
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0, :], [1.5 ** 2, 1.5 * 0.5, 1.5 * 0.5, 0.5 ** 2]))
 
-        I = torch.eye(a ** l)
-        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert(np.allclose(cov, cov))
 
         logit_rho0 = torch.tensor([[0.], [-np.log(3)]], dtype=torch.float32)
@@ -291,9 +298,16 @@ class KernelsTests(unittest.TestCase):
                              (1 - rho[0]) * (1 - rho[1])])
         assert(np.allclose(cov[0, :], expected))
         
-        I = torch.eye(a ** l)
-        cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert(np.allclose(cov2, cov))
+        
+        # With binary encoding
+        z = get_full_space_binary(l)
+        cov3 = kernel._nonkeops_forward_binary(z, z).detach().numpy()
+        assert(np.allclose(cov3, cov))
+        
+        cov4 = kernel._keops_forward_binary(z, z).to_dense().detach().numpy()
+        assert(np.allclose(cov4, cov))
     
     def test_rho_pi_kernel(self):
         l, a = 1, 2
