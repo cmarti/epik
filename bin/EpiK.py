@@ -166,6 +166,8 @@ def main():
     kernel = select_kernel(kernel_label, n_alleles, config['seq_length'],
                            dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
                            add_scale=add_scale, binary=binary)
+    if kernel.binary:
+        log.write('\t using binary encoding')
     for i in range(1, n_kernels):
         kernel += select_kernel(kernel_label, n_alleles, config['seq_length'],
                                 dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,

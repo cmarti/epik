@@ -419,6 +419,7 @@ class RhoPiKernel(SequenceKernel):
 
         return(kernel)
     
+    
 class RhoKernel(RhoPiKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
@@ -433,19 +434,49 @@ class RhoKernel(RhoPiKernel):
             kernel  = kernel / torch.prod(1 + rho)
         return(kernel)
     
-    def _covar_func_binary(self, x1, x2, **kwargs):
+    def _covar_func_binary2(self, x1, x2, **kwargs):
         x1_ = LazyTensor(x1[..., :, None, :])
         x2_ = LazyTensor(x2[..., None, :, :])
         kernel = (1 + x1_ * x2_).log().sum(-1).exp()
         return(kernel)
     
-    def _keops_forward_binary(self, x1, x2, **kwargs):
+    def _keops_forward_binary2(self, x1, x2, **kwargs):
         rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
         kernel = KernelLinearOperator(x1, x2 * rho.reshape((1, self.l)),
                                       covar_func=self._covar_func_binary, **kwargs)
         if self.correlation:
             c = 1 / torch.prod(1 + rho)
             kernel = c * kernel
+        return(kernel)
+    
+    def _covar_func_binary(self, x1, x2, constant, f, **kwargs):
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        f = f.reshape((1, 1, self.l))
+        kernel = (constant + 0.5 * ((x1_ * x2_ * f).sum(-1) + f.sum())).exp()
+        return(kernel)
+    
+    def _keops_forward_binary(self, x1, x2, **kwargs):
+        log1mrho = self.get_log_one_minus_rho()
+        log_rho = self.logit_rho + log1mrho
+        log_one_p_rho = torch.logaddexp(self.zeros_like(log_rho), log_rho)
+        factors = log_one_p_rho - log1mrho
+        
+        constant = log1mrho.sum()
+        if self.common_rho:
+            constant *= self.l
+        constant += self.log_var
+        
+        f = factors.reshape(1, self.l)
+        kernel = KernelLinearOperator(x1, x2, covar_func=self._covar_func_binary,
+                                      constant=constant, f=f, **kwargs)
+        
+        if self.correlation:
+            log_one_p_rho = log_one_p_rho.reshape(1, self.l)
+            sd1_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x1 * log_one_p_rho).sum(1)))
+            sd2_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x2 * log_one_p_rho).sum(1)))
+            kernel = sd1_inv_D @ kernel @ sd2_inv_D
+
         return(kernel)
     
     def _keops_forward(self, x1, x2, **kwargs):
