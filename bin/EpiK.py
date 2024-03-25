@@ -16,7 +16,8 @@ from epik.src.model import EpiK
 from epik.src.kernel.base import AdditiveHeteroskedasticKernel
 from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
                                      RhoPiKernel, RhoKernel, AdditiveKernel,
-                                     RBFKernel, ARDKernel, PairwiseKernel)
+                                     RBFKernel, ARDKernel, PairwiseKernel,
+                                     ThreeWayKernel)
 
 
 def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, add_scale=False,
@@ -31,10 +32,15 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, a
     # elif kernel == 'ARD':
     #     kernel = KeOpsRBF(ard_num_dims=n_alleles * seq_length)
     else:
-        kernels = {'RBF': RBFKernel, 'Connectedness': RhoKernel, 'Rho': RhoKernel,
-                   'ARD': ARDKernel, 'RhoPi': RhoPiKernel,
-                   'Additive': AdditiveKernel, 'Pairwise': PairwiseKernel,
-                   'DP': DeltaPKernel, 'VC': VarianceComponentKernel}
+        kernels = {'RBF': RBFKernel,
+                   'Connectedness': RhoKernel, 'Rho': RhoKernel,
+                   'ARD': ARDKernel,
+                   'RhoPi': RhoPiKernel,
+                   'Additive': AdditiveKernel,
+                   'Pairwise': PairwiseKernel,
+                   'Threeway': ThreeWayKernel,
+                   'DP': DeltaPKernel,
+                   'VC': VarianceComponentKernel}
 
         is_cor_kernel = False
         if kernel not in kernels:
@@ -179,7 +185,7 @@ def main():
     log.write('Running computations on {}'.format(device_label))
     
     # Create model
-    with max_cg_iterations(3000):
+    with max_cg_iterations(1000):
         log.write('Building model for Gaussian Process regression')
         model = EpiK(kernel, dtype=dtype, track_progress=True,
                      train_noise=True,

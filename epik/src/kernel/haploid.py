@@ -300,6 +300,10 @@ class VarianceComponentKernel(_LambdasKernel):
         c_d = self.get_c_d()
         return(KernelLinearOperator(x1, x2, covar_func=self._covar_func,
                                     c_d=c_d, **kwargs))
+        
+class ThreeWayKernel(VarianceComponentKernel):
+    def __init__(self, n_alleles, seq_length, **kwargs):
+        super().__init__(n_alleles, seq_length, max_k=3, **kwargs)
     
 
 class DeltaPKernel(VarianceComponentKernel):
@@ -314,9 +318,11 @@ class RhoPiKernel(SequenceKernel):
                  logit_rho0=None, log_p0=None, log_var0=None, 
                  train_p=True, train_var=False,
                  common_rho=False, correlation=False,
+                 random_init=False,
                  **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         self.logit_rho0 = logit_rho0
+        self.random_init = random_init
         self.log_p0 = log_p0
         self.log_var0 = log_var0
         self.train_p = train_p
@@ -339,7 +345,8 @@ class RhoPiKernel(SequenceKernel):
             t = np.exp(-2 / self.l * np.log(10.))
             v = np.log((1 - t) / (self.alpha * t))
             logit_rho0 = torch.full(shape, v, dtype=self.dtype) if self.logit_rho0 is None else self.logit_rho0 
-            logit_rho0 = torch.normal(logit_rho0, std=1.)
+            if self.random_init:
+                logit_rho0 = torch.normal(logit_rho0, std=1.)
         else:
             logit_rho0 = self.logit_rho0
         return(logit_rho0)
@@ -406,6 +413,7 @@ class RhoPiKernel(SequenceKernel):
         return(kernel)
     
     def _keops_forward(self, x1, x2, **kwargs):
+        # TODO: introduce constants before exponentiation in covar_func
         constant, factors, log_one_p_eta_rho = self.get_factors()
         f = factors.reshape(1, self.t)
         log_one_p_eta_rho = log_one_p_eta_rho.reshape(1, self.t)
@@ -424,7 +432,7 @@ class RhoKernel(RhoPiKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
         super().__init__(n_alleles, seq_length,
-                         common_rho=False, train_p=False, train_var=False,
+                         train_p=False, train_var=False,
                          **kwargs)
     
     def _nonkeops_forward_binary(self, x1, x2, diag=False, **params):
@@ -463,6 +471,8 @@ class RhoKernel(RhoPiKernel):
         factors = log_one_p_rho - log1mrho
         
         constant = log1mrho.sum()
+        if self.correlation:
+            constant -= log_one_p_rho.sum()
         if self.common_rho:
             constant *= self.l
         constant += self.log_var
@@ -470,13 +480,6 @@ class RhoKernel(RhoPiKernel):
         f = factors.reshape(1, self.l)
         kernel = KernelLinearOperator(x1, x2, covar_func=self._covar_func_binary,
                                       constant=constant, f=f, **kwargs)
-        
-        if self.correlation:
-            log_one_p_rho = log_one_p_rho.reshape(1, self.l)
-            sd1_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x1 * log_one_p_rho).sum(1)))
-            sd2_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x2 * log_one_p_rho).sum(1)))
-            kernel = sd1_inv_D @ kernel @ sd2_inv_D
-
         return(kernel)
     
     def _keops_forward(self, x1, x2, **kwargs):
@@ -494,9 +497,7 @@ class RhoKernel(RhoPiKernel):
 
 class RBFKernel(RhoKernel):
     def __init__(self, n_alleles, seq_length, **kwargs):
-        super().__init__(n_alleles, seq_length,
-                         common_rho=True, train_p=False, train_var=False,
-                         **kwargs)
+        super().__init__(n_alleles, seq_length, common_rho=True, **kwargs)
 
         
 class ARDKernel(RhoPiKernel):
