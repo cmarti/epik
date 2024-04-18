@@ -19,7 +19,8 @@ from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
 from epik.src.kernel.haploid import (VarianceComponentKernel, AdditiveKernel,
-                                     RhoKernel, RBFKernel, ARDKernel, PairwiseKernel)
+                                     RhoKernel, RBFKernel, ARDKernel, PairwiseKernel,
+                                     GeneralProductKernel)
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -381,6 +382,19 @@ class ModelsTests(unittest.TestCase):
             params_fpath = '{}.model_params.pth'.format(out_fpath)
             state_dict = torch.load(params_fpath)
             print(state_dict)
+
+    def test_epik_general_product_kernel(self):
+        l, alpha = 7, 4
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=2000)
+        track_progress = True
+        
+        kernel = ScaleKernel(GeneralProductKernel(alpha, l))
+        model = EpiK(kernel, track_progress=track_progress, learning_rate=0.1)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=200)
+        ypred = model.predict(test_x).detach()
+        r2_1 = pearsonr(ypred, test_y)[0] ** 2
+        print(r2_1)
     
     def test_epik_het(self):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1000)

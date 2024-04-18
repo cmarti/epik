@@ -17,7 +17,7 @@ from epik.src.kernel.base import AdditiveHeteroskedasticKernel
 from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
                                      RhoPiKernel, RhoKernel, AdditiveKernel,
                                      RBFKernel, ARDKernel, PairwiseKernel,
-                                     ThreeWayKernel)
+                                     ThreeWayKernel, GeneralProductKernel)
 
 
 def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, add_scale=False,
@@ -29,8 +29,6 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, a
         kernel = RQKernel()
     elif kernel == 'linear':
         kernel = LinearKernel()
-    # elif kernel == 'ARD':
-    #     kernel = KeOpsRBF(ard_num_dims=n_alleles * seq_length)
     else:
         kernels = {'RBF': RBFKernel,
                    'Connectedness': RhoKernel, 'Rho': RhoKernel,
@@ -39,10 +37,11 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, a
                    'Additive': AdditiveKernel,
                    'Pairwise': PairwiseKernel,
                    'Threeway': ThreeWayKernel,
+                   'GeneralProduct': GeneralProductKernel,
                    'DP': DeltaPKernel,
                    'VC': VarianceComponentKernel}
 
-        is_cor_kernel = False
+        is_cor_kernel = kernel == 'GeneralProduct'
         if kernel not in kernels:
             msg = 'Unknown kernel provided: {}'.format(kernel)
             raise ValueError(msg)
@@ -172,8 +171,10 @@ def main():
     kernel = select_kernel(kernel_label, n_alleles, config['seq_length'],
                            dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
                            add_scale=add_scale, binary=binary)
-    if kernel.binary:
+    
+    if hasattr(kernel, 'binary') and kernel.binary:
         log.write('\t using binary encoding')
+        
     for i in range(1, n_kernels):
         kernel += select_kernel(kernel_label, n_alleles, config['seq_length'],
                                 dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,

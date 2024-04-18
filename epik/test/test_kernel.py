@@ -10,7 +10,7 @@ from scipy.linalg import cholesky
 from epik.src.settings import TEST_DATA_DIR
 from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
                                      RhoKernel, AdditiveKernel, ARDKernel, 
-                                     PairwiseKernel,
+                                     PairwiseKernel, GeneralProductKernel,
                                      calc_d_powers_inverse, calc_vandermonde_inverse)
 from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
                             get_full_space_one_hot, get_full_space_binary)
@@ -401,6 +401,16 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel.forward(x, x)
         assert(cov2[0, 0] < 1.5)
         assert(cov2[0, 1] < 0.5)
+
+    def test_general_product_kernel(self):
+        l, a = 3, 2
+        n = a ** l
+        x = get_full_space_one_hot(l, a)
+
+        kernel = GeneralProductKernel(a, l)
+        K = kernel.forward(x, x).detach()
+        assert(np.allclose(K, np.eye(n)))
+
 
 
 class OldKernelsTests(unittest.TestCase):

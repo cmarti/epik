@@ -7,6 +7,7 @@ from itertools import combinations
 from scipy.special._basic import comb
 from torch.nn import Parameter
 from pykeops.torch import LazyTensor
+from torch.distributions.transforms import CorrCholeskyTransform
 from linear_operator.operators import (KernelLinearOperator, MatmulLinearOperator,
                                        DiagLinearOperator, LinearOperator)
 
@@ -606,3 +607,43 @@ class SkewedVCKernel(_LambdasKernel, _PiKernel):
     
     def get_params(self):
         return({'lambdas': self.lambdas, 'beta': self.beta})
+
+
+class GeneralProductKernel(SequenceKernel):
+    is_stationary = True
+    def __init__(self, n_alleles, seq_length, theta0=None, **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        self.dim = int(comb(n_alleles, 2))
+        self.theta0 = theta0
+        self.set_params()
+        self.theta_to_L = CorrCholeskyTransform()
+    
+    def calc_theta0(self):
+        if self.theta0 is not None:
+            theta0 = self.theta0
+        else:
+            theta0 = torch.zeros((self.l, self.dim), dtype=self.dtype)
+        return(theta0)
+    
+    def theta_to_covs(self, theta):
+        Ls = [self.theta_to_L(theta[i]) for i in range(self.l)]
+        covs = torch.stack([L @ L.T for L in Ls], axis=2)
+        return(covs)
+    
+    def set_params(self):
+        theta0 = self.calc_theta0()
+        params = {'theta': Parameter(theta0, requires_grad=True)}
+        self.register_params(params)
+
+    def get_covs(self):
+        return(self.theta_to_covs(self.theta))
+    
+    def forward(self, x1, x2, diag=False, **kwargs):
+        covs = self.get_covs()
+        K = x1[:, :self.alpha] @ covs[:, :, 0] @ x2[:, :self.alpha].T
+        # print(covs[:, :, 0])
+        for i in range(1, self.l):
+            start, end = i * self.alpha, (i+1) * self.alpha
+            # print(covs[:, :, i])
+            K *= x1[:, start:end] @ covs[:, :, i] @ x2[:, start:end].T
+        return(K)
