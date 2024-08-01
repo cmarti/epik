@@ -212,7 +212,7 @@ class EpiK(_Epik):
         prior = model.forward(X)
         return(prior)
     
-    def sample(self, X, n=1, sigma2=1e-4):
+    def simulate(self, X, n=1, sigma2=1e-4):
         prior = self.get_prior(X, sigma2=sigma2)
         v = torch.zeros(n)
         with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
@@ -220,7 +220,7 @@ class EpiK(_Epik):
         return(y)
     
     def simulate_dataset(self, X, sigma=0, ptrain=0.8):
-        y_true = self.sample(X, n=1).flatten()
+        y_true = self.simulate(X, n=1).flatten()
         y_true = y_true / y_true.std()
         
         splits = split_training_test(X, y_true, y_var=None, ptrain=ptrain)

@@ -13,7 +13,7 @@ from scipy.stats import pearsonr
 from epik.src.utils import seq_to_one_hot, split_training_test
 from epik.src.model import EpiK
 from epik.src.kernel import GeneralizedSiteProductKernel
-from epik.src.priors import AllelesProbPrior, RhosPrior
+from epik.old.priors import AllelesProbPrior, RhosPrior
 
 
 def sample_params(l, a):

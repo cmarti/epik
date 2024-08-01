@@ -12,14 +12,13 @@ from tempfile import NamedTemporaryFile
 
 from scipy.stats import pearsonr
 from gpytorch.kernels import ScaleKernel
-from gpytorch.kernels import RBFKernel as GPRBFKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
-from epik.src.kernel.haploid import (VarianceComponentKernel, AdditiveKernel,
-                                     RhoKernel, RBFKernel, PairwiseKernel, AddRhoPiKernel)
+from epik.src.kernel import (VarianceComponentKernel, AdditiveKernel, PairwiseKernel,
+                             ConnectednessKernel, ExponentialKernel, AddRhoPiKernel)
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -81,7 +80,7 @@ def get_rho_random_landscape_data(sigma=0, ptrain=0.8):
     alpha, l = 4, logit_rho0.shape[0]
     X = get_full_space_one_hot(seq_length=l, n_alleles=alpha)
     
-    kernel = RhoKernel(n_alleles=alpha, seq_length=l, logit_rho0=logit_rho0)
+    kernel = ConnectednessKernel(n_alleles=alpha, seq_length=l, logit_rho0=logit_rho0)
     model = EpiK(kernel)
     return(alpha, l, logit_rho0,
            model.simulate_dataset(X, sigma=sigma, ptrain=ptrain))
@@ -146,7 +145,7 @@ class ModelsTests(unittest.TestCase):
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
         train_x, train_y, _, _, train_y_var = data
         
-        kernel = AdditiveKernel(n_alleles=alpha, seq_length=l) * RhoKernel(n_alleles=alpha, seq_length=l)
+        kernel = AdditiveKernel(n_alleles=alpha, seq_length=l) * ConnectednessKernel(n_alleles=alpha, seq_length=l)
         model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=50)
@@ -165,7 +164,7 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1500)
         
         kernel = AddRhoPiKernel(n_alleles=alpha, seq_length=l)
-        # kernel = RhoKernel(n_alleles=alpha, seq_length=l) * AdditiveKernel(n_alleles=alpha, seq_length=l)
+        # kernel = ConnectednessKernel(n_alleles=alpha, seq_length=l) * AdditiveKernel(n_alleles=alpha, seq_length=l)
         model = EpiK(kernel, track_progress=True, learning_rate=0.1)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
@@ -177,7 +176,7 @@ class ModelsTests(unittest.TestCase):
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
         train_x, train_y, _, _, train_y_var = data
         
-        kernel = RBFKernel(n_alleles=alpha, seq_length=l)
+        kernel = ExponentialKernel(n_alleles=alpha, seq_length=l)
         model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=50)
@@ -206,7 +205,7 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = data
         
         # Train new model
-        kernel = RhoKernel(alpha, l)
+        kernel = ConnectednessKernel(alpha, l)
         model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=50)
@@ -215,7 +214,7 @@ class ModelsTests(unittest.TestCase):
         assert(r > 0.8)
         
         # Predict unobserved sequences
-        kernel = RhoKernel(alpha, l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(alpha, l, logit_rho0=logit_rho0)
         model = EpiK(kernel)
         model.set_data(train_x, train_y, train_y_var)
         ypred = model.predict(test_x).detach()
@@ -239,7 +238,7 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = data
         
         # Train new model
-        kernel = RhoKernel(alpha, l)
+        kernel = ConnectednessKernel(alpha, l)
         model = EpiK(kernel, track_progress=True, device=torch.device('cuda:0'))
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=50)
@@ -248,7 +247,7 @@ class ModelsTests(unittest.TestCase):
         assert(r > 0.8)
         
         # Predict unobserved sequences
-        kernel = RhoKernel(alpha, l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(alpha, l, logit_rho0=logit_rho0)
         model = EpiK(kernel)
         model.set_data(train_x, train_y, train_y_var)
         ypred = model.predict(test_x).detach()
@@ -271,11 +270,11 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, test_x, test_y, train_y_var = split_training_test(X, y, y_var=y_var, ptrain=ptrain)
 
         kernel = AdditiveKernel(alpha, l)
-        # kernel = RBFKernel(alpha, l)
-        # kernel = RhoKernel(alpha, l)
+        # kernel = ExponentialKernel(alpha, l)
+        # kernel = ConnectednessKernel(alpha, l)
         # kernel = ARDKernel(alpha, l)
-        # kernel = ScaleKernel(GPRBFKernel())
-        # kernel = ScaleKernel(GPRBFKernel(ard_num_dims=train_x.shape[1]))
+        # kernel = ScaleKernel(GPExponentialKernel())
+        # kernel = ScaleKernel(GPExponentialKernel(ard_num_dims=train_x.shape[1]))
 
         model = EpiK(kernel, track_progress=True,
                      device=torch.device('cuda:0'),
@@ -432,7 +431,7 @@ class ModelsTests(unittest.TestCase):
         l, alpha = 7, 4
         track_progress = False
         
-        kernel = ScaleKernel(RBFKernel(ard_num_dims=1))
+        kernel = ScaleKernel(ExponentialKernel(ard_num_dims=1))
         model = EpiK(kernel, track_progress=track_progress, learning_rate=0.2)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=200)
@@ -440,7 +439,7 @@ class ModelsTests(unittest.TestCase):
         r2_1 = pearsonr(ypred, test_y)[0] ** 2
         print(r2_1)
         
-        kernel = HetRBFKernel(alpha, l, dims=1, train_het=False)
+        kernel = HetExponentialKernel(alpha, l, dims=1, train_het=False)
         model = EpiK(kernel, track_progress=track_progress)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
@@ -450,7 +449,7 @@ class ModelsTests(unittest.TestCase):
         print(kernel.theta)
         print(kernel.theta0)
         
-        kernel = HetRBFKernel(alpha, l, dims=1)
+        kernel = HetExponentialKernel(alpha, l, dims=1)
         model = EpiK(kernel, track_progress=track_progress)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
@@ -460,7 +459,7 @@ class ModelsTests(unittest.TestCase):
         print(kernel.theta)
         print(kernel.theta0)
         # # exit()
-        kernel = ScaleKernel(RBFKernel(ard_num_dims=alpha * l))
+        kernel = ScaleKernel(ExponentialKernel(ard_num_dims=alpha * l))
         model = EpiK(kernel, track_progress=track_progress, learning_rate=0.2)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=200)
@@ -468,7 +467,7 @@ class ModelsTests(unittest.TestCase):
         r2_3 = pearsonr(ypred, test_y)[0] ** 2
         print(r2_3)
         
-        kernel = HetRBFKernel(alpha, l, dims=alpha*l)
+        kernel = HetExponentialKernel(alpha, l, dims=alpha*l)
         model = EpiK(kernel, track_progress=track_progress)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=15)

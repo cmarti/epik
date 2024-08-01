@@ -14,7 +14,7 @@ from scipy.stats import pearsonr
 from epik.src.utils import seq_to_one_hot, get_tensor
 from epik.src.model import EpiK
 from epik.src.kernel import GeneralizedSiteProductKernel, VCKernel
-from epik.src.priors import AllelesProbPrior, RhosPrior
+from epik.old.priors import AllelesProbPrior, RhosPrior
 from build.lib.epik.src.priors import LambdasFlatPrior
 from gpytorch.kernels.scale_kernel import ScaleKernel
 from gpytorch.kernels.rbf_kernel import RBFKernel

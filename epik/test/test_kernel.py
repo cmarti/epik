@@ -5,15 +5,14 @@ import matplotlib.pyplot as plt
 import torch
 
 from os.path import join
-from scipy.linalg import cholesky
 
 from epik.src.settings import TEST_DATA_DIR
-from epik.src.kernel.haploid import (VarianceComponentKernel, RhoPiKernel,
-                                     RhoKernel, AdditiveKernel, ARDKernel, 
-                                     PairwiseKernel, AddRhoPiKernel)
 from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
                             get_full_space_one_hot, get_full_space_binary)
-from epik.src.kernel.base import AdditiveHeteroskedasticKernel, get_constant_linop
+from epik.src.kernel import (VarianceComponentKernel, AdditiveKernel, PairwiseKernel,
+                             RhoPiKernel, ConnectednessKernel, JengaKernel,
+                             GeneralProductKernel, AddRhoPiKernel,
+                             AdditiveHeteroskedasticKernel, get_constant_linop)
 
 
 class KernelsTests(unittest.TestCase):
@@ -285,7 +284,7 @@ class KernelsTests(unittest.TestCase):
     def test_rho_kernel(self):
         l, a = 1, 2
         logit_rho0 = torch.tensor([0.])
-        kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         x = get_full_space_one_hot(l, a)
         cov = kernel._nonkeops_forward(x, x).detach().numpy()
         assert(cov[0, 0] == 1.5)
@@ -309,7 +308,7 @@ class KernelsTests(unittest.TestCase):
         l, a = 2, 2
         logit_rho0 = torch.tensor([[0.], [0.]])
         rho = np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))
-        kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         x = get_full_space_one_hot(l, a)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0, :], [1.5 ** 2, 1.5 * 0.5, 1.5 * 0.5, 0.5 ** 2]))
@@ -322,7 +321,7 @@ class KernelsTests(unittest.TestCase):
 
         logit_rho0 = torch.tensor([[0.], [-np.log(3)]], dtype=torch.float32)
         rho = (np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))).flatten()
-        kernel = RhoKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
         cov = kernel.forward(x, x).detach().numpy()
         expected = np.array([(1 + rho[0]) * (1 + rho[1]),
                              (1 - rho[0]) * (1 + rho[1]),
@@ -435,7 +434,7 @@ class KernelsTests(unittest.TestCase):
         l, a = 1, 2
         logit_rho0 = torch.tensor([[0.]])
         log_p0 = torch.tensor(np.log([[0.2, 0.8]]), dtype=torch.float32)
-        kernel = ARDKernel(n_alleles=a, seq_length=l,
+        kernel = JengaKernel(n_alleles=a, seq_length=l,
                            logit_rho0=logit_rho0, log_p0=log_p0, log_var0=0.)
         x = get_full_space_one_hot(l, a)
         cov = kernel.forward(x, x).detach().numpy()
@@ -452,7 +451,7 @@ class KernelsTests(unittest.TestCase):
                                    [0.]], dtype=torch.float32)
         log_p0 = torch.tensor(np.log([[0.2, 0.8],
                                       [0.5, 0.5]]), dtype=torch.float32)
-        kernel = ARDKernel(n_alleles=a, seq_length=l,
+        kernel = JengaKernel(n_alleles=a, seq_length=l,
                              logit_rho0=logit_rho0, log_p0=log_p0, log_var0=0.)
         x = get_full_space_one_hot(l, a)
         rho = np.array([0.5, 0.5])
@@ -475,8 +474,8 @@ class KernelsTests(unittest.TestCase):
         x = get_full_space_one_hot(l, a)
         
         logit_rho0 = torch.tensor([[0.]])
-        kernel = RhoKernel(n_alleles=a, seq_length=l,
-                           logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l,
+                                     logit_rho0=logit_rho0)
         cov1 = kernel.forward(x, x)
         assert(cov1[0, 0] == 1.5)
         assert(cov1[0, 1] == 0.5)
@@ -488,12 +487,11 @@ class KernelsTests(unittest.TestCase):
 
     def test_general_product_kernel(self):
         l, a = 3, 2
-        n = a ** l
         x = get_full_space_one_hot(l, a)
 
         kernel = GeneralProductKernel(a, l)
-        K = kernel.forward(x, x).detach()
-        assert(np.allclose(K, np.eye(n)))
+        K = kernel.forward(x, x).to_dense().detach()
+        assert(np.allclose(K, np.eye(a ** l)))
 
 
 
