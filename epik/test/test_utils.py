@@ -8,7 +8,7 @@ from epik.src.utils import (seq_to_one_hot, diploid_to_one_hot,
                             get_full_space_one_hot, one_hot_to_seq, 
                             encode_seq, get_one_hot_subseq_key,
                             get_binary_subseq_key, encode_seqs,
-                            seq_to_binary, get_full_space_binary)
+                            seq_to_binary)
 
 
 class UtilsTests(unittest.TestCase):
@@ -125,6 +125,7 @@ class UtilsTests(unittest.TestCase):
                                [0, 0, 1, 0, 0, 1],]))
     
     def test_get_full_binary(self):
+        from epik.src.utils import get_full_space_binary
         X = get_full_space_binary(seq_length=2)
         assert(np.allclose(X, [[ 1, 1], 
                                [-1, 1],

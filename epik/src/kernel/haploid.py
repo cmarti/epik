@@ -63,11 +63,12 @@ class LowOrderKernel(SequenceKernel):
     def calc_log_lambdas0(self, c_p):
         n_components = c_p.shape[0]
         if self.log_lambdas0 is None:
-            # Match linearly decaying correlations with specified variance
-            exp_coeffs = torch.zeros((n_components, 1))
-            exp_coeffs[0] = np.exp(self.log_var0)
-            exp_coeffs[1] = -np.exp(self.log_var0) / self.l
-            log_lambdas0 = np.log(torch.linalg.solve_triangular(c_p, exp_coeffs, upper=True)+1e-10)
+            # # Match linearly decaying correlations with specified variance
+            # exp_coeffs = torch.zeros((n_components, 1))
+            # exp_coeffs[0] = np.exp(self.log_var0)
+            # exp_coeffs[1] = -np.exp(self.log_var0) / self.l
+            # log_lambdas0 = np.log(torch.linalg.solve_triangular(c_p, exp_coeffs, upper=True)+1e-10)
+            log_lambdas0 = np.zeros(n_components)
         else:
             log_lambdas0 = self.log_lambdas0
 
@@ -113,20 +114,19 @@ class PairwiseKernel(LowOrderKernel):
                             [0,          -a,          c23],
                             [0,           0, 0.5 * a ** 2]])
         return(c_p)
+
+    def d_to_cov(self, d, coeffs):
+        kernel = coeffs[0] + coeffs[1] * d + coeffs[2] * d * d
+        return(kernel)
     
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        kernel = self.calc_hamming_distance_linop(x1, x2,
-                                                  shift=coeffs[0],
-                                                  scale=coeffs[1])
-        kernel += coeffs[2] * self.calc_hamming_distance(x1, x2) ** 2
-        return(kernel)
+        d = self.calc_hamming_distance(x1, x2)
+        return(self.d_to_cov(d, coeffs))
 
     def _covar_func(self, x1, x2, coeffs, **kwargs):
         d = self.calc_hamming_distance_keops(x1, x2)
-        d2 = d ** 2
-        k = coeffs[0] + coeffs[1] * d + coeffs[2] * d2
-        return(k)
+        return(self.d_to_cov(d, coeffs))
     
     def _keops_forward(self, x1, x2, **kwargs):
         coeffs = self.get_coeffs()
@@ -134,24 +134,6 @@ class PairwiseKernel(LowOrderKernel):
                                       coeffs=coeffs, **kwargs)
         return(kernel)    
     
-    def _square_dist(self, x1, x2, **kwargs):
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-        d2 = (float(self.l) - (x1_ * x2_).sum(-1)) ** 2
-        return(d2)
-    
-    def _keops_forward2(self, x1, x2, **kwargs):
-        coeffs = self.get_coeffs()
-        c = self._constant_linop(x1, x2)
-        d = self._dist_linop(x1, x2)
-        # kernel = coeffs[0].reshape((1, 1)) * c
-        # print(coeffs[1], d)
-        kernel =  d
-        # d2 = KernelLinearOperator(x1, x2, covar_func=self._square_dist, **kwargs)
-        # kernel += coeffs[2] * d2
-        # kernel = coeffs[0].reshape((1, 1)) * c + coeffs[1].reshape((1, 1)) * d + coeffs[2].reshape((1, 1)) * d2
-        return(kernel)
-        
         
 class _LambdasKernel(SequenceKernel):
     def calc_polynomial_coeffs(self):
@@ -264,7 +246,7 @@ class VarianceComponentKernel(_LambdasKernel):
     
     def _nonkeops_forward_hamming_class(self, x1, x2, diag=False, **kwargs):
         w_d = self.get_w_d()
-        hamming_dist = self.calc_hamming_distance(x1, x2).to(dtype=torch.long)
+        hamming_dist = self.calc_hamming_distance(x1, x2, diag=diag).to(dtype=torch.long)
         kernel = w_d[0] * (hamming_dist == 0)
         for d in range(1, self.s):
             kernel += w_d[d] * (hamming_dist == d)
@@ -277,7 +259,7 @@ class VarianceComponentKernel(_LambdasKernel):
     def _nonkeops_forward_polynomial_d(self, x1, x2, diag=False, **kwargs):
         c_d = self.get_c_d()
         
-        d = self.calc_hamming_distance(x1, x2)
+        d = self.calc_hamming_distance(x1, x2, diag=diag)
         k = torch.full_like(d, fill_value=c_d[0].item())
         for i in range(1, self.max_k + 1):
             k += c_d[i] * d ** i
@@ -397,11 +379,18 @@ class RhoPiKernel(SequenceKernel):
         constant, factors, log_one_p_eta_rho = self.get_factors()
         factors = factors.reshape(1, self.t)
         log_one_p_eta_rho = log_one_p_eta_rho.reshape(self.t, 1)
+
+        if diag:
+            min_size = min(x1.shape[0], x2.shape[0])
+            log_kernel = constant + (x1[:min_size, :] * x2[:min_size, :] * factors).sum(1)
+        else:
+            log_kernel = constant + x1 @ (x2 * factors).T
         
-        log_kernel = constant + x1 @ (x2 * factors).T
         if self.correlation:
             log_sd1 = 0.5 * (x1 @ log_one_p_eta_rho)
-            log_sd2 = 0.5 * (x2 @ log_one_p_eta_rho).reshape((1, x2.shape[0]))
+            log_sd2 = 0.5 * (x2 @ log_one_p_eta_rho)
+            if not diag:
+                log_sd2 = log_sd2.reshape((1, x2.shape[0]))
             log_kernel = log_kernel - log_sd1 - log_sd2
         
         kernel = torch.exp(log_kernel)
@@ -421,6 +410,73 @@ class RhoPiKernel(SequenceKernel):
         c = torch.exp(constant)
         
         kernel = c * KernelLinearOperator(x1, x2 * f, covar_func=self._covar_func, **kwargs)
+        if self.correlation:
+            sd1_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x1 * log_one_p_eta_rho).sum(1)))
+            sd2_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x2 * log_one_p_eta_rho).sum(1)))
+            kernel = sd1_inv_D @ kernel @ sd2_inv_D
+
+        return(kernel)
+
+
+class AddRhoPiKernel(RhoPiKernel):
+    def __init__(self, n_alleles, seq_length,
+                 logit_rho0=None, log_p0=None, log_var0=None, 
+                 train_p=False, train_var=True,
+                 common_rho=False, correlation=False,
+                 random_init=False,
+                 **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        self.logit_rho0 = logit_rho0
+        self.random_init = random_init
+        self.log_p0 = log_p0
+        self.log_var0 = log_var0
+        self.train_p = train_p
+        self.train_var = train_var
+        self.correlation = correlation
+        self.common_rho = common_rho
+        self.set_params()
+        
+        logl = torch.log(torch.tensor([seq_length], dtype=self.dtype, device=self.device))
+        self.register_params({'logl': Parameter(logl, requires_grad=False)})
+    
+    def _nonkeops_forward(self, x1, x2, diag=False, **params):
+        constant, factors, log_one_p_eta_rho = self.get_factors()
+        factors = factors.reshape(1, self.t)
+        log_one_p_eta_rho = log_one_p_eta_rho.reshape(self.t, 1)
+        
+        if diag:
+            min_size = min(x1.shape[0], x2.shape[0])
+            x1_x2 = x1[:min_size, :] * x2[:min_size, :]
+            log_s = torch.log((x1_x2).sum(1)) - self.logl
+            log_kernel = constant + (x1_x2 * factors).sum(1) + log_s
+        else:
+            log_s = torch.log(x1 @ x2.T) - self.logl
+            log_kernel = constant + x1 @ (x2 * factors).T + log_s
+        
+        if self.correlation:
+            log_sd1 = 0.5 * (x1 @ log_one_p_eta_rho)
+            log_sd2 = 0.5 * (x2 @ log_one_p_eta_rho)
+            if diag:
+                log_sd2 = log_sd2.reshape((1, x2.shape[0]))
+            log_kernel = log_kernel - log_sd1 - log_sd2
+        
+        kernel = torch.exp(log_kernel)
+        return(kernel)
+    
+    def _covar_func(self, x1, x2, f, **kwargs):
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        kernel = ((x1_ * f[:, None] * x2_).sum(-1) + (x1_ * x2_).sum(-1).log()).exp()
+        return(kernel)
+    
+    def _keops_forward(self, x1, x2, **kwargs):
+        # TODO: introduce constants before exponentiation in covar_func
+        constant, factors, log_one_p_eta_rho = self.get_factors()
+        f = factors.reshape(1, self.t)
+        log_one_p_eta_rho = log_one_p_eta_rho.reshape(1, self.t)
+        c = torch.exp(constant - self.logl)
+        
+        kernel = c * KernelLinearOperator(x1, x2, covar_func=self._covar_func, f=f, **kwargs)
         if self.correlation:
             sd1_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x1 * log_one_p_eta_rho).sum(1)))
             sd2_inv_D = DiagLinearOperator(torch.exp(-0.5 * (x2 * log_one_p_eta_rho).sum(1)))

@@ -61,8 +61,8 @@ class SequenceKernel(Kernel):
             d = float(self.l) - s
         return(d)
 
-    def calc_hamming_distance(self, x1, x2):
-        s = self.inner_product(x1, x2)
+    def calc_hamming_distance(self, x1, x2, diag=False):
+        s = self.inner_product(x1, x2, diag=diag)
         d = self.s_to_d(s)
         return(d)
     

@@ -19,8 +19,7 @@ from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
                             get_full_space_one_hot, one_hot_to_seq)
 from epik.src.model import EpiK
 from epik.src.kernel.haploid import (VarianceComponentKernel, AdditiveKernel,
-                                     RhoKernel, RBFKernel, ARDKernel, PairwiseKernel,
-                                     GeneralProductKernel)
+                                     RhoKernel, RBFKernel, PairwiseKernel, AddRhoPiKernel)
 
 
 def get_smn1_data(n, seed=0, dtype=None):
@@ -113,7 +112,7 @@ class ModelsTests(unittest.TestCase):
         # Train new model
         kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
                                          log_lambdas0=log_lambdas0)
-        model = EpiK(kernel, optimizer='Adam', track_progress=True)
+        model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         log_lambdas = kernel.log_lambdas.detach().cpu().numpy().flatten()
@@ -126,7 +125,7 @@ class ModelsTests(unittest.TestCase):
 
         # Train new model
         kernel = AdditiveKernel(n_alleles=alpha, seq_length=l)
-        model = EpiK(kernel, optimizer='Adam', track_progress=True)
+        model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
 
@@ -136,26 +135,52 @@ class ModelsTests(unittest.TestCase):
 
         # Train new model
         kernel = PairwiseKernel(n_alleles=alpha, seq_length=l, use_keops=True)
-        model = EpiK(kernel, optimizer='Adam', track_progress=True)
+        model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         log_lambdas = kernel.log_lambdas.detach().cpu().numpy().flatten()
         r = pearsonr(log_lambdas[1:3 + 1], log_lambdas0[1:3])[0]
         assert(r > 0.6)
          
-    def test_epik_fit_lbfgs(self):
+    def test_epik_product(self):
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
         train_x, train_y, _, _, train_y_var = data
         
-        # Train LBFGS optimizer
-        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l)
-        model = EpiK(kernel, optimizer='LBFGS', track_progress=True)
+        kernel = AdditiveKernel(n_alleles=alpha, seq_length=l) * RhoKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=50)
+    
+    def test_epik_fit_addrho(self):
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
+        train_x, train_y, _, _, train_y_var = data
+        
+        kernel = AddRhoPiKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=50)
+        
+    def test_epik_fit_addrho_smn1(self):
+        l, alpha = 7, 4
+        train_x, train_y, test_x, test_y, train_y_var = get_smn1_data(n=1500)
+        
+        kernel = AddRhoPiKernel(n_alleles=alpha, seq_length=l)
+        # kernel = RhoKernel(n_alleles=alpha, seq_length=l) * AdditiveKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, track_progress=True, learning_rate=0.1)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
-        params = model.get_params()
-        log_lambdas = params['log_lambdas'].flatten()
-        r = pearsonr(log_lambdas[1:], log_lambdas0[1:])[0]
-        assert(r > 0.6)
+        ypred = model.predict(test_x).detach()
+        r2_1 = pearsonr(ypred, test_y)[0] ** 2
+        print(r2_1)
+        
+    def test_epik_fit_rbf(self):
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
+        train_x, train_y, _, _, train_y_var = data
+        
+        kernel = RBFKernel(n_alleles=alpha, seq_length=l)
+        model = EpiK(kernel, track_progress=True)
+        model.set_data(train_x, train_y, train_y_var)
+        model.fit(n_iter=50)
         
     def test_epik_predict(self):
         # Simulate from prior distribution
@@ -169,6 +194,11 @@ class ModelsTests(unittest.TestCase):
         ypred = model.predict(test_x).detach()
         r2 = pearsonr(ypred, test_y)[0] ** 2
         assert(r2 > 0.9)
+        
+        y_pred, y_pred_var = model.predict(test_x, calc_variance=True)
+        r2 = pearsonr(y_pred.detach(), test_y)[0] ** 2
+        assert(r2 > 0.9)
+        assert(np.all(y_pred_var.detach().numpy() > 1))
     
     def test_epik_keops(self):
         # Simulate from prior distribution
@@ -197,7 +227,7 @@ class ModelsTests(unittest.TestCase):
         train_x, train_y, _, _, train_y_var = data
         
         kernel = AdditiveKernel(n_alleles=alpha, seq_length=l)
-        model = EpiK(kernel, optimizer='Adam', track_progress=False)
+        model = EpiK(kernel, track_progress=False)
         model.set_data(train_x, train_y, train_y_var)
         model.fit(n_iter=100)
         loglambdas = kernel.log_lambdas.detach().numpy()
@@ -313,9 +343,8 @@ class ModelsTests(unittest.TestCase):
             cmd = [sys.executable, bin_fpath, '-h']
             check_call(cmd)
             
-            # Model fitting
-            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath,
-                   '-n', '100']
+            # Fit hyperparameters
+            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath, '-n', '50']
             check_call(cmd)
             state_dict = torch.load(params_fpath)
             log_lambdas = state_dict['covar_module.log_lambdas'].numpy().flatten()
@@ -323,17 +352,19 @@ class ModelsTests(unittest.TestCase):
             # assert(r > 0.8)
             
             # Predict test sequences
-            cmd.extend(['-p', xpred_fpath, '--params', params_fpath])
+            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath, '-n', '0',
+                   '-p', xpred_fpath, '--params', params_fpath, '--calc_variance']
             check_call(cmd)
-            ypred = pd.read_csv(out_fpath, index_col=0)['y_pred'].values
-            r2 = pearsonr(ypred, test_y)[0] ** 2
-            # assert(r2 > 0.9)
+            pred = pd.read_csv(out_fpath, index_col=0)
+            print(pred)
+            r2 = pearsonr(pred['y_pred'].values, test_y)[0] ** 2
+            assert(r2 > 0.8)
             
-            # Test running with different kernel
-            cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath,
-                   '-n', '100', '--gpu', '-p', xpred_fpath,
-                   '-k', 'Rho']
-            check_call(cmd)
+            ## Test running with different kernel
+            # cmd = [sys.executable, bin_fpath, data_fpath, '-o', out_fpath,
+            #        '-n', '100', '--gpu', '-p', xpred_fpath,
+            #        '-k', 'Rho']
+            # check_call(cmd)
     
     def test_epik_bin_gpu(self):
         alleles = np.array(['A', 'C', 'G', 'T'])

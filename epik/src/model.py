@@ -1,53 +1,73 @@
+import pandas as pd
 import torch
-import gpytorch
 
 from time import time
 from tqdm import tqdm
 
+from gpytorch.models import ApproximateGP, ExactGP
 from gpytorch.means import ZeroMean, ConstantMean
-from gpytorch.kernels.multi_device_kernel import MultiDeviceKernel
-from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
-from gpytorch.likelihoods.gaussian_likelihood import (FixedNoiseGaussianLikelihood,
-                                                      GaussianLikelihood)
-from epik.src.LBFGS import FullBatchLBFGS
+from gpytorch.kernels import MultiDeviceKernel
+from gpytorch.mlls import ExactMarginalLogLikelihood, VariationalELBO
+from gpytorch.likelihoods import (FixedNoiseGaussianLikelihood, GaussianLikelihood)
+from gpytorch.distributions import MultivariateNormal
+from gpytorch.variational import (CholeskyVariationalDistribution,
+                                  UnwhitenedVariationalStrategy)
+from gpytorch.settings import (num_likelihood_samples, max_preconditioner_size, fast_pred_var,
+                               skip_posterior_variances)
+
 from epik.src.utils import get_tensor, to_device, split_training_test
  
 
-
-class GPModel(gpytorch.models.ExactGP):
-    def __init__(self, train_x, train_y, kernel, likelihood,
-                 device=None, n_devices=None, train_mean=False):
-        super(GPModel, self).__init__(train_x, train_y, likelihood)
-        
+class _GPModel(object):
+    def init(self, kernel, train_mean, device, n_devices):
         if train_mean:
             self.mean_module = ConstantMean()
         else:
             self.mean_module = ZeroMean()
         
         self.covar_module = kernel
-        # if device is None:
-        #     self.covar_module = kernel
-        # else:
-        #     self.covar_module = MultiDeviceKernel(kernel,
-        #                                           device_ids=range(n_devices),
-        #                                           output_device=device)
+        if device is None:
+            self.covar_module = kernel
+        else:
+            self.covar_module = MultiDeviceKernel(kernel,
+                                                  device_ids=range(n_devices),
+                                                  output_device=device)
+            
 
+class GPModel(ExactGP, _GPModel):
+    def __init__(self, train_x, train_y, kernel, likelihood,
+                 device=None, n_devices=None, train_mean=False):
+        super(GPModel, self).__init__(train_x, train_y, likelihood)
+        self.init(kernel, train_mean, device, n_devices)
+    
     def forward(self, x):
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
-        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+        return(MultivariateNormal(mean_x, covar_x))
+        
+
+class GeneralizedGPmodel(ApproximateGP, _GPModel):
+    def __init__(self, train_x, kernel,
+                 device=None, n_devices=None, train_mean=False):
+        distribution = CholeskyVariationalDistribution(train_x.size(0))
+        strategy = UnwhitenedVariationalStrategy(self, train_x,
+                                                 distribution,
+                                                 learn_inducing_locations=False)
+        super(GeneralizedGPmodel, self).__init__(strategy)
+        self.init(kernel, train_mean, device, n_devices)
+    
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return(MultivariateNormal(mean_x, covar_x))
 
 
-class EpiK(object):
-    def __init__(self, kernel, likelihood_type='Gaussian',
-                 device=None, n_devices=1,
+class _Epik(object):
+    def __init__(self, kernel, device=None, n_devices=1,
                  train_mean=False, train_noise=False,
-                 learning_rate=0.1,
-                 preconditioner_size=0, dtype=torch.float32,
-                 track_progress=False, 
-                 optimizer='Adam'):
+                 learning_rate=0.1, preconditioner_size=0,
+                 dtype=torch.float32, track_progress=False):
         self.kernel = kernel
-        self.likelihood_type = likelihood_type
         self.device = device
         self.train_mean = train_mean
         self.learning_rate = learning_rate
@@ -57,22 +77,6 @@ class EpiK(object):
         self.train_noise = train_noise
         self.track_progress = track_progress
         self.fit_time = 0
-        self.optimizer_label = optimizer
-    
-    def set_likelihood(self, y_var=None):
-        if self.likelihood_type == 'Gaussian':
-            if y_var is not None:
-                likelihood = FixedNoiseGaussianLikelihood(noise=self.get_tensor(y_var),
-                                                          learn_additional_noise=self.train_noise)
-            else:
-                likelihood = GaussianLikelihood()
-        else:
-            msg = 'Only Gaussian likelihood is allowed so far'
-            raise ValueError(msg)
-
-        if self.device is not None:
-            likelihood = likelihood.cuda()
-        self.likelihood = likelihood # self.to_device(likelihood)
     
     def report_progress(self, pbar):
         if self.track_progress:
@@ -98,131 +102,105 @@ class EpiK(object):
         self.model.eval()
         self.likelihood.eval()
     
-    def set_preconditioner_size(self, preconditioner_size=None):
-        if preconditioner_size is None:
-            preconditioner_size = self.preconditioner_size
-        return(gpytorch.settings.max_preconditioner_size(preconditioner_size))
-    
     def define_optimizer(self):
-        if self.optimizer_label == 'Adam':
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
-            self.fit = self.adam_fit
-        elif self.optimizer_label == 'LBFGS':
-            self.optimizer = FullBatchLBFGS(self.model.parameters(), lr=self.learning_rate)
-            self.fit = self.lbfgs_fit
-        else:
-            msg = 'Optimizer {} not allowed'.format(self.optimizer_label)
-            raise ValueError(msg)
-    
-    def define_loss(self):
-        self.calc_mll = ExactMarginalLogLikelihood(self.likelihood, self.model)
-    
-    def define_model(self):
-        self.model = GPModel(self.X, self.y, self.kernel, self.likelihood,
-                             train_mean=self.train_mean,
-                             device=self.device,
-                             n_devices=self.n_devices) # self.to_device()
-        if self.device is not None:
-            self.model = self.model.cuda()
-    
-    def get_gp_mean(self):
-        if hasattr(self.model.mean_module, 'constant'):
-            return(self.to_numpy(self.model.mean_module.constant))
-        else:
-            return(torch.zeros(1))
-    
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+
     def set_data(self, X, y, y_var=None):
         self.X = self.get_tensor(X)
         self.y = self.get_tensor(y)
         self.y_var = y_var
         
-        self.set_likelihood(y_var=self.y_var)
+        self.likelihood = self.get_likelihood(self.y_var, self.train_noise)
         self.define_model()
         self.define_optimizer()
-        self.define_loss()
+        self.define_negative_loss()
+
+    def calc_loss(self):
+        return(-self.calc_negative_loss(self.model(self.X), self.y))
     
-    def adam_training_step(self, X, y):
+    def training_step(self, X, y):
         self.optimizer.zero_grad()
-        self.loss = -self.calc_mll(self.model(X), y)
+        self.loss = self.calc_loss()
         self.loss.backward()
         self.optimizer.step()
-        
-        if hasattr(self.kernel, 'get_params'):
-            self.params_history.append(self.get_params())
-            self.loss_history.append(self.loss.detach().item())
+        self.params_history.append(self.model.state_dict())
+        self.loss_history.append(self.loss.detach().item())
     
-    def adam_fit(self, n_iter=100):
+    def fit(self, n_iter=100):
         self.set_training_mode()
         
         pbar = range(n_iter)
         self.loss_history = []
         self.params_history = []
         
-        with self.set_preconditioner_size():
+        with max_preconditioner_size(self.preconditioner_size):
             
             if n_iter > 1 and self.track_progress:
-                pbar = tqdm(pbar, desc='Maximizing Marginal Likelihood')
+                pbar = tqdm(pbar, desc='Optimizing hyperparameters')
             
             t0 = time()
-            
             for _ in pbar:
-                self.adam_training_step(self.X, self.y)
+                self.training_step(self.X, self.y)
                 if n_iter > 1:
                     self.report_progress(pbar)
                     
             self.fit_time = time() - t0
     
-    def lbfgs_fit(self, n_iter=100):
+    def save(self, fpath):
+        torch.save(self.model.state_dict(), fpath)
         
-        self.loss_history = []
-        self.params_history = []
-        
-        def closure():
-            self.optimizer.zero_grad()
-            loss =  -self.calc_mll(self.model(self.X), self.y)
-            return(loss)
+    def load(self, fpath):
+        self.model.load_state_dict(torch.load(fpath))
 
-        loss = closure()
-        loss.backward()
 
-        with self.set_preconditioner_size():
-            pbar = range(n_iter)
-            
-            if n_iter > 1 and self.track_progress:
-                pbar = tqdm(pbar, desc='Maximizing Marginal Likelihood')
-                
-            t0 = time()
-            for i in pbar:
-                options = {'closure': closure, 'current_loss': loss, 'max_ls': 10}
-                self.loss, _, _, _, _, _, _, fail = self.optimizer.step(options)
-                
-                if n_iter > 1:
-                    self.report_progress(pbar)
-        
-                if hasattr(self.kernel, 'get_params'):
-                    self.params_history.append(self.get_params())
-                    self.loss_history.append(self.loss.detach().item())
-        
-                if fail:
-                    print('Convergence reached at iteration {}!'.format(i))
-                    break
-            self.fit_time = time() - t0
+class EpiK(_Epik):
+    def get_likelihood(self, y_var=None, train_noise=False):
+        if y_var is not None:
+            likelihood = FixedNoiseGaussianLikelihood(noise=self.get_tensor(y_var),
+                                                      learn_additional_noise=train_noise)
+        else:
+            likelihood = GaussianLikelihood()
+
+        if self.device is not None:
+            likelihood = likelihood.cuda()
+        return(likelihood)
+    
+    def define_negative_loss(self):
+        self.calc_negative_loss = ExactMarginalLogLikelihood(self.likelihood, self.model)
+    
+    def define_model(self):
+        self.model = GPModel(self.X, self.y, self.kernel, self.likelihood,
+                             train_mean=self.train_mean,
+                             device=self.device,
+                             n_devices=self.n_devices)
+        if self.device is not None:
+            self.model = self.model.cuda()
     
     def predict(self, pred_X, calc_variance=False):
-        if calc_variance:
-            msg = 'Variance calculation not implemented yet'
-            raise ValueError(msg)
-        
         t0 = time()
-        
         self.set_evaluation_mode()
         pred_X = self.get_tensor(pred_X)
         
-        with torch.no_grad(), self.set_preconditioner_size(), gpytorch.settings.skip_posterior_variances(): #, , gpytorch.settings.fast_pred_var():
-            f_preds = self.model(pred_X).mean
+        with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
+            if calc_variance:
+                with fast_pred_var(): 
+                    f = self.model(pred_X)
+                    res = f.mean, f.variance
+            else:
+                with skip_posterior_variances():
+                    f = self.model(pred_X)
+                    res = f.mean
 
         self.pred_time = time() - t0
-        return(f_preds)
+        return(res)
+    
+    def predictions_to_df(self, pred, seqs):
+        if isinstance(pred, tuple):
+            df = pd.DataFrame({'y_pred': self.to_numpy(pred[0]),
+                               'y_pred_var': self.to_numpy(pred[1])}, index=seqs)
+        else:
+            df = pd.DataFrame({'y_pred': self.to_numpy(pred)}, index=seqs)
+        return(df)
     
     def get_prior(self, X, sigma2):
         self.X = X
@@ -237,16 +215,9 @@ class EpiK(object):
     def sample(self, X, n=1, sigma2=1e-4):
         prior = self.get_prior(X, sigma2=sigma2)
         v = torch.zeros(n)
-        with torch.no_grad(), self.set_preconditioner_size():
+        with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
             y = prior.rsample(v.size())
         return(y)
-    
-    def get_params(self):
-        params = {'mean': self.to_numpy(self.get_gp_mean())}
-        if hasattr(self.kernel, 'get_params'):
-            for param, values in self.kernel.get_params().items():
-                params[param] = self.to_numpy(values)
-        return(params)
     
     def simulate_dataset(self, X, sigma=0, ptrain=0.8):
         y_true = self.sample(X, n=1).flatten()
@@ -259,9 +230,39 @@ class EpiK(object):
             train_y_var = torch.full_like(train_y, sigma**2)
             
         return(train_x, train_y, test_x, test_y, train_y_var)
-    
-    def save(self, fpath):
-        torch.save(self.model.state_dict(), fpath)
+
+
+class GeneralizedEpiK(_Epik):
+    def __init__(self, kernel, likelihood, **kwargs):
+        super(self).__init__(kernel, **kwargs)
+        self.likelihood_function = likelihood
         
-    def load(self, fpath):
-        self.model.load_state_dict(torch.load(fpath))
+    def get_likelihood(self, y_var, train_noise):
+        likelihood = self.likelihood_function(y_var, train_noise)
+
+        if self.device is not None:
+            likelihood = likelihood.cuda()
+        return(likelihood)
+    
+    def define_negative_loss(self):
+        self.calc_negative_loss = VariationalELBO(self.likelihood, self.model, self.y.numel())
+    
+    def define_model(self):
+        self.model = GeneralizedGPmodel(self.X, self.kernel,
+                                        train_mean=self.train_mean,
+                                        device=self.device,
+                                        n_devices=self.n_devices)
+        if self.device is not None:
+            self.model = self.model.cuda()
+    
+    def predict(self, X, nsamples=100):
+        y_var = self.likelihood.second_noise * torch.ones(X.shape[0])
+        likelihood = self.get_likelihood(y_var, train_noise=False)
+        
+        with torch.no_grad(), num_likelihood_samples(nsamples):
+            phi = self.model(X)
+            y = likelihood(phi)
+            yhat, y_var = y.mean.mean(0), y.variance.mean(0)
+            phi = phi.mean.detach()
+            return(phi, yhat, y_var)
+        
