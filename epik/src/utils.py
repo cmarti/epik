@@ -3,7 +3,7 @@ import torch
 import time
 import sys
 
-from itertools import product, chain
+from itertools import product, combinations
 from collections import defaultdict
 
 
@@ -250,3 +250,32 @@ def log1mexp(x):
     two = torch.tensor([2.], dtype=x.dtype).to(device=x.device)
     mask = -torch.log(two) < x  # x < 0
     return(torch.where(mask, (-x.expm1()).log(), (-x.exp()).log1p()))
+
+
+def calc_vandermonde_inverse(values, n=None):
+        s = values.shape[0]
+        if n is None:
+            n = s
+        
+        B = np.zeros((n, s))
+        idx = np.arange(s)
+        sign = np.zeros((n, s))
+
+        for k in range(s):
+            v_k = values[idx != k]
+            norm_factor = 1 / np.prod(v_k - values[k])
+        
+            for power in range(n):
+                v_k_combs = list(combinations(v_k, s - power - 1))
+                p = np.sum([np.prod(v) for v in v_k_combs])
+                B[power, k] = sign[power, k] * p * norm_factor
+                sign[power, k] = (-1) ** (power)
+                print(1/norm_factor, p)
+        return(B)
+
+
+def log_factorial(x):
+    return(torch.lgamma(x + 1))
+
+def log_comb(n, k):
+    return(log_factorial(n) - log_factorial(k) - log_factorial(n - k))
