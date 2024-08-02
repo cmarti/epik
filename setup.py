@@ -2,7 +2,7 @@
 
 from setuptools import setup, find_packages
 
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 
 
 def main():
@@ -14,15 +14,15 @@ def main():
         license='MIT',
         author='Carlos Martí-Gómez',
         author_email='martigo@cshl.edu',
-        url='https://bitbucket.org/cmartiga/epik',
+        url='https://github.com/cmarti/epik',
         packages=find_packages(),
         include_package_data=True,
         entry_points={
             'console_scripts': [
                 'EpiK = bin.EpiK:main',
             ]},
-        install_requires=['numpy', 'pandas', 'sklearn',
-                          'torch', 'gpytorch==1.11', 'tqdm'],
+        install_requires=['tqdm', 'numpy', 'pandas',
+                          'torch', 'gpytorch==1.11'],
         python_requires='>=3',
         platforms='ALL',
         keywords=['genotype-phenotyp maps', 'fitness landscape', 
