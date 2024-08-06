@@ -13,28 +13,13 @@ Kernels
 -------
 
 .. autoclass:: epik.src.kernel.AdditiveKernel
-    :members: forward
-
 .. autoclass:: epik.src.kernel.PairwiseKernel
-    :members: forward
-
 .. autoclass:: epik.src.kernel.ExponentialKernel
-    :members: forward
-
 .. autoclass:: epik.src.kernel.VarianceComponentKernel
-    :members: forward
-
 .. autoclass:: epik.src.kernel.ConnectednessKernel
-    :members: forward
-
 .. autoclass:: epik.src.kernel.JengaKernel
-    :members: forward
-
 .. autoclass:: epik.src.kernel.GeneralProductKernel
-    :members: forward
-
 .. autoclass:: epik.src.kernel.AdditiveHeteroskedasticKernel
-    :members: forward
 
 Utilities
 ----------
