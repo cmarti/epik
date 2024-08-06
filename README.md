@@ -34,6 +34,12 @@ Test installation
 python -m unittest epik/test/*py
 ```
 
+## Documentation
+
+You can find more detailed documentation and tutorials [here](https://www.epik.readthedocs.io)
+
+Scripts to reproduce the analyses and figures from the paper are avaiable in a separate [repository](https://github.com/cmarti/epik_paper)
+
 ## Installing and testing KeOps
 
 We have sometimes run into problems when running KeOps library on the GPU. We found two types of issues
