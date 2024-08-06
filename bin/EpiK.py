@@ -7,38 +7,30 @@ import torch
 
 from os.path import exists
 from linear_operator.settings import max_cg_iterations
-from gpytorch.kernels import ScaleKernel, RQKernel, LinearKernel
-from gpytorch.kernels.keops import MaternKernel
+from gpytorch.kernels import ScaleKernel, RQKernel, MaternKernel
 
 from epik.src.utils import LogTrack, guess_space_configuration, seq_to_one_hot, seq_to_binary
-from epik.src.plot import plot_training_history
 from epik.src.model import EpiK
-from epik.src.kernel.base import AdditiveHeteroskedasticKernel
-from epik.src.kernel.haploid import (VarianceComponentKernel, DeltaPKernel,
-                                     RhoPiKernel, RhoKernel, AdditiveKernel,
-                                     RBFKernel, ARDKernel, PairwiseKernel,
-                                     ThreeWayKernel, GeneralProductKernel)
+from epik.src.kernel import (AdditiveHeteroskedasticKernel, 
+                             AdditiveKernel, PairwiseKernel, VarianceComponentKernel,
+                             ExponentialKernel, ConnectednessKernel, JengaKernel,
+                             GeneralProductKernel)
 
 
 def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, add_scale=False,
-                  binary=False):
+                  binary=False, random_init=False):
     is_cor_kernel = True
     if kernel == 'matern':
         kernel = MaternKernel()
     elif kernel == 'RQ':
         kernel = RQKernel()
-    elif kernel == 'linear':
-        kernel = LinearKernel()
     else:
-        kernels = {'RBF': RBFKernel,
-                   'Connectedness': RhoKernel, 'Rho': RhoKernel,
-                   'ARD': ARDKernel,
-                   'RhoPi': RhoPiKernel,
+        kernels = {'Exponential': ExponentialKernel,
+                   'Connectedness': ConnectednessKernel,
+                   'Jenga': JengaKernel,
+                   'GeneralProduct': GeneralProductKernel,
                    'Additive': AdditiveKernel,
                    'Pairwise': PairwiseKernel,
-                   'Threeway': ThreeWayKernel,
-                   'GeneralProduct': GeneralProductKernel,
-                   'DP': DeltaPKernel,
                    'VC': VarianceComponentKernel}
 
         is_cor_kernel = kernel == 'GeneralProduct'
@@ -46,7 +38,8 @@ def select_kernel(kernel, n_alleles, seq_length, dtype, P, add_het, use_keops, a
             msg = 'Unknown kernel provided: {}'.format(kernel)
             raise ValueError(msg)
 
-        kwargs = {'dtype': dtype, 'use_keops': use_keops, 'binary': binary, 'P': P}
+        kwargs = {'dtype': dtype, 'use_keops': use_keops, 'binary': binary, 'P': P,
+                  'random_init': random_init}
         kernel = kernels[kernel](n_alleles, seq_length, **kwargs)
 
     if add_het:
@@ -107,20 +100,19 @@ def main():
                             action='store_true', help='Use KeOps backedn')
     comp_group.add_argument('-b', '--binary', default=False, action='store_true',
                             help='Use binary encoding if number of alleles is 2')
-    comp_group.add_argument('-l', '--lbfgs', default=False,
-                            action='store_true', help='Use LBFGS optimizer instead of Adam')
 
     output_group = parser.add_argument_group('Output')
     output_group.add_argument('-o', '--output', required=True, help='Output file')
     output_group.add_argument('-p', '--pred',
                               help='File containing sequences for predicting genotype')
+    output_group.add_argument('--calc_variance', default=False, action='store_true',
+                               help='Compute posterior variances')
 
     # Parse arguments
     parsed_args = parser.parse_args()
     data_fpath = parsed_args.data
     
     kernel_label = parsed_args.kernel
-#     q = parsed_args.q
     P = parsed_args.P
     n_kernels = parsed_args.n_kernels
     params_fpath = parsed_args.params
@@ -133,10 +125,10 @@ def main():
     learning_rate = parsed_args.learning_rate
     use_float64 = parsed_args.use_float64
     binary = parsed_args.binary
-    optimizer = 'lbfgs' if parsed_args.lbfgs else 'Adam'
 
     pred_fpath = parsed_args.pred
     out_fpath = parsed_args.output
+    calc_variance = parsed_args.calc_variance
     
     # Load counts data
     log = LogTrack()
@@ -168,9 +160,10 @@ def main():
     # Get kernel
     log.write('Selected {} kernel (N={})'.format(kernel_label, n_kernels))
     add_scale = n_kernels > 1
+    random_init = n_kernels > 1
     kernel = select_kernel(kernel_label, n_alleles, config['seq_length'],
                            dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
-                           add_scale=add_scale, binary=binary)
+                           add_scale=add_scale, binary=binary, random_init=random_init)
     
     if hasattr(kernel, 'binary') and kernel.binary:
         log.write('\t using binary encoding')
@@ -178,7 +171,7 @@ def main():
     for i in range(1, n_kernels):
         kernel += select_kernel(kernel_label, n_alleles, config['seq_length'],
                                 dtype=dtype, P=P, add_het=add_het, use_keops=use_keops,
-                                add_scale=add_scale, binary=binary)
+                                add_scale=add_scale, binary=binary, random_init=random_init)
 
     # Define device
     device = torch.device('cuda') if gpu else None
@@ -191,7 +184,7 @@ def main():
         model = EpiK(kernel, dtype=dtype, track_progress=True,
                      train_noise=True,
                      device=device, n_devices=n_devices,
-                     learning_rate=learning_rate, optimizer=optimizer)
+                     learning_rate=learning_rate)
         model.set_data(X, y, y_var=y_var)
     
         # Load hyperparameters if provided
@@ -219,8 +212,8 @@ def main():
             else:
                 X_test = seq_to_one_hot(test_seqs, alleles=alleles)
                 
-            y_test = model.to_numpy(model.predict(X_test))
-            result = pd.DataFrame({'y_pred': y_test}, index=test_seqs)
+            pred = model.predict(X_test, calc_variance=calc_variance)
+            result = model.predictions_to_df(pred, test_seqs)
             log.write('\tWriting predictions to {}'.format(out_fpath))
             result.to_csv(out_fpath)
     
