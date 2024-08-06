@@ -36,7 +36,7 @@ python -m unittest epik/test/*py
 
 ## Documentation
 
-You can find more detailed documentation and tutorials [here](https://www.epik.readthedocs.io)
+You can find more detailed documentation and tutorials [here](https://epik.readthedocs.io)
 
 Scripts to reproduce the analyses and figures from the paper are avaiable in a separate [repository](https://github.com/cmarti/epik_paper)
 
