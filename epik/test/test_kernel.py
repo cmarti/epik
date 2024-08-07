@@ -11,7 +11,7 @@ from epik.src.utils import (seq_to_one_hot, get_tensor, diploid_to_one_hot,
                             get_full_space_one_hot, get_full_space_binary)
 from epik.src.kernel import (VarianceComponentKernel, AdditiveKernel, PairwiseKernel,
                              RhoPiKernel, ConnectednessKernel, JengaKernel,
-                             GeneralProductKernel, AddRhoPiKernel,
+                             GeneralProductKernel, AddRhoPiKernel, ExponentialKernel,
                              AdditiveHeteroskedasticKernel, get_constant_linop)
 
 
@@ -280,15 +280,40 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(np.unique(w_d)[1:], np.unique(cov1)[1:], atol=1e-3))
         assert(np.allclose(np.unique(w_d)[1:], np.unique(cov2)[1:], atol=1e-3))
         assert(np.allclose(np.unique(w_d)[1:], np.unique(cov3)[1:], atol=1e-3))
+    
+    def test_exponential_kernel(self):
+        l, a = 2, 2
+        logit_rho0 = torch.zeros((1, 1))
+        log_var0 = 0.
+        rho = np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))
+        kernel = ExponentialKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0,
+                                   log_var0=log_var0)
         
-    def test_rho_kernel(self):
+        # Check decay rate
+        decay_rate = kernel.get_decay_rate()
+        expected_decay_rate = 1 - ((1-rho) / (1 + rho)).flatten()
+        assert(np.allclose(decay_rate, expected_decay_rate))
+        
+        # Check kernel values
+        x = get_full_space_one_hot(l, a)
+        cov = kernel.forward(x, x).detach().numpy()
+        decay_factor = 1 - decay_rate
+        assert(np.allclose(cov[0, :], [1, decay_factor, decay_factor, decay_factor ** 2]))
+
+        diag = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(np.allclose(diag, np.diag(cov)))
+
+        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
+        assert(np.allclose(cov, cov2))
+
+    def test_connectedness_kernel(self):
         l, a = 1, 2
         logit_rho0 = torch.tensor([0.])
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l,
+                                     logit_rho0=logit_rho0, log_var0=0.)
         x = get_full_space_one_hot(l, a)
         cov = kernel._nonkeops_forward(x, x).detach().numpy()
-        assert(cov[0, 0] == 1.5)
-        assert(cov[0, 1] == 0.5)
+        assert(np.allclose(cov[0, :], [1, 1/3.]))
 
         diag = kernel.forward(x, x, diag=True).detach().numpy()
         assert(np.allclose(diag, np.diag(cov)))
@@ -308,10 +333,11 @@ class KernelsTests(unittest.TestCase):
         l, a = 2, 2
         logit_rho0 = torch.tensor([[0.], [0.]])
         rho = np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l,
+                                     logit_rho0=logit_rho0, log_var0=0.)
         x = get_full_space_one_hot(l, a)
         cov = kernel.forward(x, x).detach().numpy()
-        assert(np.allclose(cov[0, :], [1.5 ** 2, 1.5 * 0.5, 1.5 * 0.5, 0.5 ** 2]))
+        assert(np.allclose(cov[0, :], [1, 1/3., 1/3., 1/3.**2]))
 
         diag = kernel.forward(x, x, diag=True).detach().numpy()
         assert(np.allclose(diag, np.diag(cov)))
@@ -319,14 +345,22 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert(np.allclose(cov, cov))
 
+        # With unequal decay factors
         logit_rho0 = torch.tensor([[0.], [-np.log(3)]], dtype=torch.float32)
         rho = (np.exp(logit_rho0.numpy()) / (1 + np.exp(logit_rho0.numpy()))).flatten()
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=l, logit_rho0=logit_rho0)
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=l,
+                                     logit_rho0=logit_rho0, log_var0=0.)
+        
+        # Check decay rates
+        decay_rates = kernel.get_decay_rates()
+        expected_decay_rates = [2/3., 0.4]
+        assert(np.allclose(decay_rates, expected_decay_rates))
+
         cov = kernel.forward(x, x).detach().numpy()
-        expected = np.array([(1 + rho[0]) * (1 + rho[1]),
-                             (1 - rho[0]) * (1 + rho[1]),
-                             (1 + rho[0]) * (1 - rho[1]),
-                             (1 - rho[0]) * (1 - rho[1])])
+        expected = np.array([1,
+                             (1 - rho[0]) / (1 + rho[0]),
+                             (1 - rho[1]) / (1 + rho[1]),
+                             (1 - rho[0]) / (1 + rho[0]) * (1 - rho[1]) / (1 + rho[1])])
         assert(np.allclose(cov[0, :], expected))
         
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
@@ -430,7 +464,7 @@ class KernelsTests(unittest.TestCase):
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov))
         
-    def test_ARD_kernel(self):
+    def test_jenga_kernel(self):
         l, a = 1, 2
         logit_rho0 = torch.tensor([[0.]])
         log_p0 = torch.tensor(np.log([[0.2, 0.8]]), dtype=torch.float32)
@@ -468,6 +502,12 @@ class KernelsTests(unittest.TestCase):
         I = torch.eye(a ** l)
         cov2 = (kernel._keops_forward(x, x) @ I).detach().numpy()
         assert(np.allclose(cov2, cov))
+
+        # Check decay rates
+        rho = np.expand_dims(rho, 1)
+        decay_rates = kernel.get_decay_rates()
+        expected_decay_rates = 1 - np.sqrt((1-rho) / (1 + eta * rho))
+        assert(np.allclose(decay_rates, expected_decay_rates))
         
     def test_heteroskedastic_kernel(self):
         l, a = 1, 2
@@ -826,5 +866,5 @@ class OldKernelsTests(unittest.TestCase):
         
         
 if __name__ == '__main__':
-    import sys;sys.argv = ['', 'KernelsTests.test_additive_kernel']
+    import sys;sys.argv = ['', 'KernelsTests']
     unittest.main()

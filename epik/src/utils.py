@@ -1,10 +1,12 @@
 import numpy as np
+import pandas as pd
 import torch
 import time
 import sys
 
 from itertools import product, combinations
 from collections import defaultdict
+from scipy.special import logsumexp
 
 
 def get_one_hot_subseq_key(alphabet, max_l=1):
@@ -277,5 +279,20 @@ def calc_vandermonde_inverse(values, n=None):
 def log_factorial(x):
     return(torch.lgamma(x + 1))
 
+
 def log_comb(n, k):
     return(log_factorial(n) - log_factorial(k) - log_factorial(n - k))
+
+
+def calc_decay_rates(logit_rho, log_p, sqrt=False, alleles=None, positions=None):
+    rho = np.exp(logit_rho) / (1 + np.exp(logit_rho))
+    p = np.exp(log_p - np.expand_dims(logsumexp(log_p, axis=1), 1))
+    eta = (1 - p) / p
+
+    decay_factors = (1 - rho) / (1 + eta * rho)
+    if sqrt:
+        decay_factors = np.sqrt(decay_factors)
+
+    decay_rates = pd.DataFrame(1 - decay_factors, index=positions, columns=alleles)
+    return(decay_rates)
+

@@ -13,7 +13,7 @@ from gpytorch.lazy.lazy_tensor import delazify
 from linear_operator.operators import (KernelLinearOperator, DiagLinearOperator,
                                        MatmulLinearOperator)
 
-from epik.src.utils import get_tensor, log1mexp, log_comb
+from epik.src.utils import get_tensor, log1mexp, log_comb, calc_decay_rates
 
 
 def get_constant_linop(c, shape, device, dtype):
@@ -193,8 +193,6 @@ class AdditiveHeteroskedasticKernel(SequenceKernel):
         return self.base_kernel.prediction_strategy(train_inputs, train_prior_dist, train_labels, likelihood)
 
 
-
-
 class LowOrderKernel(SequenceKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, log_lambdas0=None,
@@ -208,11 +206,11 @@ class LowOrderKernel(SequenceKernel):
         n_components = c_p.shape[0]
         if self.log_lambdas0 is None:
             # # Match linearly decaying correlations with specified variance
-            # exp_coeffs = torch.zeros((n_components, 1))
-            # exp_coeffs[0] = np.exp(self.log_var0)
-            # exp_coeffs[1] = -np.exp(self.log_var0) / self.l
-            # log_lambdas0 = np.log(torch.linalg.solve_triangular(c_p, exp_coeffs, upper=True)+1e-10)
-            log_lambdas0 = np.zeros(n_components)
+            exp_coeffs = torch.zeros((n_components, 1))
+            exp_coeffs[0] = np.exp(self.log_var0)
+            exp_coeffs[1] = -np.exp(self.log_var0) / self.l
+            log_lambdas0 = np.log(torch.linalg.solve_triangular(c_p, exp_coeffs, upper=True)+1e-10)
+            # log_lambdas0 = torch.zeros(n_components)
         else:
             log_lambdas0 = self.log_lambdas0
 
@@ -529,13 +527,14 @@ class RhoPiKernel(SequenceKernel):
             kernel = sd1_inv_D @ kernel @ sd2_inv_D
 
         return(kernel)
-    
-    
+
+
 class ConnectednessKernel(RhoPiKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
         super().__init__(n_alleles, seq_length,
                          train_p=False, train_var=True,
+                         correlation=True,
                          **kwargs)
     
     def _nonkeops_forward_binary(self, x1, x2, diag=False, **params):
@@ -597,6 +596,12 @@ class ConnectednessKernel(RhoPiKernel):
         else:
             return(super()._nonkeops_forward(x1, x2, **kwargs))
     
+    def get_decay_rates(self, positions=None):
+        decay_rates = calc_decay_rates(self.logit_rho.detach().numpy(),
+                                       self.log_p.detach().numpy(),
+                                       sqrt=False, positions=positions).mean(1)
+        return(decay_rates)
+    
 
 class JengaKernel(RhoPiKernel):
     is_stationary = True
@@ -604,11 +609,23 @@ class JengaKernel(RhoPiKernel):
         super().__init__(n_alleles, seq_length,
                          correlation=True, train_p=True, train_var=True,
                          **kwargs)
+    
+    def get_decay_rates(self, alleles=None, positions=None):
+        decay_rates = calc_decay_rates(self.logit_rho.detach().numpy(),
+                                       self.log_p.detach().numpy(),
+                                       sqrt=True, alleles=alleles, positions=positions)
+        return(decay_rates)
 
 
 class ExponentialKernel(ConnectednessKernel):
     def __init__(self, n_alleles, seq_length, **kwargs):
         super().__init__(n_alleles, seq_length, common_rho=True, **kwargs)
+    
+    def get_decay_rate(self):
+        decay_rate = calc_decay_rates(self.logit_rho.detach().numpy(),
+                                      self.log_p.detach().numpy(),
+                                      sqrt=False).values.mean()
+        return(decay_rate)
         
 
 class GeneralProductKernel(SequenceKernel):

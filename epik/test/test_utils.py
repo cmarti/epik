@@ -8,7 +8,7 @@ from epik.src.utils import (seq_to_one_hot, diploid_to_one_hot,
                             get_full_space_one_hot, one_hot_to_seq, 
                             encode_seq, get_one_hot_subseq_key,
                             get_binary_subseq_key, encode_seqs,
-                            seq_to_binary)
+                            seq_to_binary, calc_decay_rates)
 
 
 class UtilsTests(unittest.TestCase):
@@ -143,6 +143,31 @@ class UtilsTests(unittest.TestCase):
         h1 = np.array([[0, 0], [0, 0], [0, 0], [0, 1], [1, 1]])
         y = np.stack([h0, ht, h1], axis=2)
         assert(np.allclose(x, y))
+
+    def test_calc_decay_rates(self):
+        logit_rho = np.array([[0.],
+                              [-0.69],
+                              [0.69]])
+        log_p = np.full((3, 3), 1/3.)
+        decay_rates = calc_decay_rates(logit_rho, log_p,
+                                       alleles=['A', 'B', 'C'],
+                                       positions=[10, 12, 15])
+        
+        assert(np.all(decay_rates.columns == ['A', 'B', 'C']))
+        assert(np.all(decay_rates.index == [10, 12, 15]))
+
+        rho = np.exp(logit_rho) / (1 + np.exp(logit_rho))
+        expected_decay_rates = (1 - (1 - rho) / (1 + 2 * rho)).flatten()
+        decay_rates = decay_rates.mean(1).values.flatten()
+        assert(np.allclose(decay_rates, expected_decay_rates))
+
+        # With sqrt
+        decay_rates = calc_decay_rates(logit_rho, log_p, sqrt=True,
+                                       alleles=['A', 'B', 'C'],
+                                       positions=[10, 12, 15])
+        expected_decay_rates = (1 - np.sqrt((1 - rho) / (1 + 2 * rho))).flatten()
+        decay_rates = decay_rates.mean(1).values.flatten()
+        assert(np.allclose(decay_rates, expected_decay_rates))
     
         
 if __name__ == '__main__':

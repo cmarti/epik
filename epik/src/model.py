@@ -127,6 +127,15 @@ class _Epik(object):
         self.loss_history.append(self.loss.detach().item())
     
     def fit(self, n_iter=100):
+        '''
+        Function to optimize model hyperparamenters by maximizing 
+        the marginal likelihood. This includes any kernel parameter, 
+        as well as the optional mean and additional noise parameters. 
+        
+        Parameters
+        ----------
+        
+        '''
         self.set_training_mode()
         
         pbar = range(n_iter)
@@ -154,6 +163,54 @@ class _Epik(object):
 
 
 class EpiK(_Epik):
+    '''
+    Gaussian process regression model for inference of
+    sequence-function relationships from experimental measurements
+    using GPyTorch and KeOps backend.
+    
+    Parameters
+    ----------
+    kernel : epik.src.Kernel
+        Instance of a kernel class characterizing the covariance
+        between pairs of sequences to use for Gaussian process
+        regression
+        
+    device : torch.device
+        PyTorch device in which to run computation
+             
+    train_mean : bool (False)
+        Option to optimize the mean function of the Gaussian Process. 
+        By default it assumes a zero-mean
+    
+    train_noise : bool (False)
+        Option to add unknown error to the Gaussian Process. By default
+        it assumes that the provided error estimates are reliable
+    
+    learning_rate : float (0.1)
+        Learning rate of the Adam optimizer used to optimize
+        the hyperparameters through evidence maximization
+    
+    n_devices : int (1)    
+        Number of GPUs to use for computation
+        
+    dtype : torch.dtype (torch.float32)
+        data type to use in tensors for computation
+    
+    preconditioner_size : int (0)    
+        Size of the preconditioner computed to accelerate
+        conjugate gradient convergence. By default, no
+        preconditioner is computed. 
+    
+    track_progress : bool (False)
+        Option to show an progress bar recording the 
+        progress of model fitting
+        
+    Returns
+    -------
+    model : epik.src.model.EpiK
+        Instance of Gaussian Process model
+    
+    '''
     def get_likelihood(self, y_var=None, train_noise=False):
         if y_var is not None:
             likelihood = FixedNoiseGaussianLikelihood(noise=self.get_tensor(y_var),
@@ -176,19 +233,41 @@ class EpiK(_Epik):
         if self.device is not None:
             self.model = self.model.cuda()
     
-    def predict(self, pred_X, calc_variance=False):
+    def predict(self, X, calc_variance=False):
+        '''
+        Function to make phenotypic predictions under using the
+        Gaussian process model
+        
+        Parameters
+        ----------
+        X : torch.Tensor of shape (n_sequence, n_features)
+            Tensor containing the one-hot encoding of the
+            sequences to make predictions
+            
+        calc_variance : bool (False)
+            Option to compute the posterior variance in addition
+            to the posterior mean reported by default
+            
+        Returns
+        -------
+        output : torch.Tensor or (torch.Tensor, torch.Tensor)
+            Tensor containing phenotypic predictions at the
+            desired sequences. If `calc_variance=True`, two 
+            Tensors will be returned
+        
+        '''
         t0 = time()
         self.set_evaluation_mode()
-        pred_X = self.get_tensor(pred_X)
+        X = self.get_tensor(X)
         
         with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
             if calc_variance:
                 with fast_pred_var(): 
-                    f = self.model(pred_X)
+                    f = self.model(X)
                     res = f.mean, f.variance
             else:
                 with skip_posterior_variances():
-                    f = self.model(pred_X)
+                    f = self.model(X)
                     res = f.mean
 
         self.pred_time = time() - t0
