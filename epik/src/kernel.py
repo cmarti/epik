@@ -499,9 +499,11 @@ class RhoPiKernel(SequenceKernel):
         if self.correlation:
             log_sd1 = 0.5 * (x1 @ log_one_p_eta_rho)
             log_sd2 = 0.5 * (x2 @ log_one_p_eta_rho)
-            if not diag:
+            if diag:
+                log_kernel = log_kernel - log_sd1.flatten() - log_sd2.flatten()
+            else:
                 log_sd2 = log_sd2.reshape((1, x2.shape[0]))
-            log_kernel = log_kernel - log_sd1 - log_sd2
+                log_kernel = log_kernel - log_sd1 - log_sd2
         
         kernel = torch.exp(log_kernel)
         return(kernel)
@@ -590,11 +592,11 @@ class ConnectednessKernel(RhoPiKernel):
         else:
             return(super()._keops_forward(x1, x2, **kwargs))
     
-    def _nonkeops_forward(self, x1, x2, **kwargs):
+    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         if self.binary:
-            return(self._nonkeops_forward_binary(x1, x2, **kwargs))
+            return(self._nonkeops_forward_binary(x1, x2, diag=diag, **kwargs))
         else:
-            return(super()._nonkeops_forward(x1, x2, **kwargs))
+            return(super()._nonkeops_forward(x1, x2, diag=diag, **kwargs))
     
     def get_decay_rates(self, positions=None):
         decay_rates = calc_decay_rates(self.logit_rho.detach().numpy(),
