@@ -63,6 +63,31 @@ def get_alleles(c, alleles=None):
         
 
 def encode_seqs(seqs, alphabet, encoding_type='one_hot', max_n=500):
+    '''
+    Returns a torch.Tensor with the encoding of the provided sequences 
+
+    Parameters
+    ----------
+    seqs : array-like of shape (n_sequences,)
+        Array containing a list of sequences
+    alphabet : array-like of shape (n_alleles, )
+        Iterable object with the list of alleles in the sequences
+    encoding_type : 'one_hot' or 'binary'
+        Type of encoding to use. If `encoding_type='one_hot'`,
+        sequences will be encoded under the one-hot encoding
+        with one column for every allele and site. 
+        If `encoding_type='binary'` and there are only two possible
+        alleles, then sequences will be encoded as binary, with a
+        single column for every site taking values (-1, 1)
+    max_n : int (500)
+        Maximum number of features to allow in the encoding
+
+    Returns
+    -------
+    X : torch.Tensor of shape (n_sequences, n_features)
+        Tensor with the numerical encoding of the input sequences
+    '''
+
     max_l = max_n // len(alphabet)
     if encoding_type == 'one_hot':
         subseq_key = get_one_hot_subseq_key(alphabet)
@@ -193,6 +218,34 @@ def guess_space_configuration(seqs):
 
 
 def split_training_test(X, y, y_var=None, ptrain=0.8, dtype=None):
+    '''
+    Splits a dataset into training and test subsets
+
+    Parameters
+    ----------
+    X : torch.Tensor of shape (n_sequences, n_features)
+        Tensor with the numerical encoding of the input sequences
+    y : torch.Tensor of shape (n_sequence,)
+            Tensor containing the phenotypic measurements for each
+            sequence in `X`
+    y_var : torch.Tensor of shape (n_sequence,) or None
+        If `y_var=None` it is assumed that there is no uncertainty
+        in the measurements. Otherwise, Tensor containing the
+        variance of the measurements in `y`.
+    ptrain : float (0.8)
+        Proportion of the dataset to keep as training set
+    dtype : torch.dtype (torch.float32)
+        dtype to use for storing the output tensors
+
+    Returns
+    -------
+    output: tuple of size (5,)
+        Tuple containing (train_X, train_y, test_X, test_y, test_y_var),
+        where `X` is the matrix encoding the input sequences, 
+        `y` the associated measurements and `y_var` the variance of
+        those measurements. 
+    '''
+    
     ps = np.random.uniform(size=X.shape[0])
     train = ps <= ptrain
     train_x, train_y = X[train, :], y[train]
