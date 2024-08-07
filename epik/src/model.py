@@ -106,6 +106,23 @@ class _Epik(object):
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
 
     def set_data(self, X, y, y_var=None):
+        '''
+        Load data into model
+
+        Parameters
+        ----------
+        X : torch.Tensor of shape (n_sequence, n_features)
+            Tensor containing the one-hot encoding of the
+            sequences to make predictions
+        y : torch.Tensor of shape (n_sequence,)
+            Tensor containing the phenotypic measurements for each
+            sequence in `X`
+        y_var : torch.Tensor of shape (n_sequence,) or None
+            If `y_var=None` it is assumed that there is no uncertainty
+            in the measurements. Otherwise, Tensor containing the
+            variance of the measurements in `y`.
+
+        '''
         self.X = self.get_tensor(X)
         self.y = self.get_tensor(y)
         self.y_var = y_var
@@ -156,9 +173,27 @@ class _Epik(object):
             self.fit_time = time() - t0
     
     def save(self, fpath):
+        '''
+        Store model parameters for future use
+
+        Parameters
+        ----------
+        fpath : str
+            File path for the file to store the parameters
+            of the model
+        '''
         torch.save(self.model.state_dict(), fpath)
         
     def load(self, fpath):
+        '''
+        Load model parameters from a file
+
+        Parameters
+        ----------
+        fpath : str
+            File path for the file with the stored model
+            parameters
+        '''
         self.model.load_state_dict(torch.load(fpath))
 
 
