@@ -327,6 +327,29 @@ class EpiK(_Epik):
         return(prior)
     
     def simulate(self, X, n=1, sigma2=1e-4):
+        '''
+        Sample random sequence-function relationships from the prior
+        evaluated at the input sequences
+
+        Parameters
+        ----------
+        X : torch.Tensor of shape (n_sequence, n_features)
+            Tensor containing the one-hot encoding of the
+            sequences to make predictions
+        n : int (1)
+            Number of sequence-function relationships to 
+            sample from the prior
+        sigma2 : float (1e-4)
+            Additional random noise to add to the 
+            simulated landscapes
+        
+        Returns
+        -------
+        y : torch.Tensor of shape (n_sequences, n)
+            Tensor containing the simulated landscapes 
+            evaluated in the input sequences
+        '''
+        
         prior = self.get_prior(X, sigma2=sigma2)
         v = torch.zeros(n)
         with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
