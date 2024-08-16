@@ -349,3 +349,64 @@ def calc_decay_rates(logit_rho, log_p, sqrt=False, alleles=None, positions=None)
     decay_rates = pd.DataFrame(1 - decay_factors, index=positions, columns=alleles)
     return(decay_rates)
 
+
+def get_k_mutants(seq0, alleles, k=2):
+    l = len(seq0)
+    positions = np.arange(l)
+    seqs = []
+    for sites in combinations(positions, k):
+        for new_alleles in product(alleles, repeat=k):
+            new_seq = [c for c in seq0]
+            skip = False
+            for a, s in zip(new_alleles, sites):
+                if a == seq0[s]:
+                    skip = True
+                    break
+                new_seq[s] = a
+            if not skip:
+                seqs.append(''.join(new_seq))
+    return(seqs)
+
+
+def get_mutant_seq(seq, sites, alleles):
+    mut = [c for c in seq]
+    for p, a in zip(sites, alleles):
+        mut[p] = a
+    return(''.join(mut))
+
+
+def get_epistatic_coeffs_contrast_matrix(seq0, alleles):
+    l = len(seq0)
+    positions = np.arange(l)
+    contrasts = {}
+    for s1, s2 in combinations(positions, 2):
+        c1, c2 = seq0[s1], seq0[s2]
+        alleles1 = [a for a in alleles if a != c1]
+        alleles2 = [a for a in alleles if a != c2]
+        
+        for a1 in alleles1:
+            for a2 in alleles2:
+                seqs = [seq0, 
+                        get_mutant_seq(seq0, sites=[s1], alleles=[a1]),
+                        get_mutant_seq(seq0, sites=[s2], alleles=[a2]),
+                        get_mutant_seq(seq0, sites=[s1, s2], alleles=[a1, a2])]        
+                label = '{}{}{}_{}{}{}'.format(c1, s1, a1, c2, s2, a2)
+                values = [1, -1, -1, 1]
+                contrasts[label] = dict(zip(seqs, values))
+    contrasts_matrix = pd.DataFrame(contrasts).fillna(0).T
+    return(contrasts_matrix)
+
+
+def get_mut_effs_contrast_matrix(seq0, alleles):
+    l = len(seq0)
+    positions = np.arange(l)
+    contrasts = {}
+    for s in positions:
+        c = seq0[s]
+        for a in [a for a in alleles if a != c]:
+            seqs = [seq0,  get_mutant_seq(seq0, sites=[s], alleles=[a])]        
+            label = '{}{}{}'.format(c, s, a)
+            values = [-1, 1]
+            contrasts[label] = dict(zip(seqs, values))
+    contrasts_matrix = pd.DataFrame(contrasts).fillna(0).T
+    return(contrasts_matrix)

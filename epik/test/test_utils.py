@@ -3,12 +3,15 @@ import unittest
 
 import numpy as np
 from timeit import timeit
+from scipy.special import comb
 
 from epik.src.utils import (seq_to_one_hot, diploid_to_one_hot,
                             get_full_space_one_hot, one_hot_to_seq, 
                             encode_seq, get_one_hot_subseq_key,
                             get_binary_subseq_key, encode_seqs,
-                            seq_to_binary, calc_decay_rates)
+                            seq_to_binary, calc_decay_rates,
+                            get_k_mutants, get_epistatic_coeffs_contrast_matrix,
+                            get_mut_effs_contrast_matrix)
 
 
 class UtilsTests(unittest.TestCase):
@@ -168,6 +171,33 @@ class UtilsTests(unittest.TestCase):
         expected_decay_rates = (1 - np.sqrt((1 - rho) / (1 + 2 * rho))).flatten()
         decay_rates = decay_rates.mean(1).values.flatten()
         assert(np.allclose(decay_rates, expected_decay_rates))
+    
+    def test_get_k_mutants(self):
+        seq0 = 'AGCT'
+        seqs = get_k_mutants(seq0, alleles=seq0, k=2)        
+        
+        for seq in seqs:
+            d = np.sum([a1 != a2 for a1, a2 in zip(seq, seq0)])
+            assert(d == 2)
+        
+        expected_doubles = 3 ** 2 * comb(4, 2)
+        assert(len(seqs) == expected_doubles)
+        
+    def test_get_get_contrast_matrices(self):
+        seq0 = 'ACGT'
+        
+        contrast_matrix = get_mut_effs_contrast_matrix(seq0, alleles=seq0)
+        n_contrasts, n_seqs = 12, 13
+        assert(contrast_matrix.shape == (n_contrasts, n_seqs))
+        assert(np.allclose(contrast_matrix.sum(1), 0))
+        assert(np.allclose((contrast_matrix != 0).sum(1), 2))
+        
+        contrast_matrix = get_epistatic_coeffs_contrast_matrix(seq0, alleles=seq0)
+        n_contrasts = 3 ** 2 * comb(4, 2)
+        n_seqs = 1 + 3 * 4 + n_contrasts
+        assert(contrast_matrix.shape == (n_contrasts, n_seqs))
+        assert(np.allclose(contrast_matrix.sum(1), 0))
+        assert(np.allclose((contrast_matrix != 0).sum(1), 4))
     
         
 if __name__ == '__main__':
