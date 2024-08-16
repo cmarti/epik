@@ -184,7 +184,7 @@ class _Epik(object):
         '''
         torch.save(self.model.state_dict(), fpath)
         
-    def load(self, fpath):
+    def load(self, fpath, **kwargs):
         '''
         Load model parameters from a file
 
@@ -194,7 +194,7 @@ class _Epik(object):
             File path for the file with the stored model
             parameters
         '''
-        self.model.load_state_dict(torch.load(fpath))
+        self.model.load_state_dict(torch.load(fpath, **kwargs))
 
 
 class EpiK(_Epik):
@@ -268,14 +268,23 @@ class EpiK(_Epik):
         if self.device is not None:
             self.model = self.model.cuda()
     
+    def get_posterior(self, X):
+        
+        self.set_evaluation_mode()
+        X = self.get_tensor(X)
+        
+        with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
+            f = self.model(X)
+            return(f)
+    
     def predict(self, X, calc_variance=False):
         '''
-        Function to make phenotypic predictions under using the
+        Function to make phenotypic predictions under the
         Gaussian process model
         
         Parameters
         ----------
-        X : torch.Tensor of shape (n_sequence, n_features)
+        X : torch.Tensor of shape (n_sequences, n_features)
             Tensor containing the one-hot encoding of the
             sequences to make predictions
             
@@ -295,17 +304,58 @@ class EpiK(_Epik):
         self.set_evaluation_mode()
         X = self.get_tensor(X)
         
-        with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
-            if calc_variance:
-                with fast_pred_var(): 
-                    f = self.model(X)
-                    res = f.mean, f.variance
-            else:
-                with skip_posterior_variances():
-                    f = self.model(X)
-                    res = f.mean
+        if calc_variance:
+            with fast_pred_var(): 
+                f = self.get_posterior(X)
+                res = f.mean, f.variance
+        else:
+            with skip_posterior_variances():
+                f = self.model(X)
+                res = f.mean
 
         self.pred_time = time() - t0
+        return(res)
+    
+    def make_contrasts(self, contrast_matrix, X, calc_variance=False):
+        '''
+        Function to make contrasts of phenotypes across sets of genotypes
+        under the Gaussian process model
+        
+        Parameters
+        ----------
+        contrast_matrix : torch.Tensor of shape (n_contrasts, n_sequences)
+            Tensor containing the linear combination of sequences in
+            encoded by `X` to compute posterior distribution of 
+            the contrasts. 
+        
+        X : torch.Tensor of shape (n_sequences, n_features)
+            Tensor containing the one-hot encoding of the
+            sequences to make predictions
+            
+        calc_variance : bool (False)
+            Option to compute the posterior (co)-variance in addition
+            to the posterior mean reported by default
+            
+        Returns
+        -------
+        output : torch.Tensor or (torch.Tensor, torch.Tensor)
+            Tensor containing phenotypic predictions at the
+            desired sequences. If `calc_variance=True`, a second 
+            Tensor containing the covariance matrix of the posterior
+            of the contrasts will be returned.
+        '''
+        
+        B = self.get_tensor(contrast_matrix)
+        if calc_variance:
+            f = self.get_posterior(X)
+            m = B @ f.mean
+            cov = B @ f.covariance_matrix @ B.T
+            res = m, cov
+        else:
+            with skip_posterior_variances():
+                f = self.get_posterior(X)
+                m = B @ f.mean
+                res = m
         return(res)
     
     def predictions_to_df(self, pred, seqs):

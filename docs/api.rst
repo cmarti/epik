@@ -7,7 +7,7 @@ Model
 -----
 
 .. autoclass:: epik.src.model.EpiK
-    :members: fit, predict
+    :members: fit, predict, make_contrasts
     :inherited-members: set_data, simulate, save, load
 
 Kernels

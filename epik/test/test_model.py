@@ -208,7 +208,27 @@ class ModelsTests(unittest.TestCase):
         y_pred, _ = model.predict(test_x, calc_variance=True)
         r2 = pearsonr(y_pred, test_y)[0] ** 2
         assert(r2 > 0.9)
-    
+        
+    def test_epik_contrast(self):
+        # Simulate from prior distribution
+        alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
+        train_x, train_y, test_x, test_y, train_y_var = data
+        
+        # Define target sequences and contrast
+        test_x = torch.tensor([[1, 0, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 3,
+                               [0, 1, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 3,
+                               [1, 0, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 3,
+                               [0, 1, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 3,])
+        contrast_matrix = torch.tensor([[1, -1, -1, 1]])
+        
+        # Make contrast
+        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l,
+                                             log_lambdas0=log_lambdas0))
+        model.set_data(train_x, train_y, train_y_var)
+        m, cov = model.make_contrasts(contrast_matrix, test_x, calc_variance=True)
+        assert(m.shape == (1,))
+        assert(cov.shape == (1, 1))
+
     def test_epik_keops(self):
         # Simulate from prior distribution
         alpha, l, logit_rho0, data = get_rho_random_landscape_data(sigma=0, ptrain=0.9)
