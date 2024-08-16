@@ -15,7 +15,8 @@ from gpytorch.kernels import ScaleKernel
 
 from epik.src.settings import TEST_DATA_DIR, BIN_DIR
 from epik.src.utils import (seq_to_one_hot, get_tensor, split_training_test,
-                            get_full_space_one_hot, one_hot_to_seq)
+                            get_full_space_one_hot, one_hot_to_seq,
+                            get_mut_effs_contrast_matrix)
 from epik.src.model import EpiK
 from epik.src.kernel import (VarianceComponentKernel, AdditiveKernel, PairwiseKernel,
                              ConnectednessKernel, ExponentialKernel, AddRhoPiKernel)
@@ -228,6 +229,14 @@ class ModelsTests(unittest.TestCase):
         m, cov = model.make_contrasts(contrast_matrix, test_x, calc_variance=True)
         assert(m.shape == (1,))
         assert(cov.shape == (1, 1))
+        
+        # Make contrast with built-in matrix functions
+        contrast_matrix = get_mut_effs_contrast_matrix(seq0='AAAAA', alleles='ACGT')
+        test_x = seq_to_one_hot(contrast_matrix.columns, alleles='ACGT')
+        contrast_matrix = torch.Tensor(contrast_matrix.values)
+        m, cov = model.make_contrasts(contrast_matrix, test_x, calc_variance=True)
+        assert(m.shape == (15,))
+        assert(cov.shape == (15, 15))
 
     def test_epik_keops(self):
         # Simulate from prior distribution
