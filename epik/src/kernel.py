@@ -8,8 +8,8 @@ from torch.distributions.transforms import CorrCholeskyTransform
 
 from pykeops.torch import LazyTensor
 from gpytorch.settings import max_cholesky_size
-from gpytorch.kernels.kernel import Kernel
-from gpytorch.lazy.lazy_tensor import delazify
+from gpytorch.kernels import Kernel, ScaleKernel
+from gpytorch.lazy import delazify
 from linear_operator.operators import (KernelLinearOperator, DiagLinearOperator,
                                        MatmulLinearOperator)
 
@@ -857,3 +857,26 @@ class SkewedVCKernel(_LambdasKernel, _PiKernel):
     
     def get_params(self):
         return({'lambdas': self.lambdas, 'beta': self.beta})
+
+
+def select_kernel(kernel, n_alleles, seq_length,
+                  add_heteroskedasticity=False, add_scale=False,
+                  random_init=False, dtype=torch.float32):
+    kernels = {'Exponential': ExponentialKernel,
+               'Connectedness': ConnectednessKernel,
+               'Jenga': JengaKernel,
+               'GeneralProduct': GeneralProductKernel,
+
+               'Additive': AdditiveKernel,
+               'Pairwise': PairwiseKernel,
+               'VC': VarianceComponentKernel}
+    kwargs = {'dtype': dtype, 'random_init': random_init}
+    kernel = kernels[kernel](n_alleles, seq_length, **kwargs)
+
+    if add_heteroskedasticity:
+        kernel = AdditiveHeteroskedasticKernel(kernel, n_alleles=n_alleles,
+                                               seq_length=seq_length)
+    elif add_scale:
+        kernel = ScaleKernel(kernel)
+        
+    return(kernel)
