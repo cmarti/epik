@@ -859,9 +859,9 @@ class SkewedVCKernel(_LambdasKernel, _PiKernel):
         return({'lambdas': self.lambdas, 'beta': self.beta})
 
 
-def select_kernel(kernel, n_alleles, seq_length,
-                  add_heteroskedasticity=False, add_scale=False,
-                  random_init=False, dtype=torch.float32):
+def get_kernel(kernel, n_alleles, seq_length,
+               add_heteroskedasticity=False, add_scale=False,
+               random_init=False, dtype=torch.float32):
     kernels = {'Exponential': ExponentialKernel,
                'Connectedness': ConnectednessKernel,
                'Jenga': JengaKernel,
