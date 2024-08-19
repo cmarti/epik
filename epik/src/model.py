@@ -388,7 +388,7 @@ class EpiK(_Epik):
         n = contrast_matrix.shape[0]
         n_chunks = int(n / max_size) + 1
         results = []
-        for i in range(n_chunks):
+        for i in tqdm(range(n_chunks), total=n_chunks):
             df = contrast_matrix.iloc[i*max_size:(i+1)*max_size, :]
             seqs, labels = df.columns, df.index
             X = encode_seqs(seqs, alphabet=alleles)
