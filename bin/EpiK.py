@@ -52,6 +52,9 @@ def main():
     output_group.add_argument('-o', '--output', required=True, help='Output file')
     output_group.add_argument('-p', '--pred',
                               help='File containing sequences for predicting genotype')
+    help_msg = 'Sequence context in which to predict mutational effects'
+    help_msg += ' and epistatic coefficients'
+    output_group.add_argument('-s', '--seq0', default=None, help=help_msg)
     output_group.add_argument('--calc_variance', default=False, action='store_true',
                                help='Compute posterior variances')
 
@@ -69,6 +72,7 @@ def main():
 
     pred_fpath = parsed_args.pred
     out_fpath = parsed_args.output
+    seq0 = parsed_args.seq0
     calc_variance = parsed_args.calc_variance
     
     # Initialize logger
@@ -135,9 +139,19 @@ def main():
         if test_seqs.shape[0] > 0:
             log.write('Obtain phenotypic predictions for test data')
             X_test = encode_seqs(test_seqs, alphabet=alleles)
-            result = model.predict(X_test, calc_variance=calc_variance)
+            result = model.predict(X_test, calc_variance=calc_variance,
+                                   labels=test_seqs)
             log.write('\tWriting predictions to {}'.format(out_fpath))
             result.to_csv(out_fpath)
+        
+        if seq0 is not None:
+            log.write('Estimating mutational effects and epistatic coefficients around {}'.format(seq0))
+            df1 = model.predict_mut_effects(seq0, alleles, calc_variance=True)
+            df2 = model.predict_epistatic_coeffs(seq0, alleles, calc_variance=True)
+            results = pd.concat([df1, df2])
+            fpath = '{}.{}_expansion.csv'.format(out_fpath, seq0)
+            log.write('\tWriting estimates to {}'.format(fpath))
+            results.to_csv(fpath)
     
     # Write execution time for tracking performance
     fpath = '{}.time.txt'.format(out_fpath)
