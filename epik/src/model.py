@@ -363,11 +363,11 @@ class EpiK(_Epik):
 
         Returns
         -------
-        output : pd.DataFrame of shape (n_sequences, 1 or 4)
-            DataFrame containing estimates for the desired
-            contrasts. If `calc_variance=True`, posterior
-            standard deviations and 95% credible interval
-            bounds are added
+        output : torch.Tensor or (torch.Tensor, torch.Tensor)
+-            Tensor containing phenotypic predictions at the
+-            desired sequences. If `calc_variance=True`, a second 
+-            Tensor containing the covariance matrix of the posterior
+-            of the contrasts will be returned.
         '''
         t0 = time()
         self.set_evaluation_mode()
