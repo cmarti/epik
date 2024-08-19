@@ -269,16 +269,39 @@ class EpiK(_Epik):
         if self.device is not None:
             self.model = self.model.cuda()
     
-    def get_posterior(self, X):
+    def get_posterior(self, X, calc_variance=False, calc_covariance=False):
         
         self.set_evaluation_mode()
         X = self.get_tensor(X)
         
         with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
-            f = self.model(X)
-            return(f)
+            if calc_covariance:
+                f = self.model(X)
+            elif calc_variance:
+                with fast_pred_var(): 
+                    f = self.model(X)
+            else:
+                with skip_posterior_variances():
+                    f = self.model(X)
+        return(f)
     
-    def predict(self, X, calc_variance=False):
+    def pred_to_df(self, res, calc_variance=False, labels=None):
+        if calc_variance:
+            m, x = res
+            if len(x.shape) == 1:
+                var = x
+            else:
+                var = x.diag()
+            sd = torch.sqrt(var).numpy()
+            m = m.numpy()
+            result = pd.DataFrame({'coef': m, 'stderr': sd,
+                                   'lower_ci': m - 2 * sd,
+                                   'upper_ci': m + 2 * sd}, index=labels)
+        else:
+            result = pd.DataFrame({'coef': res.numpy()}, index=labels)
+        return(result)
+    
+    def predict(self, X, calc_variance=False, labels=None):
         '''
         Function to make phenotypic predictions under the
         Gaussian process model
@@ -292,32 +315,33 @@ class EpiK(_Epik):
         calc_variance : bool (False)
             Option to compute the posterior variance in addition
             to the posterior mean reported by default
+
+        labels : array-like of shape (n_sequences,) or None
+            Sequence labels to use as rownames in the output
+            pd.DataFrame
             
         Returns
         -------
-        output : torch.Tensor or (torch.Tensor, torch.Tensor)
-            Tensor containing phenotypic predictions at the
-            desired sequences. If `calc_variance=True`, two 
-            Tensors will be returned
+        output : pd.DataFrame of shape (n_sequences, 1 or 4)
+            DataFrame containing phenotypic predictions at the
+            desired sequences. If `calc_variance=True`, posterior
+            standard deviations and 95% credible interval
+            bounds are added
         
         '''
         t0 = time()
         self.set_evaluation_mode()
         X = self.get_tensor(X)
+        f = self.get_posterior(X, calc_variance=calc_variance)
         
-        if calc_variance:
-            with fast_pred_var(): 
-                f = self.get_posterior(X)
-                res = f.mean, f.variance
-        else:
-            with skip_posterior_variances():
-                f = self.model(X)
-                res = f.mean
-
+        res = (f.mean, f.variance) if calc_variance else f.mean
+        df = self.pred_to_df(res, calc_variance=calc_variance,
+                             labels=labels)
         self.pred_time = time() - t0
-        return(res)
+        return(df)
     
-    def make_contrasts(self, contrast_matrix, X, calc_variance=False):
+    def make_contrasts(self, contrast_matrix, X,
+                       calc_variance=False):
         '''
         Function to make contrasts of phenotypes across sets of genotypes
         under the Gaussian process model
@@ -336,29 +360,28 @@ class EpiK(_Epik):
         calc_variance : bool (False)
             Option to compute the posterior (co)-variance in addition
             to the posterior mean reported by default
-            
+
         Returns
         -------
-        output : torch.Tensor or (torch.Tensor, torch.Tensor)
-            Tensor containing phenotypic predictions at the
-            desired sequences. If `calc_variance=True`, a second 
-            Tensor containing the covariance matrix of the posterior
-            of the contrasts will be returned.
+        output : pd.DataFrame of shape (n_sequences, 1 or 4)
+            DataFrame containing estimates for the desired
+            contrasts. If `calc_variance=True`, posterior
+            standard deviations and 95% credible interval
+            bounds are added
         '''
-        
+        t0 = time()
+        self.set_evaluation_mode()
+
         B = self.get_tensor(contrast_matrix)
+        f = self.get_posterior(X, calc_covariance=calc_variance)
+
+        res = B @ f.mean
         if calc_variance:
-            f = self.get_posterior(X)
-            m = B @ f.mean
-            cov = B @ f.covariance_matrix @ B.T
-            res = m, cov
-        else:
-            with skip_posterior_variances():
-                f = self.get_posterior(X)
-                m = B @ f.mean
-                res = m
+            res = res, (B @ f.covariance_matrix @ B.T)
+        
+        self.contrast_time = time() - t0
         return(res)
-    
+
     def _predict_effects(self, seq0, alleles, calc_contrast_matrix,
                          calc_variance=False, max_size=100):
         contrast_matrix = calc_contrast_matrix(seq0, alleles)
@@ -371,16 +394,7 @@ class EpiK(_Epik):
             X = encode_seqs(seqs, alphabet=alleles)
             C = torch.Tensor(df.values)
             res = self.make_contrasts(C, X, calc_variance=calc_variance)
-            
-            if calc_variance:
-                m, cov = res
-                sd = torch.sqrt(cov.diag())
-                result = pd.DataFrame({'coef': m, 'stderr': sd,
-                                       'lower_ci': m - 2 * sd,
-                                       'upper_ci': m + 2 * sd}, index=labels)
-            else:
-                result = pd.DataFrame({'coef': res}, index=labels)
-                
+            result = self.pred_to_df(res, calc_variance=calc_variance, labels=labels)
             results.append(result)
         results = pd.concat(results)
         return(results)
@@ -394,14 +408,6 @@ class EpiK(_Epik):
         return(self._predict_effects(seq0, alleles,
                                      calc_contast_matrix=get_epistatic_coeffs_contrast_matrix,
                                      calc_variance=calc_variance, max_size=max_size))
-    
-    def predictions_to_df(self, pred, seqs):
-        if isinstance(pred, tuple):
-            df = pd.DataFrame({'y_pred': self.to_numpy(pred[0]),
-                               'y_pred_var': self.to_numpy(pred[1])}, index=seqs)
-        else:
-            df = pd.DataFrame({'y_pred': self.to_numpy(pred)}, index=seqs)
-        return(df)
     
     def get_prior(self, X, sigma2):
         self.X = X
