@@ -187,27 +187,34 @@ class ModelsTests(unittest.TestCase):
         alpha, l, log_lambdas0, data = get_vc_random_landscape_data(sigma=0, ptrain=0.9)
         train_x, train_y, test_x, test_y, train_y_var = data
         
-        # Predict unobserved sequences
-        model = EpiK(VarianceComponentKernel(n_alleles=alpha, seq_length=l,
-                                             log_lambdas0=log_lambdas0))
+        # Set up model and data
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=l,
+                                         log_lambdas0=log_lambdas0)
+        model = EpiK(kernel)
         model.set_data(train_x, train_y, train_y_var)
-        ypred = model.predict(test_x).detach()
-        r2 = pearsonr(ypred, test_y)[0] ** 2
+
+        # Predict unobserved sequences
+        results = model.predict(test_x, calc_variance=False)
+        r2 = pearsonr(results['coef'], test_y)[0] ** 2
         assert(r2 > 0.9)
         
-        y_pred, y_pred_var = model.predict(test_x, calc_variance=True)
-        r2 = pearsonr(y_pred.detach(), test_y)[0] ** 2
+        results = model.predict(test_x, calc_variance=True)
+        r2 = pearsonr(results['coef'], test_y)[0] ** 2
         assert(r2 > 0.9)
-        assert(np.all(y_pred_var.detach().numpy() > 1))
+        assert(np.all(results['stderr'] > 1))
 
         # With Connectedness model
         alpha, l, logit_rho0, data = get_rho_random_landscape_data(sigma=0, ptrain=0.9)
         train_x, train_y, test_x, test_y, train_y_var = data
+
+        # Set up model and data
         kernel = ConnectednessKernel(alpha, l, logit_rho0=logit_rho0)
         model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
-        y_pred, _ = model.predict(test_x, calc_variance=True)
-        r2 = pearsonr(y_pred, test_y)[0] ** 2
+
+        # Predict unobserved sequences
+        results = model.predict(test_x, calc_variance=True)
+        r2 = pearsonr(results['coef'], test_y)[0] ** 2
         assert(r2 > 0.9)
         
     def test_epik_contrast(self):
