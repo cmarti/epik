@@ -37,6 +37,10 @@ class KernelsTests(unittest.TestCase):
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov, 1, atol=0.01))
+
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (2,))
+        assert(np.allclose(cov, 1, atol=0.01))
         
         # Additive kernel with lambdas0 = 1 should return a purely additive cov
         log_lambdas0 = torch.tensor([-10., 0.])
@@ -45,11 +49,19 @@ class KernelsTests(unittest.TestCase):
         assert(np.allclose(cov, np.array([[1, -1],
                                           [-1, 1]]), atol=0.01))
         
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (2,))
+        assert(np.allclose(cov, 1, atol=0.01))
+        
         # Additive kernel with lambdas = 1 should return the identity
         log_lambdas0 = torch.tensor([0., 0])
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov, (a ** l) * I, atol=0.01))
+
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (2,))
+        assert(np.allclose(cov, a ** l, atol=0.01))
         
         l, a = 2, 2
         x = get_full_space_one_hot(l, a)
@@ -60,17 +72,29 @@ class KernelsTests(unittest.TestCase):
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov, 1, atol=0.01))
         
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (4,))
+        assert(np.allclose(cov, 1, atol=0.01))
+        
         # Additive kernel
         log_lambdas0 = torch.tensor([-10., 0])
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0], [2, 0, 0, -2], atol=0.01))
         
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (4,))
+        assert(np.allclose(cov, 2, atol=0.01))
+        
         # Additive kernel with larger variance
         log_lambdas0 = torch.tensor([-10., np.log(2)]).to(dtype=torch.float32)
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
+
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (4,))
+        assert(np.allclose(cov, 4, atol=0.01))
 
         # Binary encoding
         x = torch.tensor([[1., 1],
@@ -80,6 +104,10 @@ class KernelsTests(unittest.TestCase):
         kernel = AdditiveKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0, binary=True)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov[0], [4, 0, 0, -4], atol=0.01))
+
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (4,))
+        assert(np.allclose(cov, 4, atol=0.01))
     
     def test_pairwise_kernel(self):
         l, a = 2, 2
@@ -90,9 +118,13 @@ class KernelsTests(unittest.TestCase):
         kernel = PairwiseKernel(n_alleles=a, seq_length=l, log_lambdas0=log_lambdas0)
         cov = kernel.forward(x, x).detach().numpy()
         assert(np.allclose(cov, 1, atol=0.01))
-        
+
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert(np.allclose(cov2, cov, atol=0.01))
+        
+        cov = kernel.forward(x, x, diag=True).detach().numpy()
+        assert(cov.shape == (4,))
+        assert(np.allclose(cov, 1, atol=0.01))
         
         # Additive kernel
         log_lambdas0 = torch.tensor([-10., 0, -10.])

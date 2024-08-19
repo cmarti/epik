@@ -52,14 +52,17 @@ class SequenceKernel(Kernel):
             self.register_constraint(param_name, constraint)
     
     def inner_product(self, x1, x2, metric=None, diag=False):
-        if metric is None:
-            metric = torch.eye(x2.shape[1], dtype=x2.dtype, device=x2.device)
-            
         if diag:
             min_size = min(x1.shape[0], x2.shape[0])
-            return((torch.matmul(x1[:min_size, :], metric) * x2[:min_size, :]).sum(1))
+            if metric is None:
+                return((x1[:min_size, :] * x2[:min_size, :]).sum(1))
+            else:
+                return(((x1[:min_size, :] @ metric) * x2[:min_size, :]).sum(1))
         else:
-            return(torch.matmul(x1, torch.matmul(metric, x2.T)))
+            if metric is None:
+                return(x1 @ x2.T)
+            else:
+                return(x1 @ metric @ x2.T)
     
     def s_to_d(self, s):
         if self.binary:
@@ -241,9 +244,13 @@ class AdditiveKernel(LowOrderKernel):
     
     def forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        kernel = self.calc_hamming_distance_linop(x1, x2,
-                                                  scale=coeffs[1],
-                                                  shift=coeffs[0])
+        if diag:
+            d = self.calc_hamming_distance(x1, x2, diag=True)
+            kernel = coeffs[0] + coeffs[1] * d
+        else:
+            kernel = self.calc_hamming_distance_linop(x1, x2,
+                                                      scale=coeffs[1],
+                                                      shift=coeffs[0])
         return(kernel)
 
 
@@ -263,7 +270,7 @@ class PairwiseKernel(LowOrderKernel):
     
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         coeffs = self.get_coeffs()
-        d = self.calc_hamming_distance(x1, x2)
+        d = self.calc_hamming_distance(x1, x2, diag=diag)
         return(self.d_to_cov(d, coeffs))
 
     def _covar_func(self, x1, x2, coeffs, **kwargs):
@@ -661,7 +668,8 @@ class GeneralProductKernel(SequenceKernel):
     
     def forward(self, x1, x2, diag=False, **kwargs):
         covs = self.get_covs()
-        K = x1[:, :self.alpha] @ covs[:, :, 0] @ x2[:, :self.alpha].T
+        K = self.inner_product(x1[:, :self.alpha], x2[:, :self.alpha],
+                               metric=covs[:, :, 0], diag=diag)
         for i in range(1, self.l):
             start, end = i * self.alpha, (i+1) * self.alpha
             K *= x1[:, start:end] @ covs[:, :, i] @ x2[:, start:end].T
@@ -817,7 +825,7 @@ class SkewedVCKernel(_LambdasKernel, _PiKernel):
     
     def _forward(self, x1, x2, lambdas, norm_logp, diag=False):
         coeffs = self.coeffs.to(dtype=lambdas.dtype)
-        c_ki = torch.matmul(coeffs, lambdas)
+        c_ki = coeffs @ lambdas
         coeff_signs = torch.ones_like(c_ki)
         coeff_signs[c_ki < 0] = -1
         log_c_ki = torch.log(torch.abs(c_ki))
@@ -828,10 +836,8 @@ class SkewedVCKernel(_LambdasKernel, _PiKernel):
 
         # Init first power
         M = torch.diag(logp_flat)
-        if diag:
-            kernel = coeff_signs[0] * torch.exp(log_c_ki[0]-(torch.matmul(x1, M) * x2).sum(1))
-        else:
-            kernel = coeff_signs[0] * torch.exp(log_c_ki[0]-self.inner_product(x1, x2, M))
+        kernel = coeff_signs[0] * torch.exp(log_c_ki[0]-self.inner_product(x1, x2, M, diag=True))
+        if not diag:
             kernel *= torch.matmul(x1, x2.T) == self.l
         
         # Add the remaining powers        
