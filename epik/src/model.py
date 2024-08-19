@@ -406,7 +406,7 @@ class EpiK(_Epik):
     
     def predict_epistatic_coeffs(self, seq0, alleles, calc_variance=False, max_size=100):
         return(self._predict_effects(seq0, alleles,
-                                     calc_contast_matrix=get_epistatic_coeffs_contrast_matrix,
+                                     calc_contrast_matrix=get_epistatic_coeffs_contrast_matrix,
                                      calc_variance=calc_variance, max_size=max_size))
     
     def get_prior(self, X, sigma2):
