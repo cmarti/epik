@@ -15,7 +15,8 @@ from gpytorch.variational import (CholeskyVariationalDistribution,
 from gpytorch.settings import (num_likelihood_samples, max_preconditioner_size, fast_pred_var,
                                skip_posterior_variances)
 
-from epik.src.utils import get_tensor, to_device, split_training_test
+from epik.src.utils import (get_tensor, to_device, split_training_test, encode_seqs,
+                            get_mut_effs_contrast_matrix, get_epistatic_coeffs_contrast_matrix)
  
 
 class _GPModel(object):
@@ -357,6 +358,42 @@ class EpiK(_Epik):
                 m = B @ f.mean
                 res = m
         return(res)
+    
+    def _predict_effects(self, seq0, alleles, calc_contrast_matrix,
+                         calc_variance=False, max_size=100):
+        contrast_matrix = calc_contrast_matrix(seq0, alleles)
+        n = contrast_matrix.shape[0]
+        n_chunks = int(n / max_size) + 1
+        results = []
+        for i in range(n_chunks):
+            df = contrast_matrix.iloc[i*max_size:(i+1)*max_size, :]
+            seqs, labels = df.columns, df.index
+            X = encode_seqs(seqs, alphabet=alleles)
+            C = torch.Tensor(df.values)
+            res = self.make_contrasts(C, X, calc_variance=calc_variance)
+            
+            if calc_variance:
+                m, cov = res
+                sd = torch.sqrt(cov.diag())
+                result = pd.DataFrame({'coef': m, 'stderr': sd,
+                                       'lower_ci': m - 2 * sd,
+                                       'upper_ci': m + 2 * sd}, index=labels)
+            else:
+                result = pd.DataFrame({'coef': res}, index=labels)
+                
+            results.append(result)
+        results = pd.concat(results)
+        return(results)
+    
+    def predict_mut_effects(self, seq0, alleles, calc_variance=False, max_size=100):
+        return(self._predict_effects(seq0, alleles,
+                                     calc_contrast_matrix=get_mut_effs_contrast_matrix,
+                                     calc_variance=calc_variance, max_size=max_size))
+    
+    def predict_epistatic_coeffs(self, seq0, alleles, calc_variance=False, max_size=100):
+        return(self._predict_effects(seq0, alleles,
+                                     calc_contast_matrix=get_epistatic_coeffs_contrast_matrix,
+                                     calc_variance=calc_variance, max_size=max_size))
     
     def predictions_to_df(self, pred, seqs):
         if isinstance(pred, tuple):

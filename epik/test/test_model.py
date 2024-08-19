@@ -238,6 +238,13 @@ class ModelsTests(unittest.TestCase):
         assert(m.shape == (15,))
         assert(cov.shape == (15, 15))
 
+        # Make contrast with built-in method
+        results = model.predict_mut_effects(seq0='AAAAA', alleles='ACGT', calc_variance=True)
+        assert(results.shape == (15, 4))
+        
+        results = model.predict_mut_effects(seq0='AAAAA', alleles='ACGT', calc_variance=False)
+        assert(results.shape == (15, 1))
+
     def test_epik_keops(self):
         # Simulate from prior distribution
         alpha, l, logit_rho0, data = get_rho_random_landscape_data(sigma=0, ptrain=0.9)
