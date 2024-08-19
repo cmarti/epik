@@ -292,13 +292,13 @@ class EpiK(_Epik):
                 var = x
             else:
                 var = x.diag()
-            sd = torch.sqrt(var).numpy()
-            m = m.numpy()
+            sd = self.to_numpy(torch.sqrt(var))
+            m = self.to_numpy(m)
             result = pd.DataFrame({'coef': m, 'stderr': sd,
                                    'lower_ci': m - 2 * sd,
                                    'upper_ci': m + 2 * sd}, index=labels)
         else:
-            result = pd.DataFrame({'coef': res.numpy()}, index=labels)
+            result = pd.DataFrame({'coef': self.to_numpy(res)}, index=labels)
         return(result)
     
     def predict(self, X, calc_variance=False, labels=None):
