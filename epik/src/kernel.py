@@ -239,8 +239,8 @@ class AdditiveKernel(LowOrderKernel):
     '''
     Kernel function for additive functions on sequence space, where the 
     covariance between two sequences is linear in the Hamming distance
-    that separates them, determined by the variance explained by the constant
-    and additive components, respectively.
+    that separates them, with paramters determined by the variance
+    explained by the constant and additive components.
 
     .. math::
         K(x, y) = c_0 + c_1 * d(x, y)
@@ -271,6 +271,20 @@ class AdditiveKernel(LowOrderKernel):
 
 
 class PairwiseKernel(LowOrderKernel):
+    '''
+    Kernel function for additive functions on sequence space, where the 
+    covariance between two sequences is quadratic in the Hamming distance
+    that separates them, with coefficients determined by the variance
+    explained by the constant, additive and pairwise components.
+
+    .. math::
+        K(x, y) = c_0 + c_1 * d(x, y) + c_2 * d(x, y)^2
+
+    These coefficients result from expanding the Krawtchouk polynomials
+    of order 2, as in the additive kernel, and allows computing the covariance
+    matrix easily for any number of sequences of any length.
+    '''
+
     def calc_c_p(self):
         a, l = self.alpha, self.l
         c13 = a * l - 0.5 * a ** 2 * l - 0.5 * l - a * l ** 2 + 0.5 * a ** 2 * l ** 2 + 0.5 * l ** 2
