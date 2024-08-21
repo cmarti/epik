@@ -14,7 +14,9 @@ Kernels
 -------
 
 .. autoclass:: epik.src.kernel.AdditiveKernel
+    :members: forward
 .. autoclass:: epik.src.kernel.PairwiseKernel
+    :members: forward
 .. autoclass:: epik.src.kernel.VarianceComponentKernel
 .. autoclass:: epik.src.kernel.ExponentialKernel
 .. autoclass:: epik.src.kernel.ConnectednessKernel
