@@ -236,6 +236,22 @@ class LowOrderKernel(SequenceKernel):
     
     
 class AdditiveKernel(LowOrderKernel):
+    '''
+    Kernel function for additive functions on sequence space, where the 
+    covariance between two sequences is linear in the Hamming distance
+    that separates them, determined by the variance explained by the constant
+    and additive components, respectively.
+
+    .. math::
+        K(x, y) = c_0 + c_1 * d(x, y)
+        c_0 = \lambda_0 + \ell * (\alpha - 1) * \lambda_1
+        c_1 = -\alpha * \lambda_1
+
+    When instantiated at a set of one-hot sequence embeddings `x1` and `x2`, 
+    it returns a linear operator that performs fast matrix-vector products
+    without explicitly building the full covariance matrix.
+        
+    '''
     def calc_c_p(self):
         a, l = self.alpha, self.l
         c_p = torch.tensor([[1., l * (a - 1)],
