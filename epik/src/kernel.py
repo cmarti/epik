@@ -23,14 +23,10 @@ def get_constant_linop(c, shape, device, dtype):
     
 
 class SequenceKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, binary=False,
+    def __init__(self, n_alleles, seq_length,
                  dtype=torch.float32, use_keops=False, **kwargs):
         self.alpha = n_alleles
 
-        if binary and n_alleles != 2:
-            raise ValueError('binary encoding can only be used with 2 alleles')
-        
-        self.binary = binary
         self.l = seq_length
         self.s = self.l + 1
         self.t = self.l * self.alpha
@@ -65,10 +61,7 @@ class SequenceKernel(Kernel):
                 return(x1 @ metric @ x2.T)
     
     def s_to_d(self, s):
-        if self.binary:
-            d = self.l / 2. - 0.5 * s
-        else:
-            d = float(self.l) - s
+        d = float(self.l) - s
         return(d)
 
     def calc_hamming_distance(self, x1, x2, diag=False):
@@ -78,25 +71,15 @@ class SequenceKernel(Kernel):
     
     def calc_hamming_distance_linop(self, x1, x2, scale=1., shift=0.):
         shape = (x1.shape[0], x2.shape[0])
-        if self.binary:
-            d = MatmulLinearOperator(x1, -scale * x2.T / 2)
-            d += get_constant_linop(shift + scale * self.l / 2.0, shape, x1.device, x1.dtype)
-        else:
-            d = MatmulLinearOperator(x1, -scale * x2.T)
-            d += get_constant_linop(shift + scale * self.l, shape, x1.device, x1.dtype)
+        d = MatmulLinearOperator(x1, -scale * x2.T)
+        d += get_constant_linop(shift + scale * self.l, shape, x1.device, x1.dtype)
         return(d)
     
     def calc_hamming_distance_keops(self, x1, x2):
-        if self.binary:
-            x1_ = LazyTensor(x1[..., :, None, :] / np.sqrt(2))
-            x2_ = LazyTensor(x2[..., None, :, :] / np.sqrt(2))
-            s = (x1_ * x2_).sum(-1)
-            d = self.l / 2. - s
-        else:
-            x1_ = LazyTensor(x1[..., :, None, :])
-            x2_ = LazyTensor(x2[..., None, :, :])
-            s = (x1_ * x2_).sum(-1)
-            d = float(self.l) - s
+        x1_ = LazyTensor(x1[..., :, None, :])
+        x2_ = LazyTensor(x2[..., None, :, :])
+        s = (x1_ * x2_).sum(-1)
+        d = float(self.l) - s
         return(d)
     
     def _constant_linop(self, x1, x2):
@@ -253,9 +236,9 @@ class AdditiveKernel(LowOrderKernel):
         
     '''
     def calc_c_p(self):
-        a, l = self.alpha, self.l
-        c_p = torch.tensor([[1., l * (a - 1)],
-                            [0,          -a]])
+        a, sl = self.alpha, self.l
+        c_p = torch.tensor([[1., sl * (a - 1)],
+                            [0,           -a]])
         return(c_p)  
     
     def forward(self, x1, x2, diag=False, **kwargs):
@@ -286,10 +269,10 @@ class PairwiseKernel(LowOrderKernel):
     '''
 
     def calc_c_p(self):
-        a, l = self.alpha, self.l
-        c13 = a * l - 0.5 * a ** 2 * l - 0.5 * l - a * l ** 2 + 0.5 * a ** 2 * l ** 2 + 0.5 * l ** 2
-        c23 = -a + 0.5 * a ** 2 + a * l - a ** 2 * l
-        c_p = torch.tensor([[1, l * (a - 1),          c13],
+        a, sl = self.alpha, self.l
+        c13 = a * sl - 0.5 * a ** 2 * sl - 0.5 * sl - a * sl ** 2 + 0.5 * a ** 2 * sl ** 2 + 0.5 * sl ** 2
+        c23 = -a + 0.5 * a ** 2 + a * sl - a ** 2 * sl
+        c_p = torch.tensor([[1, sl * (a - 1),          c13],
                             [0,          -a,          c23],
                             [0,           0, 0.5 * a ** 2]])
         return(c_p)
@@ -572,69 +555,11 @@ class ConnectednessKernel(RhoPiKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
         super().__init__(n_alleles, seq_length,
-                         train_p=False, train_var=True,
+                         train_p=False, train_var=False,
                          correlation=True,
                          **kwargs)
     
-    def _nonkeops_forward_binary(self, x1, x2, diag=False, **params):
-        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
-        kernel = torch.prod(1 + x1.unsqueeze(0) * (x2 * rho.reshape((1, self.l))).unsqueeze(1), axis=2)
-        if self.correlation:
-            kernel  = kernel / torch.prod(1 + rho)
-        return(kernel)
-    
-    def _covar_func_binary2(self, x1, x2, **kwargs):
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-        kernel = (1 + x1_ * x2_).log().sum(-1).exp()
-        return(kernel)
-    
-    def _keops_forward_binary2(self, x1, x2, **kwargs):
-        rho = torch.exp(self.logit_rho) / (1 + torch.exp(self.logit_rho))
-        kernel = KernelLinearOperator(x1, x2 * rho.reshape((1, self.l)),
-                                      covar_func=self._covar_func_binary, **kwargs)
-        if self.correlation:
-            c = 1 / torch.prod(1 + rho)
-            kernel = c * kernel
-        return(kernel)
-    
-    def _covar_func_binary(self, x1, x2, constant, f, **kwargs):
-        x1_ = LazyTensor(x1[..., :, None, :])
-        x2_ = LazyTensor(x2[..., None, :, :])
-        f = f.reshape((1, 1, self.l))
-        kernel = (constant + 0.5 * ((x1_ * x2_ * f).sum(-1) + f.sum())).exp()
-        return(kernel)
-    
-    def _keops_forward_binary(self, x1, x2, **kwargs):
-        log1mrho = self.get_log_one_minus_rho()
-        log_rho = self.logit_rho + log1mrho
-        log_one_p_rho = torch.logaddexp(self.zeros_like(log_rho), log_rho)
-        factors = log_one_p_rho - log1mrho
-        
-        constant = log1mrho.sum()
-        if self.correlation:
-            constant -= log_one_p_rho.sum()
-        if self.common_rho:
-            constant *= self.l
-        constant += self.log_var
-        
-        f = factors.reshape(1, self.l)
-        kernel = KernelLinearOperator(x1, x2, covar_func=self._covar_func_binary,
-                                      constant=constant, f=f, **kwargs)
-        return(kernel)
-    
-    def _keops_forward(self, x1, x2, **kwargs):
-        if self.binary:
-            return(self._keops_forward_binary(x1, x2, **kwargs))
-        else:
-            return(super()._keops_forward(x1, x2, **kwargs))
-    
-    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
-        if self.binary:
-            return(self._nonkeops_forward_binary(x1, x2, diag=diag, **kwargs))
-        else:
-            return(super()._nonkeops_forward(x1, x2, diag=diag, **kwargs))
-    
+
     def get_decay_rates(self, positions=None):
         decay_rates = calc_decay_rates(self.logit_rho.detach().numpy(),
                                        self.log_p.detach().numpy(),
@@ -646,7 +571,7 @@ class JengaKernel(RhoPiKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, **kwargs):
         super().__init__(n_alleles, seq_length,
-                         correlation=True, train_p=True, train_var=True,
+                         correlation=True, train_p=True, train_var=False,
                          **kwargs)
     
     def get_decay_rates(self, alleles=None, positions=None):
@@ -667,7 +592,7 @@ class ExponentialKernel(ConnectednessKernel):
         return(decay_rate)
         
 
-class GeneralProductKernel(SequenceKernel):
+class GeneralProductKernel_old(SequenceKernel):
     is_stationary = True
     def __init__(self, n_alleles, seq_length, theta0=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
@@ -685,7 +610,7 @@ class GeneralProductKernel(SequenceKernel):
     
     def theta_to_covs(self, theta):
         Ls = [self.theta_to_L(theta[i]) for i in range(self.l)]
-        covs = torch.stack([L @ L.T for L in Ls], axis=2)
+        covs = torch.stack([(L @ L.T) for L in Ls], axis=0)
         return(covs)
     
     def set_params(self):
@@ -696,15 +621,67 @@ class GeneralProductKernel(SequenceKernel):
     def get_covs(self):
         return(self.theta_to_covs(self.theta))
     
-    def forward(self, x1, x2, diag=False, **kwargs):
+    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         covs = self.get_covs()
         K = self.inner_product(x1[:, :self.alpha], x2[:, :self.alpha],
-                               metric=covs[:, :, 0], diag=diag)
+                               metric=covs[0, :, :], diag=diag)
         for i in range(1, self.l):
             start, end = i * self.alpha, (i+1) * self.alpha
-            K *= x1[:, start:end] @ covs[:, :, i] @ x2[:, start:end].T
+            K *= x1[:, start:end] @ covs[i, :, :] @ x2[:, start:end].T
         return(K)
+    
 
+class GeneralProductKernel(SequenceKernel):
+    is_stationary = True
+
+    def __init__(self, n_alleles, seq_length, theta0=None, **kwargs):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        self.dim = int(comb(n_alleles, 2))
+        self.theta0 = theta0
+        self.set_params()
+
+    def calc_theta0(self):
+        if self.theta0 is not None:
+            theta0 = self.theta0
+        else:
+            theta0 = torch.zeros((self.l, self.dim), dtype=self.dtype)
+        return theta0
+
+    def set_params(self):
+        theta0 = self.calc_theta0()
+        tril_indices = torch.tril_indices(row=self.alpha, col=self.alpha,
+                                          dtype=torch.int, offset=-1)
+        params = {"theta": Parameter(theta0, requires_grad=True),
+                  'idx': Parameter(tril_indices, requires_grad=False)}
+        self.register_params(params)
+    
+    def theta_to_log_cov(self, theta):
+        v = -torch.exp(theta)
+        log_cov = torch.zeros((self.alpha, self.alpha),
+                              dtype=theta.dtype, device=theta.device)
+        log_cov[self.idx[0], self.idx[1]] = v
+        log_cov[self.idx[1], self.idx[0]] = v
+        return(log_cov)
+
+    def get_A(self):
+        return(torch.block_diag(*[self.theta_to_log_cov(self.theta[i, :])
+                                  for i in range(self.l)]))
+
+    def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
+        A = self.get_A()
+        return(torch.exp(self.inner_product(x1, x2, metric=A, diag=diag)))
+
+    def _covar_func(self, x1, x2, **kwargs):
+        x1_ = LazyTensor(x1[:, None, :])
+        x2_ = LazyTensor(x2[None, :, :])
+        kernel = (x1_ * x2_).sum(-1).exp()
+        return(kernel)
+
+    def _keops_forward(self, x1, x2, **kwargs):
+        A = self.get_A()
+        kernel = KernelLinearOperator(x1, x2 @ A, covar_func=self._covar_func, **kwargs)
+        return(kernel)
+    
 
 #################
 # Extra kernels #
