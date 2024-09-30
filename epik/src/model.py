@@ -382,9 +382,8 @@ class EpiK(_Epik):
         self.contrast_time = time() - t0
         return(res)
 
-    def _predict_effects(self, seq0, alleles, calc_contrast_matrix,
-                         calc_variance=False, max_size=100):
-        contrast_matrix = calc_contrast_matrix(seq0, alleles)
+    def predict_contrasts(self, contrast_matrix, alleles,
+                          calc_variance=False, max_size=100):
         n = contrast_matrix.shape[0]
         n_chunks = int(n / max_size) + 1
         results = []
@@ -400,14 +399,14 @@ class EpiK(_Epik):
         return(results)
     
     def predict_mut_effects(self, seq0, alleles, calc_variance=False, max_size=100):
-        return(self._predict_effects(seq0, alleles,
-                                     calc_contrast_matrix=get_mut_effs_contrast_matrix,
-                                     calc_variance=calc_variance, max_size=max_size))
+        contrast_matrix = get_mut_effs_contrast_matrix(seq0, alleles)
+        return(self.predict_contrasts(contrast_matrix, alleles,
+                                      calc_variance=calc_variance, max_size=max_size))
     
     def predict_epistatic_coeffs(self, seq0, alleles, calc_variance=False, max_size=100):
-        return(self._predict_effects(seq0, alleles,
-                                     calc_contrast_matrix=get_epistatic_coeffs_contrast_matrix,
-                                     calc_variance=calc_variance, max_size=max_size))
+        contrast_matrix = get_epistatic_coeffs_contrast_matrix(seq0, alleles)
+        return(self.predict_contrasts(contrast_matrix, alleles,
+                                      calc_variance=calc_variance, max_size=max_size))
     
     def get_prior(self, X, sigma2):
         self.X = X
