@@ -43,20 +43,31 @@ def main():
                             help='Use GPU for computation')
     comp_group.add_argument('-m', '--n_devices', default=1, type=int,
                             help='Number of GPUs to use (1)')
-    comp_group.add_argument('-n', '--n_iter', default=200, type=int,
-                            help='Number of iterations for optimization (200)')
-    comp_group.add_argument('-r', '--learning_rate', default=0.1, type=float,
-                            help='Learning rate for optimization (0.1)')
+    comp_group.add_argument('--max_contrasts', default=1, type=int,
+                            help='Maximum number of contrasts to compute simultaneusly (1)')
+    
+    training_group = parser.add_argument_group('Training options')
+    training_group.add_argument('-n', '--n_iter', default=200, type=int,
+                                help='Number of iterations for optimization (200)')
+    training_group.add_argument('-r', '--learning_rate', default=0.1, type=float,
+                                help='Learning rate for optimization (0.1)')
+    
+    pred_group = parser.add_argument_group('Prediction options')
+    pred_group.add_argument('-p', '--pred',
+                              help='File containing sequences for predicting genotype')
+    pred_group.add_argument('-C', '--contrast_matrix',
+                              help='File containing contrasts for computing the posterior')
+    help_msg = 'Comma separated list of sequence contexts in which to predict mutational effects'
+    help_msg += ' and epistatic coefficients (if --calc_epi_coeff is used)'
+    pred_group.add_argument('-s', '--seq0', default=None, help=help_msg)
+    pred_group.add_argument('--calc_variance', default=False, action='store_true',
+                            help='Compute posterior variances')
+    pred_group.add_argument('--calc_epi_coef', default=False, action='store_true',
+                            help='Compute posterior for epistatic coefficients around seq0')
 
     output_group = parser.add_argument_group('Output')
-    output_group.add_argument('-o', '--output', required=True, help='Output file')
-    output_group.add_argument('-p', '--pred',
-                              help='File containing sequences for predicting genotype')
-    help_msg = 'Sequence context in which to predict mutational effects'
-    help_msg += ' and epistatic coefficients'
-    output_group.add_argument('-s', '--seq0', default=None, help=help_msg)
-    output_group.add_argument('--calc_variance', default=False, action='store_true',
-                               help='Compute posterior variances')
+    output_group.add_argument('-o', '--output', required=True, help='Output file prefix')
+    
 
     # Parse arguments
     parsed_args = parser.parse_args()
@@ -69,11 +80,14 @@ def main():
     n_devices = parsed_args.n_devices
     n_iter = parsed_args.n_iter
     learning_rate = parsed_args.learning_rate
+    max_contrasts = parsed_args.max_contrasts
 
     pred_fpath = parsed_args.pred
     out_fpath = parsed_args.output
-    seq0 = parsed_args.seq0
+    contrast_matrix_fpath = parsed_args.contrast_matrix
+    seq0s = parsed_args.seq0
     calc_variance = parsed_args.calc_variance
+    calc_epi_coef = parsed_args.calc_epi_coef
     
     # Initialize logger
     log = LogTrack()
@@ -101,9 +115,9 @@ def main():
       
     # Get kernel
     log.write('Selected {} kernel'.format(kernel_label))
+    add_scale = kernel_label in ['Exponential', 'Connectedness', 'Jenga', 'GeneralProduct']
     kernel = get_kernel(kernel_label, n_alleles, config['seq_length'],
-                        add_scale=kernel_label == 'GeneralProduct',
-                        random_init=True)
+                        add_scale=add_scale, random_init=True)
     
     # Define device
     device = torch.device('cuda') if gpu else None
@@ -144,14 +158,30 @@ def main():
             log.write('\tWriting predictions to {}'.format(out_fpath))
             result.to_csv(out_fpath)
         
-        if seq0 is not None:
-            log.write('Estimating mutational effects and epistatic coefficients around {}'.format(seq0))
-            df1 = model.predict_mut_effects(seq0, alleles, calc_variance=True)
-            df2 = model.predict_epistatic_coeffs(seq0, alleles, calc_variance=True)
-            results = pd.concat([df1, df2])
-            fpath = '{}.{}_expansion.csv'.format(out_fpath, seq0)
-            log.write('\tWriting estimates to {}'.format(fpath))
-            results.to_csv(fpath)
+        if contrast_matrix_fpath is not None:
+            if exists(contrast_matrix_fpath):
+                log.write('Loading contrast matrix from {}'.format(contrast_matrix_fpath))
+                contrast_matrix = pd.read_csv(contrast_matrix_fpath, index_col=0)
+                results = model.predict_contrasts(contrast_matrix, alleles, calc_variance=calc_variance,
+                                                  max_size=max_contrasts)
+                fpath = '{}.contrasts.csv'.format(out_fpath)
+                log.write('\tWriting estimates to {}'.format(fpath))
+                results.to_csv(fpath)
+            else:
+                log.write('Contrast matrix not found at {}'.format(contrast_matrix_fpath))
+        
+        if seq0s is not None:
+            for seq0 in seq0s.split(','):
+                log.write('Estimating mutational effects and epistatic coefficients around {}'.format(seq0))
+                results = model.predict_mut_effects(seq0, alleles, calc_variance=calc_variance,
+                                                    max_size=max_contrasts)
+                if calc_epi_coef:
+                    df2 = model.predict_epistatic_coeffs(seq0, alleles, calc_variance=calc_variance,
+                                                        max_size=max_contrasts)
+                    results = pd.concat([results, df2])
+                fpath = '{}.{}_expansion.csv'.format(out_fpath, seq0)
+                log.write('\tWriting estimates to {}'.format(fpath))
+                results.to_csv(fpath)
     
     # Write execution time for tracking performance
     fpath = '{}.time.txt'.format(out_fpath)
