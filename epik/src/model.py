@@ -51,8 +51,7 @@ class GeneralizedGPmodel(ApproximateGP, _GPModel):
     def __init__(self, train_x, kernel,
                  device=None, n_devices=None, train_mean=False):
         distribution = CholeskyVariationalDistribution(train_x.size(0))
-        strategy = UnwhitenedVariationalStrategy(self, train_x,
-                                                 distribution,
+        strategy = UnwhitenedVariationalStrategy(self, train_x, distribution,
                                                  learn_inducing_locations=False)
         super(GeneralizedGPmodel, self).__init__(strategy)
         self.init(kernel, train_mean, device, n_devices)
@@ -67,13 +66,12 @@ class _Epik(object):
     def __init__(self, kernel, device=None, n_devices=1,
                  train_mean=False, train_noise=False,
                  learning_rate=0.1, preconditioner_size=0,
-                 dtype=torch.float32, track_progress=False):
+                 track_progress=False):
         self.kernel = kernel
         self.device = device
         self.train_mean = train_mean
         self.learning_rate = learning_rate
         self.n_devices = n_devices
-        self.dtype = dtype
         self.preconditioner_size = preconditioner_size
         self.train_noise = train_noise
         self.track_progress = track_progress
@@ -93,7 +91,7 @@ class _Epik(object):
         return(v.detach().numpy())
     
     def get_tensor(self, ndarray):
-        return(get_tensor(ndarray, dtype=self.dtype, device=self.device))
+        return(get_tensor(ndarray, device=self.device))
     
     def set_training_mode(self):
         self.model.train()
@@ -229,9 +227,6 @@ class EpiK(_Epik):
     n_devices : int (1)    
         Number of GPUs to use for computation
         
-    dtype : torch.dtype (torch.float32)
-        data type to use in tensors for computation
-    
     preconditioner_size : int (0)    
         Size of the preconditioner computed to accelerate
         conjugate gradient convergence. By default, no
