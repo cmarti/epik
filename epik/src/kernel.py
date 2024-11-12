@@ -379,6 +379,14 @@ class SiteProductKernel(SequenceKernel):
         kernel = KernelLinearOperator(x1_, x2, covar_func=self._covar_func, **kwargs)
         return sigma2 * kernel
 
+    def get_delta(self):
+        delta = self.theta_to_delta(self.theta, n_alleles=self.n_alleles)
+        return(delta)
+
+    def get_mutation_delta(self):
+        Ks = self.get_site_kernels()
+        return(1 - Ks)
+    
 
 class ExponentialKernel(SiteProductKernel):
     def get_site_kernel(self):
@@ -391,11 +399,9 @@ class ExponentialKernel(SiteProductKernel):
 
     def calc_theta0(self):
         if self.theta0 is None:
-            if self.corr1 is None:
-                theta0 = -3.0 * torch.ones(1)
-            else:
-                rho = (1 - self.corr1) / (1 + (self.n_alleles - 1) * self.corr1)
-                theta0 = torch.log(rho) * torch.ones(1)
+            q = torch.Tensor([0.8]) if self.corr1 is None else self.corr1
+            rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
+            theta0 = torch.log(rho) * torch.ones(1)
         else:
             theta0 = self.theta0
         return theta0
@@ -404,6 +410,11 @@ class ExponentialKernel(SiteProductKernel):
         kernel = self.get_site_kernel()
         kernels = torch.stack([kernel] * self.seq_length, axis=0)
         return kernels
+    
+    def theta_to_delta(self, theta, n_alleles):
+        rho = torch.exp(theta)
+        delta = 1 - (1 - rho) / (1 + (n_alleles - 1) * rho)
+        return(delta)
 
 
 class ConnectednessKernel(SiteProductKernel):
@@ -431,7 +442,12 @@ class ConnectednessKernel(SiteProductKernel):
         for i in range(self.seq_length):
             kernels[i].fill_diagonal_(1.0)
         return kernels
-
+    
+    def theta_to_delta(self, theta, n_alleles):
+        rho = torch.exp(theta)
+        delta = 1 - (1 - rho) / (1 + (n_alleles - 1) * rho)
+        return(delta)
+    
 
 class JengaKernel(SiteProductKernel):
     def calc_theta0(self):
@@ -448,9 +464,10 @@ class JengaKernel(SiteProductKernel):
             theta0 = self.theta0
         return theta0
 
-    def get_site_kernels(self):
-        log_rho = self.theta[:, 0]
-        log_p = self.theta[:, 1:] - torch.logsumexp(self.theta[:, 1:], dim=1).unsqueeze(
+    def get_rho_and_site_factor(self, theta):
+        seq_length = theta.shape[0]
+        log_rho = theta[:, 0]
+        log_p = theta[:, 1:] - torch.logsumexp(theta[:, 1:], dim=1).unsqueeze(
             1
         )
         log_eta = log1mexp(log_p) - log_p
@@ -458,12 +475,21 @@ class JengaKernel(SiteProductKernel):
             torch.zeros_like(log_eta), log_rho.unsqueeze(1) + log_eta
         )
         site_factors = torch.exp(-0.5 * log_one_p_eta_rho)
-        rho = torch.exp(log_rho).reshape((self.seq_length, 1, 1))
+        rho = torch.exp(log_rho).reshape((seq_length, 1, 1))
+        return(rho, site_factors)
+
+    def get_site_kernels(self):
+        rho, site_factors = self.get_rho_and_site_factor(self.theta)
         kernel = (1 - rho) * site_factors.unsqueeze(1) * site_factors.unsqueeze(2)
         for i in range(self.seq_length):
             kernel[i].fill_diagonal_(1.0)
         return kernel
-
+    
+    def theta_to_delta(self, theta, **kwargs):
+        rho, site_factors = self.get_rho_and_site_factor(theta)
+        delta = 1 - torch.sign(1 - rho) * torch.sqrt(torch.abs(1 - rho)) * site_factors
+        return(delta)
+    
 
 class GeneralProductKernel(SiteProductKernel):
     is_stationary = True
@@ -484,13 +510,24 @@ class GeneralProductKernel(SiteProductKernel):
             theta0 = self.theta_to_L._inverse(torch.linalg.cholesky(C))
             theta0 = torch.stack([theta0] * self.seq_length, axis=0)
         return theta0
-
-    def get_site_kernels(self):
-        Ls = [self.theta_to_L(self.theta[i]) for i in range(self.seq_length)]
+    
+    def theta_to_cor(self, theta):
+        seq_length = theta.shape[0]
+        Ls = [self.theta_to_L(theta[i]) for i in range(seq_length)]
         return torch.stack([(L @ L.T) for L in Ls], axis=0)
 
+    def get_site_kernels(self):
+        return self.theta_to_cor(self.theta)
+    
+    def theta_to_delta(self, theta, **kwargs):
+        return(1 - self.theta_to_cor(theta))
+    
+    def get_delta(self):
+        return self.get_mutation_delta()
+    
 
-def get_kernel(kernel, n_alleles, seq_length, cov0=None, ns0=None):
+def get_kernel(kernel, n_alleles, seq_length, cov0=None, ns0=None,
+               log_var0=None):
     kernels = {
         "Additive": AdditiveKernel,
         "Pairwise": PairwiseKernel,
@@ -500,7 +537,9 @@ def get_kernel(kernel, n_alleles, seq_length, cov0=None, ns0=None):
         "Jenga": JengaKernel,
         "GeneralProduct": GeneralProductKernel,
     }
-    kernel = kernels[kernel](n_alleles, seq_length, cov0=cov0, ns0=ns0)
+    kernel = kernels[kernel](
+        n_alleles, seq_length, cov0=cov0, ns0=ns0, log_var0=log_var0
+    )
     return kernel
 
 

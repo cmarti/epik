@@ -262,6 +262,10 @@ class KernelsTests(unittest.TestCase):
 
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(cov, cov2)
+        
+        # Check decay rate
+        delta = kernel.get_delta().detach().numpy()
+        assert(np.allclose(delta, 1 - decay_factor))
 
     def test_connectedness_kernel(self):
         sl, a = 1, 2
@@ -310,11 +314,6 @@ class KernelsTests(unittest.TestCase):
 
         kernel = ConnectednessKernel(n_alleles=a, seq_length=sl, theta0=log_rho)
 
-        # Check decay rates
-        # decay_rates = kernel.get_decay_rates()
-        # expected_decay_rates = [2/3., 0.4]
-        # assert(np.allclose(decay_rates, expected_decay_rates))
-
         cov = kernel.forward(x, x).detach().numpy()
         expected = np.array(
             [1, decay_factors[0], decay_factors[1], decay_factors[0] * decay_factors[1]]
@@ -323,6 +322,11 @@ class KernelsTests(unittest.TestCase):
 
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(cov2, cov)
+        
+        # Check decay rates calculation
+        delta = kernel.get_delta().detach().numpy()
+        expected_delta = 1 - decay_factors
+        assert(np.allclose(delta, expected_delta))
 
     def test_jenga_kernel(self):
         sl, a = 1, 3
@@ -376,6 +380,12 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(cov2, cov)
 
+        # Check decay rates
+        rho = np.expand_dims(rho, 1)
+        delta = kernel.get_delta().detach().numpy()
+        expected_delta = 1 - np.sqrt((1-rho) / (1 + eta * rho))
+        assert(np.allclose(delta, expected_delta))
+        
         # Initialize with known correlation
         decay_factor = 1 / 3.0
         cov0 = torch.Tensor([1, decay_factor, decay_factor**2])
@@ -389,12 +399,6 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()[0, :]
         assert np.allclose(cov1, cov2)
 
-        # # Check decay rates
-        # rho = np.expand_dims(rho, 1)
-        # decay_rates = kernel.get_decay_rates()
-        # expected_decay_rates = 1 - np.sqrt((1-rho) / (1 + eta * rho))
-        # assert(np.allclose(decay_rates, expected_decay_rates))
-
     def test_general_product_kernel(self):
         sl, a = 2, 2
         x = get_full_space_one_hot(sl, a)
@@ -406,6 +410,10 @@ class KernelsTests(unittest.TestCase):
 
         K = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(K, np.eye(a**sl))
+        
+        # Check decay factors
+        delta = kernel.get_delta().detach().numpy()
+        assert(np.allclose(delta, 1 - np.eye(a)))
 
         # With larger spaces and random values
         seqs = ["ACGTAGCTAA", "GGGTAGCTAA", "GGGTAGCTCC"]
@@ -418,6 +426,8 @@ class KernelsTests(unittest.TestCase):
         K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(K1, K2)
         assert np.allclose(np.diag(K1), 1.0)
+        
+        
 
     # def test_connectedness_site_kernel(self):
     #     sl, a = 2, 2
