@@ -75,6 +75,13 @@ def main():
         type=float,
         help="Learning rate for optimization (0.1)",
     )
+    training_group.add_argument(
+        "-ptn",
+        "--pre_train_n_iter",
+        default=0,
+        type=int,
+        help="Number of iterations to pre-train in a smaller subsample (0)",
+    )
 
     pred_group = parser.add_argument_group("Prediction options")
     pred_group.add_argument(
@@ -116,6 +123,7 @@ def main():
     gpu = parsed_args.gpu
     n_devices = parsed_args.n_devices
     n_iter = parsed_args.n_iter
+    pre_train_n_iter = parsed_args.pre_train_n_iter
     learning_rate = parsed_args.learning_rate
     max_contrasts = parsed_args.max_contrasts
 
@@ -152,13 +160,18 @@ def main():
         y_var = None
 
     # Get kernel
-    msg = "Computing empirical covariance-distance function for "
-    msg += "initializing kernel parameters"
+    cov0, ns0 = None, None
+    # msg = "Computing empirical covariance-distance function for "
+    # msg += "initializing kernel parameters"
+    # log.write(msg)
+    # cov0, ns0 = calc_distance_covariance(X, y, seq_length, chunk_size=100)
+    log_var0 = torch.log((y ** 2).mean())
+    msg = "Initializing kernel with empirical variance: {:.2f}".format(torch.exp(log_var0))
     log.write(msg)
-    cov0, ns0 = calc_distance_covariance(X, y, seq_length, chunk_size=100)
 
     log.write("Selected {} kernel".format(kernel_label))
-    kernel = get_kernel(kernel_label, n_alleles, seq_length, cov0=cov0, ns0=ns0)
+    kernel = get_kernel(kernel_label, n_alleles, seq_length, cov0=cov0, ns0=ns0,
+                        log_var0=log_var0)
 
     # Define device
     device = torch.device("cuda") if gpu else None
@@ -185,8 +198,20 @@ def main():
             else:
                 log.write("Load hyperparameters from {}".format(params_fpath))
                 model.load(params_fpath)
+        
+        if pre_train_n_iter > 0:
+            sample_size = 2000
+            n_obs = X.shape[0]
 
-        # Fit by evidence maximization
+            if n_obs > sample_size:
+                idx = torch.Tensor(np.random.choice(np.arange(n_obs), sample_size, replace=False)).to(dtype=torch.int)
+                model.set_data(X[idx, :], y[idx], y_var=y_var[idx] if y_var is not None else y_var)
+                log.write("Pre-train hyperparameters with {} random points".format(sample_size))
+                model.fit(n_iter=pre_train_n_iter)
+                model.set_data(X, y, y_var=y_var)
+            else:
+                n_iter += pre_train_n_iter
+        
         if n_iter > 0:
             log.write("Train hyperparameters by maximizing the evidence")
             model.fit(n_iter=n_iter)
