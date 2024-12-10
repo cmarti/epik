@@ -401,7 +401,7 @@ class ExponentialKernel(SiteProductKernel):
 
     def calc_theta0(self):
         if self.theta0 is None:
-            q = torch.Tensor([0.8])
+            q = torch.Tensor([np.exp(-np.log(2) / self.seq_length)])
             rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
             theta0 = torch.log(rho) * torch.ones(1)
         else:
@@ -438,9 +438,9 @@ class ExponentialKernel(SiteProductKernel):
 class ConnectednessKernel(SiteProductKernel):
     def calc_theta0(self):
         if self.theta0 is None:
-            theta0 = -3.0 * torch.ones(self.seq_length)
-            # rho = (1 - self.corr1) / (1 + (self.n_alleles - 1) * self.corr1)
-            # theta0 = torch.log(rho) * torch.ones(self.seq_length)
+            q = torch.Tensor([np.exp(-np.log(2) / self.seq_length)])
+            rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
+            theta0 = torch.log(rho) * torch.ones(self.seq_length)
         else:
             theta0 = self.theta0
         return theta0
@@ -482,15 +482,10 @@ class ConnectednessKernel(SiteProductKernel):
 class JengaKernel(SiteProductKernel):
     def calc_theta0(self):
         if self.theta0 is None:
-            ones = torch.ones((self.seq_length, self.n_alleles + 1))
-            value = -3.0
-            # if self.corr1 is None:
-            #     value = -3.0
-            # else:
-            #     value = torch.log(
-            #         (1 - self.corr1) / (1 + (self.n_alleles - 1) * self.corr1)
-            #     )
-            theta0 = value * ones
+            q = torch.Tensor([np.exp(-np.log(2) / self.seq_length)])
+            rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
+            theta0 = torch.zeros((self.seq_length, self.n_alleles + 1))
+            theta0[:, 0] = torch.log(rho) * torch.ones(self.seq_length)
         else:
             theta0 = self.theta0
         return theta0
