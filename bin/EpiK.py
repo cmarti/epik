@@ -251,6 +251,10 @@ def main():
     fpath = "{}.model_params.pth".format(out_fpath)
     log.write("Storing model parameteres at {}".format(fpath))
     model.save(fpath)
+    
+    fpath = "{}.loss.csv".format(out_fpath)
+    log.write("Storing loss history at {}".format(fpath))
+    model.history.to_csv(fpath)
 
     # Predict phenotype in new sequences
     if test_seqs.shape[0] > 0:

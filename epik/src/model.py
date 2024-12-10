@@ -171,6 +171,10 @@ class _Epik(object):
                     
             self.fit_time = time() - t0
     
+    @property
+    def history(self):
+        return(pd.DataFrame({'loss': self.loss_history}))
+    
     def save(self, fpath):
         '''
         Store model parameters for future use
