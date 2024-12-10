@@ -78,7 +78,6 @@ class ModelsTests(unittest.TestCase):
         results = model.predict(test_x, calc_variance=True)
         r2 = pearsonr(results['coef'], test_y)[0] ** 2
         assert(r2 > 0.9)
-        assert(np.all(results['stderr'] > 1))
 
     def test_contrast(self):
         # Simulate from prior distribution
@@ -151,8 +150,8 @@ class ModelsTests(unittest.TestCase):
                 train_x, train_y, test_x, test_y, train_y_var = data
 
                 # Infer hyperparameters
-                cov0, ns0 = calc_distance_covariance(train_x, train_y, seq_length)
-                K = kernel(n_alleles, seq_length, cov0=cov0, ns0=ns0, use_keops=use_keops)
+                # cov0, ns0 = calc_distance_covariance(train_x, train_y, seq_length)
+                K = kernel(n_alleles, seq_length, use_keops=use_keops)
                 model = EpiK(K, track_progress=True)
                 model.set_data(train_x, train_y, train_y_var)
                 model.fit(n_iter=100)

@@ -23,6 +23,7 @@ from epik.src.utils import (
     calc_distance_covariance,
     KrawtchoukPolynomials,
     SquaredMatMulOperator,
+    WkAligner,
 )
 
 
@@ -205,29 +206,30 @@ class UtilsTests(unittest.TestCase):
 
     def test_krawtchouk_polynomials(self):
         ws = KrawtchoukPolynomials(n_alleles=2, seq_length=3)
+        ns = ws.n_alleles ** ws.seq_length
 
         # Get constant covariance
         log_lambdas = torch.Tensor([0.0, -16, -16, -16])
         w_d = ws.get_w_d(log_lambdas)
         covs = torch.ones(4)
-        assert torch.allclose(w_d, covs)
+        assert torch.allclose(w_d, covs / ns)
 
         # Using the interpolating function
         w_d = ws.basis @ ws.get_c_b(log_lambdas)
-        assert torch.allclose(w_d, covs)
+        assert torch.allclose(w_d, covs / ns)
 
         w_d = ws.basis @ ws.c_bk @ torch.exp(log_lambdas)
-        assert torch.allclose(w_d, covs)
+        assert torch.allclose(w_d, covs / ns)
 
         # Get additive covariance
         log_lambdas = torch.Tensor([-16, 0.0, -16, -16])
         w_d = ws.get_w_d(log_lambdas)
         covs = torch.Tensor([3.0, 1, -1, -3])
-        assert torch.allclose(w_d, covs)
+        assert torch.allclose(w_d, covs / ns)
 
         # Using the polynomial in distance
         w_d = ws.basis @ ws.get_c_b(log_lambdas)
-        assert torch.allclose(w_d, covs)
+        assert torch.allclose(w_d, covs / ns)
 
         # Check in larger dimensions
         log_lambdas = torch.linspace(0, -6, 9)
@@ -267,6 +269,59 @@ class UtilsTests(unittest.TestCase):
         ns = torch.ones_like(covs)
         log_lambdas2 = torch.log(ws.calc_lambdas(covs, ns))
         assert torch.allclose(log_lambdas2, log_lambdas, atol=1e-2)
+
+        covs = torch.Tensor(
+            [
+                5.9993,
+                4.6893,
+                3.6654,
+                2.8650,
+                2.2394,
+                1.7504,
+                1.3682,
+                1.0695,
+                0.8359,
+                0.6534,
+                0.5107,
+                0.3992,
+                0.3120,
+                0.2439,
+                0.1906,
+                0.1490,
+                0.1165,
+                0.0910,
+                0.0712,
+                0.0556,
+                0.0435,
+                0.0340,
+                0.0266,
+                0.0208,
+                0.0162,
+                0.0127,
+                0.0099,
+                0.0078,
+                0.0061,
+            ]
+        )
+
+        l = 5
+        ns = torch.ones_like(covs[:l+1])
+        print(covs[1] / covs[0])
+        aligner = WkAligner(n_alleles=20, seq_length=l)
+        aligner.set_data(covs[:l+1])
+        cov_pred0 = aligner.predict(aligner.log_lambdas)
+        print(cov_pred0)
+        print(cov_pred0[1] / cov_pred0[0], cov_pred0[2] / cov_pred0[1])
+        print(1 / cov_pred0[0])
+        # aligner.fit()
+
+        # ws = KrawtchoukPolynomials(n_alleles=20, seq_length=28)
+        # lambdas = ws.calc_lambdas(covs)
+        # log_lambdas = torch.log(lambdas)
+        # print(lambdas)
+        # w_d = ws.get_w_d(log_lambdas)
+        # print(w_d)
+        # print(ws.w_dk @ lambdas)
 
 
 if __name__ == "__main__":

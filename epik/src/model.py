@@ -233,8 +233,7 @@ class EpiK(_Epik):
         preconditioner is computed. 
     
     track_progress : bool (False)
-        Option to show an progress bar recording the 
-        progress of model fitting
+        Option to show a progress bar for model fitting
         
     Returns
     -------

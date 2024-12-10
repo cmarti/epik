@@ -453,6 +453,7 @@ class KrawtchoukPolynomials(object):
         size1 = self.seq_length + 1
         size2 = self.max_k + 1
         log_a_minus_1 = np.log(self.n_alleles - 1)
+        l_log_a = self.seq_length * np.log(self.n_alleles)
         d = torch.arange(size1).reshape((size1, 1, 1))
         k = torch.arange(size2).reshape((1, size2, 1))
         q = torch.arange(size2).reshape((1, 1, size2))
@@ -461,6 +462,7 @@ class KrawtchoukPolynomials(object):
             (k - q) * log_a_minus_1
             + log_comb(d, q)
             + log_comb(self.seq_length - d, k - q)
+            - l_log_a
         )
         self.w_dkq_sign = (-1.0) ** q
         self.w_dk = (self.w_dkq_sign * torch.exp(self.log_w_dkq)).sum(-1)
@@ -484,12 +486,68 @@ class KrawtchoukPolynomials(object):
         w_d = self.get_w_d(log_lambdas)
         return self.c_bd @ w_d
 
-    def calc_lambdas(self, covs, ns):
-        WD = self.w_dk.T * ns.unsqueeze(0)
-        A = WD @ self.w_dk
-        b = WD @ covs
-        lambdas = torch.linalg.solve(A, b)
+    def calc_lambdas(self, covs, ns=None):
+        if ns is None:
+            lambdas = torch.linalg.solve(self.w_dk, covs)
+        else:
+            WD = self.w_dk.T * ns.unsqueeze(0)
+            A = WD @ self.w_dk
+            b = WD @ covs
+            lambdas = torch.linalg.solve(A, b)
         return lambdas
+
+class WkAligner(torch.nn.Module):
+    def __init__(self, n_alleles, seq_length, max_k=None):
+        super().__init__()
+        self.n_alleles = n_alleles
+        self.seq_length = seq_length
+        self.ws = KrawtchoukPolynomials(n_alleles, seq_length, max_k)
+        
+    def set_data(self, cov, ns=None):
+        self.cov = cov
+        self.ns = ns
+        if self.ns is None:
+            self.ns = torch.ones_like(cov)
+        
+
+        print(self.cov)
+        b = self.cov[1] / (self.cov[0] - self.cov[1])
+        beta0 = np.log(self.cov[0]) + self.seq_length * (np.log(1 + self.n_alleles * b) - np.log(1 + b))
+        beta1 = np.log(1 + self.n_alleles * b)
+        k = torch.arange(self.ws.max_k + 1).to(dtype=torch.float)
+        log_lambdas0 = beta0 - beta1 * k
+        # log_lambdas0 =  - beta * k
+        # log_lambdas0 = torch.zeros_like(k)
+        # log_lambdas0[0] = 0.
+        # print(log_lambdas0)
+        # input()
+        # log_lambdas0 = -torch.arange(self.ws.max_k + 1).to(dtype=torch.float)
+        # print(log_lambdas0)
+        self.log_lambdas = torch.nn.Parameter(log_lambdas0)
+
+    def predict(self, log_lambdas):
+        return(self.ws.get_w_d(log_lambdas))
+
+    def calc_loss(self, log_lambdas):
+        w_d = self.predict(log_lambdas)
+        # print(w_d)
+        print(w_d[:5].detach().numpy(), self.cov[:5].numpy())
+        rmse = torch.sum(torch.square(self.cov - w_d) * self.ns) / self.ns.sum()
+        return rmse
+
+    def fit(self, n_iter=20, lr=0.5):
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr)
+
+        for i in range(n_iter):
+            optimizer.zero_grad()
+            # print(self.log_lambdas)
+            loss = self.calc_loss(self.log_lambdas)
+            loss.backward()
+            optimizer.step()
+            print(loss.detach().item())
+        print(self.log_lambdas)
+        print(self.predict(self.log_lambdas))
+        print(self.cov)
 
 
 class SquaredMatMulOperator(LinearOperator):
