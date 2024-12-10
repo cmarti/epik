@@ -515,11 +515,11 @@ class JengaKernel(SiteProductKernel):
         return kernel
     
     def get_site_log_kernels(self):
-        log_rho = self.theta[:, 0]
+        log_rho = self.theta[:, 0].unsqueeze(1)
         log_p = self.theta[:, 1:] - torch.logsumexp(self.theta[:, 1:], dim=1).unsqueeze(1)
         log_eta = log1mexp(log_p) - log_p
         log1p_eta_rho = torch.logaddexp(torch.zeros_like(log_eta),
-                                        log_rho.unsqueeze(1) + log_eta)
+                                        log_rho + log_eta)
         zs = 0.5 * (log1mexp(log_rho) - log1p_eta_rho)
 
         log_kernels = []

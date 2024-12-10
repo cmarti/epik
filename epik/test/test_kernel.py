@@ -329,6 +329,14 @@ class KernelsTests(unittest.TestCase):
         delta = kernel.get_delta().detach().numpy()
         expected_delta = 1 - decay_factors
         assert(np.allclose(delta, expected_delta))
+        
+        # Check longer sequences
+        sl, a = 6, 4
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl)
+        x = get_full_space_one_hot(sl, a)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
+        assert np.allclose(cov2, cov1)
 
     def test_jenga_kernel(self):
         sl, a = 1, 3
@@ -387,6 +395,14 @@ class KernelsTests(unittest.TestCase):
         delta = kernel.get_delta().detach().numpy()
         expected_delta = 1 - np.sqrt((1-rho) / (1 + eta * rho))
         assert(np.allclose(delta, expected_delta))
+        
+        # Check longer sequences
+        sl, a = 6, 4
+        kernel = JengaKernel(n_alleles=a, seq_length=sl)
+        x = get_full_space_one_hot(sl, a)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
+        assert np.allclose(cov2, cov1)
         
         # # Initialize with known correlation
         # decay_factor = 1 / 3.0
