@@ -354,12 +354,25 @@ class SiteProductKernel(SequenceKernel):
 
         return K
 
+    def _covar_func_log(self, x1, x2, **kwargs):
+        x1_ = LazyTensor(x1[:, None, :])
+        x2_ = LazyTensor(x2[None, :, :])
+        K = (x1_ * x2_).sum(-1).exp()
+        return K
+
     def _keops_forward(self, x1, x2, **kwargs):
-        site_kernels = [x for x in self.get_site_kernels()]
-        sigma2 = torch.exp(self.log_var)
-        x1_ = x1 @ torch.block_diag(*site_kernels)
-        kernel = KernelLinearOperator(x1_, x2, covar_func=self._covar_func, **kwargs)
-        return sigma2 * kernel
+        if self.is_positive():
+            site_log_kernels = self.get_site_log_kernels()
+            M = torch.block_diag(*site_log_kernels) + self.log_var / self.seq_length
+            kernel = KernelLinearOperator(x1 @ M, x2,
+                                          covar_func=self._covar_func_log,
+                                          **kwargs)
+        else:
+            site_kernels = [x for x in self.get_site_kernels()]
+            sigma2 = torch.exp(self.log_var)
+            M = sigma2 * torch.block_diag(*site_kernels)
+            kernel = KernelLinearOperator(x1 @ M, x2, covar_func=self._covar_func, **kwargs)
+        return kernel
 
     def get_delta(self):
         delta = self.theta_to_delta(self.theta, n_alleles=self.n_alleles)
