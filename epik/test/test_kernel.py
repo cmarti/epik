@@ -14,6 +14,7 @@ from epik.src.kernel import (
     JengaKernel,
     PairwiseKernel,
     VarianceComponentKernel,
+    SiteKernelAligner
 )
 from epik.src.utils import encode_seqs, get_full_space_one_hot
 
@@ -454,6 +455,56 @@ class KernelsTests(unittest.TestCase):
         assert np.allclose(K1, K2)
         assert np.allclose(np.diag(K1), 1.0)
         
+    def test_kernel_aligner(self):
+        n_alleles, seq_length = 2, 2
+        aligner = SiteKernelAligner(n_alleles=n_alleles, 
+                                    seq_length=seq_length)
+        
+        # Test Exponential transforms
+        theta1 = np.array([[-1]])
+        
+        theta2 = aligner.exponential_to_connectedness(theta1)
+        assert(theta2.shape == (2, 1))
+        assert(np.allclose(theta2[0], -1))
+        assert(np.allclose(aligner.connectedness_to_exponential(theta2), theta1))
+        
+        theta3 = aligner.exponential_to_jenga(theta1)
+        assert(np.allclose(theta3[:, [0]], -1))
+        assert(np.allclose(theta3[:, 1:], 0.))
+        assert(np.allclose(aligner.jenga_to_exponential(theta3), theta1))
+        
+        theta4 = aligner.exponential_to_general_product(theta1)
+        assert(np.allclose(aligner.general_product_to_exponential(theta4), theta1))
+        
+        # Test Connectedness transforms
+        theta1 = np.array([[-1],
+                           [-2]])
+        
+        theta2 = aligner.connectedness_to_exponential(theta1)
+        assert(theta2.shape == (1, 1))
+        assert(np.allclose(aligner.log_rho_to_q(theta2[0])[0], 0.61185566))
+        
+        theta3 = aligner.connectedness_to_jenga(theta1)
+        assert(theta3.shape == (seq_length, n_alleles + 1))
+        assert(np.allclose(theta3[:, [0]], theta1))
+        assert(np.allclose(theta3[:, 1:], 0.))
+        assert(np.allclose(aligner.jenga_to_connectedness(theta3), theta1))
+        
+        theta4 = aligner.connectedness_to_general_product(theta1)
+        assert(np.allclose(aligner.general_product_to_connectedness(theta4), theta1))
+        
+        # Test Jenga transform
+        n_alleles, seq_length = 4, 4
+        theta1 = np.random.normal(size=(seq_length, n_alleles + 1))
+        aligner = SiteKernelAligner(n_alleles=n_alleles, 
+                                    seq_length=seq_length)
+        
+        theta2 = aligner.jenga_to_general_product(theta1)
+        theta3 = aligner.general_product_to_jenga(theta2)
+        for i in range(seq_length):
+            c1 = aligner.jenga_to_corr(theta1[i])
+            c3 = aligner.jenga_to_corr(theta3[i])
+            assert(np.allclose(c1, c3, atol=1e-4))
         
 
     # def test_connectedness_site_kernel(self):

@@ -4,7 +4,8 @@ import torch as torch
 from gpytorch.kernels import Kernel
 from linear_operator.operators import KernelLinearOperator
 from pykeops.torch import LazyTensor
-from scipy.special import comb
+from scipy.special import comb, logsumexp
+from scipy.optimize import minimize
 from torch.distributions.transforms import CorrCholeskyTransform
 from torch.nn import Parameter
 
@@ -401,9 +402,9 @@ class ExponentialKernel(SiteProductKernel):
 
     def calc_theta0(self):
         if self.theta0 is None:
-            q = torch.Tensor([np.exp(-np.log(2) / self.seq_length)])
+            q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
             rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
-            theta0 = torch.log(rho) * torch.ones(1)
+            theta0 = torch.log(rho) * torch.ones(1) + torch.randn(1)
         else:
             theta0 = self.theta0
         return theta0
@@ -438,9 +439,9 @@ class ExponentialKernel(SiteProductKernel):
 class ConnectednessKernel(SiteProductKernel):
     def calc_theta0(self):
         if self.theta0 is None:
-            q = torch.Tensor([np.exp(-np.log(2) / self.seq_length)])
+            q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
             rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
-            theta0 = torch.log(rho) * torch.ones(self.seq_length)
+            theta0 = torch.log(rho) * torch.ones(self.seq_length) + torch.randn(self.seq_length)
         else:
             theta0 = self.theta0
         return theta0
@@ -482,10 +483,10 @@ class ConnectednessKernel(SiteProductKernel):
 class JengaKernel(SiteProductKernel):
     def calc_theta0(self):
         if self.theta0 is None:
-            q = torch.Tensor([np.exp(-np.log(2) / self.seq_length)])
+            q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
             rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
-            theta0 = torch.zeros((self.seq_length, self.n_alleles + 1))
-            theta0[:, 0] = torch.log(rho) * torch.ones(self.seq_length)
+            theta0 = torch.randn((self.seq_length, self.n_alleles + 1))
+            theta0[:, 0] += torch.log(rho) * torch.ones(self.seq_length)
         else:
             theta0 = self.theta0
         return theta0
@@ -544,7 +545,7 @@ class GeneralProductKernel(SiteProductKernel):
         if self.theta0 is not None:
             theta0 = self.theta0
         else:
-            q = 0.8 #if self.corr1 is None else self.corr1
+            q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
             C = (1 - q) * torch.eye(self.n_alleles) + q * torch.ones(
                 (self.n_alleles, self.n_alleles)
             )
@@ -588,6 +589,127 @@ def get_kernel(
     )
     return kernel
 
+
+class SiteKernelAligner(object):
+    def __init__(self, n_alleles, seq_length):
+        self.n_alleles = n_alleles
+        self.seq_length = seq_length
+        self.size = (n_alleles, n_alleles)
+        self.n_offdiag = n_alleles ** 2 - n_alleles
+        self.theta_to_L = CorrCholeskyTransform()
+        
+    def calc_frob(self, A, B):
+        return(np.square(A - B).sum())
+    
+    def log_rho_to_q(self, log_rho):
+        rho = np.exp(log_rho)
+        v = (1 - rho) / (1 + (self.n_alleles - 1) * rho)
+        return(v)
+    
+    def q_to_log_rho(self, q):
+        log_rho = np.log( (1 - q) / (1 + (self.n_alleles - 1) * q))
+        return(log_rho)
+    
+    def rho_to_corr(self, theta):
+        v = self.log_rho_to_q(theta)
+        corr = np.full(self.size, v)
+        np.fill_diagonal(corr, 1)
+        return corr
+    
+    def corr_to_q(self, corr):
+        q = (corr.sum() - np.diag(corr).sum()) / self.n_offdiag
+        return(q)
+    
+    def corr_to_general_product(self, corr):
+        L = torch.Tensor(np.linalg.cholesky(corr))
+        return(self.theta_to_L._inverse(L).numpy())
+    
+    def general_product_to_corr(self, theta):
+        L = self.theta_to_L(torch.Tensor(theta))
+        return((L @ L.T).numpy())
+    
+    def exponential_to_connectedness(self, theta):
+        return(np.vstack([theta] * self.seq_length))
+    
+    def exponential_to_jenga(self, theta):
+        col1 = np.vstack([theta] * self.seq_length)
+        return(np.hstack([col1, np.zeros((self.seq_length, self.n_alleles))]))
+        
+    def exponential_to_general_product(self, theta):
+        corr = self.rho_to_corr(theta[0])
+        theta = np.vstack([self.corr_to_general_product(corr)] * self.seq_length)
+        return(theta)
+    
+    def connectedness_to_exponential(self, theta):
+        q = np.mean([self.log_rho_to_q(theta_i)
+                     for theta_i in theta])
+        theta = np.array([[self.q_to_log_rho(q)]])
+        return(theta)
+    
+    def connectedness_to_jenga(self, theta):
+        z = np.zeros((self.seq_length, self.n_alleles))
+        return(np.hstack([theta, z]))
+    
+    def connectedness_to_general_product(self, theta):
+        theta = np.vstack([self.corr_to_general_product(self.rho_to_corr(theta_i))
+                           for theta_i in theta])
+        return(theta)  
+    
+    def jenga_to_corr(self, theta):
+        log_rho, log_p = theta[0], theta[1:]
+        rho = np.exp(log_rho)
+        p = np.exp(log_p - logsumexp(log_p))
+        eta = (1 - p) / p
+        fs = np.sqrt(1 + eta * rho)
+        corr = (1 - rho.reshape((1, 1))) / (
+            np.expand_dims(fs, 0) * np.expand_dims(fs, 1)
+        )
+        np.fill_diagonal(corr, 1)
+        return corr
+    
+    def jenga_to_connectedness(self, theta):
+        qs = [self.corr_to_q(self.jenga_to_corr(theta_i))
+              for theta_i in theta]
+        theta = np.array([[self.q_to_log_rho(q)] for q in qs])
+        return(theta)
+    
+    def jenga_to_exponential(self, theta):
+        q = np.mean([self.corr_to_q(self.jenga_to_corr(theta_i))
+                     for theta_i in theta])
+        theta = np.array([[self.q_to_log_rho(q)]])
+        return(theta)
+    
+    def jenga_to_general_product(self, theta):
+        theta = np.vstack([self.corr_to_general_product(self.jenga_to_corr(theta_i))
+                           for theta_i in theta])
+        return(theta)
+    
+    def general_product_to_exponential(self, theta):
+        q = np.mean([self.corr_to_q(self.general_product_to_corr(theta_i))
+                     for theta_i in theta])
+        theta = np.array([[self.q_to_log_rho(q)]])
+        return(theta)
+    
+    def general_product_to_connectedness(self, theta):
+        qs = [self.corr_to_q(self.general_product_to_corr(theta_i))
+              for theta_i in theta]
+        theta = np.array([[self.q_to_log_rho(q)] for q in qs])
+        return(theta)
+    
+    def general_product_to_jenga(self, theta):
+        thetas = []
+        for theta_i in theta:
+            B = self.general_product_to_corr(theta_i)
+
+            def loss(params):
+                A = self.jenga_to_corr(params)
+                return self.calc_frob(A, B)
+
+            params0 = np.zeros(self.n_alleles + 1)
+            res = minimize(loss, x0=params0)
+            thetas.append(res.x)
+        return(np.vstack(thetas))
+        
 
 # class SiteKernel(SequenceKernel):
 #     def __init__(self, n_alleles, site, fixed_theta=False, **kwargs):
