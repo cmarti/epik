@@ -1,19 +1,24 @@
+import gc
+import sys
 
 import numpy as np
 import torch as torch
 from gpytorch.kernels import Kernel
 from linear_operator.operators import KernelLinearOperator
 from pykeops.torch import LazyTensor
-from scipy.special import comb, logsumexp
 from scipy.optimize import minimize
+from scipy.special import comb, logsumexp
 from torch.distributions.transforms import CorrCholeskyTransform
+from torch.distributions import Wishart, Beta
 from torch.nn import Parameter
+from torch.linalg import cholesky
 
 from epik.src.utils import (
     HammingDistanceCalculator,
     KrawtchoukPolynomials,
     inner_product,
     log1mexp,
+    cov2corr
 )
 
 
@@ -63,20 +68,37 @@ class SequenceKernel(Kernel):
             else:
                 try:
                     kernel = self._nonkeops_forward(x1, x2, diag=False, **kwargs)
-                except RuntimeError:  # Memory error
+
+                except RuntimeError as error:  # Memory error
+                    msg = "\n{}. Likely due to memory error when loading ".format(error)
+                    msg += "kernel matrix: switching to KeOps\n"
+                    sys.stderr.write(msg)
+
+                    allocated_memory = torch.cuda.memory_allocated(device="cuda")
+                    reserved_memory = torch.cuda.memory_reserved(device="cuda")
+                    n1, n2 = x1.shape[0], x2.shape[0]
+                    sys.stderr.write(
+                        f"Kernel matrix memory {(n1, n2)}: {n1 * n2 * x2.element_size() / 1e6} MB"
+                    )
+                    sys.stderr.write(
+                        f"Memory allocated: {allocated_memory / 1e6:.2f} MB\n"
+                    )
+                    sys.stderr.write(
+                        f"Memory reserved: {reserved_memory / 1e6:.2f} MB\n"
+                    )
+                    sys.stderr.write(torch.cuda.memory_summary(device="cuda"))
                     self.use_keops = True
                     torch.cuda.empty_cache()
                     kernel = self._keops_forward(x1, x2, **kwargs)
 
+        torch.cuda.empty_cache()
         return kernel
 
 
 class BaseVarianceComponentKernel(SequenceKernel):
     is_stationary = True
 
-    def __init__(
-        self, n_alleles, seq_length, log_lambdas0=None, **kwargs
-    ):
+    def __init__(self, n_alleles, seq_length, log_lambdas0=None, **kwargs):
         super().__init__(n_alleles, seq_length, **kwargs)
         self.log_lambdas0 = log_lambdas0
         self.ws = KrawtchoukPolynomials(n_alleles, seq_length, max_k=self.max_k)
@@ -301,9 +323,9 @@ class SiteProductKernel(SequenceKernel):
         self.log_var0 = log_var0
         self.set_params()
         self.site_shape = (self.n_alleles, self.n_alleles)
-    
+
     def is_positive(self):
-        return(False)
+        return False
 
     def calc_log_var0(self):
         if self.log_var0 is None:
@@ -319,28 +341,51 @@ class SiteProductKernel(SequenceKernel):
         self.register_parameter(name="log_var", parameter=log_var0)
 
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
-        x1_ = x1.reshape(x1.shape[0], self.seq_length, self.n_alleles)
-        x2_ = x2.reshape(x2.shape[0], self.seq_length, self.n_alleles)
-
         if self.is_positive():
             site_log_kernels = self.get_site_log_kernels()
+
             if diag:
                 min_size = min(x1.shape[0], x2.shape[0])
-                log_kernel = torch.einsum("ila,ilb,lab->i", x1_[:min_size], x2_[:min_size], site_log_kernels)
+                log_kernel = 0.0
+                for i in range(self.seq_length):
+                    log_kernel += (
+                        (self.select_site(x1[:min_size], site=i) @ site_log_kernels[i])
+                        * self.select_site(x2[:min_size], site=i)
+                    ).sum(1)
+
             else:
-                log_kernel = torch.einsum("ila,jlb,lab->ij", x1_, x2_, site_log_kernels)
+                log_kernel = 0
+                for i in range(self.seq_length):
+                    log_kernel += (
+                        self.select_site(x1, site=i)
+                        @ site_log_kernels[i]
+                        @ self.select_site(x2, site=i).T
+                    )
+
             return torch.exp(self.log_var + log_kernel)
+
         else:
             site_kernels = self.get_site_kernels()
             sigma2 = torch.exp(self.log_var)
 
             if diag:
                 min_size = min(x1.shape[0], x2.shape[0])
-                kernel = torch.einsum(
-                    "ila,ilb,lab->il", x1_[:min_size], x2_[:min_size], site_kernels
-                ).prod(-1)
+                kernel = 1.0
+                for i in range(self.seq_length):
+                    kernel *= (
+                        (self.select_site(x1, site=i) @ site_kernels[i])
+                        * self.select_site(x2, site=i)
+                    ).sum(1)
+
             else:
-                kernel = torch.einsum("ila,jlb,lab->ijl", x1_, x2_, site_kernels).prod(-1)
+                kernel = 1.0
+                for i in range(self.seq_length):
+                    kernel *= (
+                        self.select_site(x1, site=i)
+                        @ site_kernels[i]
+                        @ self.select_site(x2, site=i).T
+                    )
+
             return sigma2 * kernel
 
     def _covar_func(self, x1, x2, **kwargs):
@@ -364,15 +409,19 @@ class SiteProductKernel(SequenceKernel):
     def _keops_forward(self, x1, x2, **kwargs):
         if self.is_positive():
             site_log_kernels = self.get_site_log_kernels()
-            M = torch.block_diag(*site_log_kernels) + self.log_var / self.seq_length
-            kernel = KernelLinearOperator(x1 @ M, x2,
-                                          covar_func=self._covar_func_log,
-                                          **kwargs)
+            M = torch.block_diag(*site_log_kernels)
+            sigma2 = torch.exp(self.log_var)
+            kernel = sigma2 * KernelLinearOperator(
+                x1 @ M, x2, covar_func=self._covar_func_log, **kwargs
+            )
+
         else:
             site_kernels = [x for x in self.get_site_kernels()]
             sigma2 = torch.exp(self.log_var)
-            M = sigma2 * torch.block_diag(*site_kernels)
-            kernel = KernelLinearOperator(x1 @ M, x2, covar_func=self._covar_func, **kwargs)
+            M = torch.block_diag(*site_kernels)
+            kernel = sigma2 * KernelLinearOperator(
+                x1 @ M, x2, covar_func=self._covar_func, **kwargs
+            )
         return kernel
 
     def get_delta(self):
@@ -394,7 +443,9 @@ class ExponentialKernel(SiteProductKernel):
         return kernel
 
     def get_site_log_kernel(self):
-        w = log1mexp(self.theta) - torch.log1p((self.n_alleles-1) * torch.exp(self.theta))
+        w = log1mexp(self.theta) - torch.log1p(
+            (self.n_alleles - 1) * torch.exp(self.theta)
+        )
         log_kernel = (
             torch.ones((self.n_alleles, self.n_alleles), device=self.theta.device) * w
         ).fill_diagonal_(0.0)
@@ -403,8 +454,9 @@ class ExponentialKernel(SiteProductKernel):
     def calc_theta0(self):
         if self.theta0 is None:
             q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
-            rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
-            theta0 = torch.log(rho) * torch.ones(1) + torch.randn(1)
+            qs = Beta(20 * q, 20 * (1 - q)).sample((1, ))
+            rho = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
+            theta0 = torch.log(rho)
         else:
             theta0 = self.theta0
         return theta0
@@ -413,7 +465,7 @@ class ExponentialKernel(SiteProductKernel):
         kernel = self.get_site_kernel()
         kernels = torch.stack([kernel] * self.seq_length, axis=0)
         return kernels
-    
+
     def get_site_log_kernels(self):
         log_kernel = self.get_site_log_kernel()
         log_kernels = torch.stack([log_kernel] * self.seq_length, axis=0)
@@ -423,25 +475,29 @@ class ExponentialKernel(SiteProductKernel):
         rho = torch.exp(theta)
         delta = 1 - (1 - rho) / (1 + (n_alleles - 1) * rho)
         return delta
-    
+
     def is_positive(self):
         return torch.all(self.theta < 0.0)
 
     def _nonkeops_forward(self, x1, x2, diag=False, **kwargs):
         if self.is_positive():
-            w = log1mexp(self.theta) - torch.log1p((self.n_alleles-1) * torch.exp(self.theta))
+            w = log1mexp(self.theta) - torch.log1p(
+                (self.n_alleles - 1) * torch.exp(self.theta)
+            )
             d = self.calc_hamming_distance(x1, x2, diag=diag, keops=False)
-            return(torch.exp(self.log_var + w * d))
+            return torch.exp(self.log_var + w * d)
+
         else:
-            return(super()._nonkeops_forward(x1, x2, diag=diag, **kwargs))
+            return super()._nonkeops_forward(x1, x2, diag=diag, **kwargs)
 
 
 class ConnectednessKernel(SiteProductKernel):
     def calc_theta0(self):
         if self.theta0 is None:
             q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
-            rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
-            theta0 = torch.log(rho) * torch.ones(self.seq_length) + torch.randn(self.seq_length)
+            qs = Beta(20 * q, 20 * (1 - q)).sample((self.seq_length, ))
+            rho = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
+            theta0 = torch.log(rho)
         else:
             theta0 = self.theta0
         return theta0
@@ -459,7 +515,7 @@ class ConnectednessKernel(SiteProductKernel):
         for i in range(self.seq_length):
             kernels[i].fill_diagonal_(1.0)
         return kernels
-    
+
     def get_site_log_kernels(self):
         ws = log1mexp(self.theta) - torch.log1p(
             (self.n_alleles - 1) * torch.exp(self.theta)
@@ -484,39 +540,36 @@ class JengaKernel(SiteProductKernel):
     def calc_theta0(self):
         if self.theta0 is None:
             q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
-            rho = (1 - q) / (1 + (self.n_alleles - 1) * q)
+            qs = Beta(20 * q, 20 * (1 - q)).sample((self.seq_length, ))
+            rho = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
             theta0 = torch.randn((self.seq_length, self.n_alleles + 1))
-            theta0[:, 0] += torch.log(rho) * torch.ones(self.seq_length)
+            theta0[:, :1] = torch.log(rho)
         else:
             theta0 = self.theta0
         return theta0
 
-    def get_rho_and_site_factor(self, theta):
-        seq_length = theta.shape[0]
-        log_rho = theta[:, 0]
-        log_p = theta[:, 1:] - torch.logsumexp(theta[:, 1:], dim=1).unsqueeze(1)
+    def get_log_rho_log1p_eta_rho(self, theta):
+        log_rho = theta[:, 0].unsqueeze(1)
+        log_p = theta[:, 1:] - torch.logsumexp(theta[:, 1:], 1).unsqueeze(1)
         log_eta = log1mexp(log_p) - log_p
-        log_one_p_eta_rho = torch.logaddexp(
-            torch.zeros_like(log_eta), log_rho.unsqueeze(1) + log_eta
-        )
-        site_factors = torch.exp(-0.5 * log_one_p_eta_rho)
-        rho = torch.exp(log_rho).reshape((seq_length, 1, 1))
-        return (rho, site_factors)
+
+        log1p_eta_rho = torch.logaddexp(torch.zeros_like(log_eta), log_rho + log_eta)
+        return log_rho, log1p_eta_rho
 
     def get_site_kernels(self):
-        rho, site_factors = self.get_rho_and_site_factor(self.theta)
-        kernel = (1 - rho) * site_factors.unsqueeze(1) * site_factors.unsqueeze(2)
+        log_rho, log1p_eta_rho = self.get_log_rho_log1p_eta_rho(self.theta)
+        rho = torch.exp(log_rho).reshape((self.seq_length, 1, 1))
+        allele_factors = 0.5 * log1p_eta_rho
+        denom = torch.exp(-allele_factors.unsqueeze(1) - allele_factors.unsqueeze(2))
+        kernel = (1 - rho) * denom
         for i in range(self.seq_length):
             kernel[i].fill_diagonal_(1.0)
         return kernel
-    
+
     def get_site_log_kernels(self):
-        log_rho = self.theta[:, 0].unsqueeze(1)
-        log_p = self.theta[:, 1:] - torch.logsumexp(self.theta[:, 1:], dim=1).unsqueeze(1)
-        log_eta = log1mexp(log_p) - log_p
-        log1p_eta_rho = torch.logaddexp(torch.zeros_like(log_eta),
-                                        log_rho + log_eta)
-        zs = 0.5 * (log1mexp(log_rho) - log1p_eta_rho)
+        log_rho, log1p_eta_rho = self.get_log_rho_log1p_eta_rho(self.theta)
+        log1m_rho = log1mexp(log_rho)
+        zs = 0.5 * (log1m_rho - log1p_eta_rho)
 
         log_kernels = []
         for z in zs:
@@ -528,8 +581,10 @@ class JengaKernel(SiteProductKernel):
         return torch.all(self.theta[:, 0] < 0.0)
 
     def theta_to_delta(self, theta, **kwargs):
-        rho, site_factors = self.get_rho_and_site_factor(theta)
-        delta = 1 - torch.sign(1 - rho) * torch.sqrt(torch.abs(1 - rho)) * site_factors
+        log_rho, log1p_eta_rho = self.get_log_rho_log1p_eta_rho(theta)
+        onemrho = 1 - torch.exp(log_rho)
+        site_factors = torch.exp(-0.5 * log1p_eta_rho)
+        delta = 1 - torch.sign(onemrho) * torch.sqrt(torch.abs(onemrho)) * site_factors
         return delta
 
 
@@ -549,8 +604,11 @@ class GeneralProductKernel(SiteProductKernel):
             C = (1 - q) * torch.eye(self.n_alleles) + q * torch.ones(
                 (self.n_alleles, self.n_alleles)
             )
-            theta0 = self.theta_to_L._inverse(torch.linalg.cholesky(C))
-            theta0 = torch.stack([theta0] * self.seq_length, axis=0)
+            df = 20.
+            Ls = [cholesky(cov2corr(Wishart(torch.Tensor([df]), C).sample()[0] / df))
+                  for _ in range(self.seq_length)]
+            theta0 = torch.stack([self.theta_to_L._inverse(L)
+                                  for L in Ls], axis=0)
         return theta0
 
     def theta_to_cor(self, theta):
@@ -560,6 +618,12 @@ class GeneralProductKernel(SiteProductKernel):
 
     def get_site_kernels(self):
         return self.theta_to_cor(self.theta)
+    
+    def get_site_log_kernels(self):
+        return torch.log(self.get_site_kernels())
+
+    def is_positive(self):
+        return torch.all(self.get_site_kernels() > 0.0)
 
     def theta_to_delta(self, theta, **kwargs):
         return 1 - self.theta_to_cor(theta)
@@ -595,66 +659,69 @@ class SiteKernelAligner(object):
         self.n_alleles = n_alleles
         self.seq_length = seq_length
         self.size = (n_alleles, n_alleles)
-        self.n_offdiag = n_alleles ** 2 - n_alleles
+        self.n_offdiag = n_alleles**2 - n_alleles
         self.theta_to_L = CorrCholeskyTransform()
-        
+
     def calc_frob(self, A, B):
-        return(np.square(A - B).sum())
-    
+        return np.square(A - B).sum()
+
     def log_rho_to_q(self, log_rho):
         rho = np.exp(log_rho)
         v = (1 - rho) / (1 + (self.n_alleles - 1) * rho)
-        return(v)
-    
+        return v
+
     def q_to_log_rho(self, q):
-        log_rho = np.log( (1 - q) / (1 + (self.n_alleles - 1) * q))
-        return(log_rho)
-    
+        log_rho = np.log((1 - q) / (1 + (self.n_alleles - 1) * q))
+        return log_rho
+
     def rho_to_corr(self, theta):
         v = self.log_rho_to_q(theta)
         corr = np.full(self.size, v)
         np.fill_diagonal(corr, 1)
         return corr
-    
+
     def corr_to_q(self, corr):
         q = (corr.sum() - np.diag(corr).sum()) / self.n_offdiag
-        return(q)
-    
+        return q
+
     def corr_to_general_product(self, corr):
         L = torch.Tensor(np.linalg.cholesky(corr))
-        return(self.theta_to_L._inverse(L).numpy())
-    
+        return self.theta_to_L._inverse(L).numpy()
+
     def general_product_to_corr(self, theta):
         L = self.theta_to_L(torch.Tensor(theta))
-        return((L @ L.T).numpy())
-    
+        return (L @ L.T).numpy()
+
     def exponential_to_connectedness(self, theta):
-        return(np.vstack([theta] * self.seq_length))
-    
+        return np.vstack([theta] * self.seq_length)
+
     def exponential_to_jenga(self, theta):
         col1 = np.vstack([theta] * self.seq_length)
-        return(np.hstack([col1, np.zeros((self.seq_length, self.n_alleles))]))
-        
+        return np.hstack([col1, np.zeros((self.seq_length, self.n_alleles))])
+
     def exponential_to_general_product(self, theta):
         corr = self.rho_to_corr(theta[0])
         theta = np.vstack([self.corr_to_general_product(corr)] * self.seq_length)
-        return(theta)
-    
+        return theta
+
     def connectedness_to_exponential(self, theta):
-        q = np.mean([self.log_rho_to_q(theta_i)
-                     for theta_i in theta])
+        q = np.mean([self.log_rho_to_q(theta_i) for theta_i in theta])
         theta = np.array([[self.q_to_log_rho(q)]])
-        return(theta)
-    
+        return theta
+
     def connectedness_to_jenga(self, theta):
         z = np.zeros((self.seq_length, self.n_alleles))
-        return(np.hstack([theta, z]))
-    
+        return np.hstack([theta, z])
+
     def connectedness_to_general_product(self, theta):
-        theta = np.vstack([self.corr_to_general_product(self.rho_to_corr(theta_i))
-                           for theta_i in theta])
-        return(theta)  
-    
+        theta = np.vstack(
+            [
+                self.corr_to_general_product(self.rho_to_corr(theta_i))
+                for theta_i in theta
+            ]
+        )
+        return theta
+
     def jenga_to_corr(self, theta):
         log_rho, log_p = theta[0], theta[1:]
         rho = np.exp(log_rho)
@@ -666,36 +733,40 @@ class SiteKernelAligner(object):
         )
         np.fill_diagonal(corr, 1)
         return corr
-    
+
     def jenga_to_connectedness(self, theta):
-        qs = [self.corr_to_q(self.jenga_to_corr(theta_i))
-              for theta_i in theta]
+        qs = [self.corr_to_q(self.jenga_to_corr(theta_i)) for theta_i in theta]
         theta = np.array([[self.q_to_log_rho(q)] for q in qs])
-        return(theta)
-    
+        return theta
+
     def jenga_to_exponential(self, theta):
-        q = np.mean([self.corr_to_q(self.jenga_to_corr(theta_i))
-                     for theta_i in theta])
+        q = np.mean([self.corr_to_q(self.jenga_to_corr(theta_i)) for theta_i in theta])
         theta = np.array([[self.q_to_log_rho(q)]])
-        return(theta)
-    
+        return theta
+
     def jenga_to_general_product(self, theta):
-        theta = np.vstack([self.corr_to_general_product(self.jenga_to_corr(theta_i))
-                           for theta_i in theta])
-        return(theta)
-    
+        theta = np.vstack(
+            [
+                self.corr_to_general_product(self.jenga_to_corr(theta_i))
+                for theta_i in theta
+            ]
+        )
+        return theta
+
     def general_product_to_exponential(self, theta):
-        q = np.mean([self.corr_to_q(self.general_product_to_corr(theta_i))
-                     for theta_i in theta])
+        q = np.mean(
+            [self.corr_to_q(self.general_product_to_corr(theta_i)) for theta_i in theta]
+        )
         theta = np.array([[self.q_to_log_rho(q)]])
-        return(theta)
-    
+        return theta
+
     def general_product_to_connectedness(self, theta):
-        qs = [self.corr_to_q(self.general_product_to_corr(theta_i))
-              for theta_i in theta]
+        qs = [
+            self.corr_to_q(self.general_product_to_corr(theta_i)) for theta_i in theta
+        ]
         theta = np.array([[self.q_to_log_rho(q)] for q in qs])
-        return(theta)
-    
+        return theta
+
     def general_product_to_jenga(self, theta):
         thetas = []
         for theta_i in theta:
@@ -708,8 +779,8 @@ class SiteKernelAligner(object):
             params0 = np.zeros(self.n_alleles + 1)
             res = minimize(loss, x0=params0)
             thetas.append(res.x)
-        return(np.vstack(thetas))
-        
+        return np.vstack(thetas)
+
 
 # class SiteKernel(SequenceKernel):
 #     def __init__(self, n_alleles, site, fixed_theta=False, **kwargs):

@@ -5,7 +5,6 @@ from os.path import exists
 import numpy as np
 import pandas as pd
 import torch
-from linear_operator.settings import max_cg_iterations
 
 from epik.src.kernel import get_kernel
 from epik.src.model import EpiK
@@ -50,6 +49,9 @@ def main():
     options_group.add_argument("--log_var0", default=None, help=help_msg)
     help_msg = "CSV File containing theta to initialize site-product models"
     options_group.add_argument("--theta0", default=None, help=help_msg)
+    help_msg = "Option to activate training of noise variance"
+    options_group.add_argument("--train_noise", default=False, action='store_true',
+                               help=help_msg)
 
     comp_group = parser.add_argument_group("Computational options")
     comp_group.add_argument(
@@ -64,6 +66,19 @@ def main():
         type=int,
         help="Maximum number of contrasts to compute simultaneusly (1)",
     )
+    comp_group.add_argument(
+        "--cg_tol",
+        default=1.,
+        type=float,
+        help="Tolerance for Conjugate Gradient during Evidence Maximization",
+    )
+    comp_group.add_argument(
+        "--num_trace_samples",
+        default=20,
+        type=int,
+        help="Number of vectors to use for estimating log-determinant (20)",
+    )
+    
 
     training_group = parser.add_argument_group("Training options")
     training_group.add_argument(
@@ -81,11 +96,27 @@ def main():
         help="Learning rate for optimization (0.1)",
     )
     training_group.add_argument(
-        "-ptn",
-        "--pre_train_n_iter",
-        default=0,
+        "--optimizer",
+        default='Adam',
+        help="Optimizer to use: Adam (def) or SGD",
+    )
+    training_group.add_argument(
+        "--lr_decay",
+        default=False,
+        action='store_true',
+        help="Automatically reduce learning rate when failing to improve",
+    )
+    training_group.add_argument(
+        "--gamma",
+        default=0.8,
+        type=float,
+        help="Factor to multiply learning rate during decay",
+    )
+    training_group.add_argument(
+        "--patience",
+        default=10,
         type=int,
-        help="Number of iterations to pre-train in a smaller subsample (0)",
+        help="Number of iterations without improving before updating learning rate",
     )
 
     pred_group = parser.add_argument_group("Prediction options")
@@ -127,11 +158,16 @@ def main():
     log_lambdas0_fpath = parsed_args.log_lambdas0
     log_var0_fpath = parsed_args.log_var0
     theta0_fpath = parsed_args.theta0
+    train_noise = parsed_args.train_noise
 
     gpu = parsed_args.gpu
-    n_devices = parsed_args.n_devices
+    num_trace_samples = parsed_args.num_trace_samples
+    cg_tol = parsed_args.cg_tol
     n_iter = parsed_args.n_iter
-    pre_train_n_iter = parsed_args.pre_train_n_iter
+    optimizer = parsed_args.optimizer
+    lr_decay = parsed_args.lr_decay
+    gamma = parsed_args.gamma
+    patience = parsed_args.patience
     learning_rate = parsed_args.learning_rate
     max_contrasts = parsed_args.max_contrasts
 
@@ -159,21 +195,16 @@ def main():
     n_alleles = alleles.shape[0]
 
     X = encode_seqs(seqs, alphabet=alleles)
-    y = torch.Tensor(data.values[:, 0])
+    # y_std = np.std(data.values[:, 0])
+    y = torch.Tensor(data.values[:, 0]) #  / y_std
 
     if data.shape[1] > 1:
-        y_var = data.values[:, 1]
+        y_var = data.values[:, 1] # / y_std ** 2
         y_var[y_var < 0.0001] = 0.0001
     else:
         y_var = None
 
     # Get kernel
-    log_lambdas0 = None
-    if log_lambdas0_fpath is not None and exists(log_lambdas0_fpath):
-        msg = "Loading log_lambdas0 from {}".format(log_lambdas0_fpath)
-        log.write(msg)
-        log_lambdas0 = torch.Tensor(pd.read_csv(log_lambdas0_fpath)['log_lambdas'])
-    
     if log_var0_fpath is not None and exists(log_var0_fpath):
         msg = "Loading log_var0 from {}".format(log_var0_fpath)
         log.write(msg)
@@ -185,6 +216,12 @@ def main():
             torch.exp(log_var0)
         )
         log.write(msg)
+    
+    log_lambdas0 = None
+    if log_lambdas0_fpath is not None and exists(log_lambdas0_fpath):
+        msg = "Loading log_lambdas0 from {}".format(log_lambdas0_fpath)
+        log.write(msg)
+        log_lambdas0 = torch.Tensor(pd.read_csv(log_lambdas0_fpath)['log_lambdas'])
     
     theta0 = None
     if theta0_fpath is not None and exists(theta0_fpath):
@@ -199,19 +236,18 @@ def main():
     )
 
     # Define device
-    device = torch.device("cuda") if gpu else None
-    device_label = "GPU" if gpu else "CPU"
-    log.write("Running computations on {}".format(device_label))
+    device = 'cuda' if gpu else 'cpu'
+    log.write("Running computations on {}".format(device))
 
     # Create model
     log.write("Building model for Gaussian Process regression")
     model = EpiK(
         kernel,
         track_progress=True,
-        train_noise=True,
+        train_noise=train_noise,
         device=device,
-        n_devices=n_devices,
-        learning_rate=learning_rate,
+        cg_tol=cg_tol,
+        num_trace_samples=num_trace_samples,
     )
     model.set_data(X, y, y_var=y_var)
 
@@ -223,34 +259,22 @@ def main():
             log.write("Load hyperparameters from {}".format(params_fpath))
             model.load(params_fpath)
 
-    if pre_train_n_iter > 0:
-        sample_size = 2000
-        n_obs = X.shape[0]
-
-        if n_obs > sample_size:
-            idx = torch.Tensor(
-                np.random.choice(np.arange(n_obs), sample_size, replace=False)
-            ).to(dtype=torch.int)
-            model.set_data(
-                X[idx, :], y[idx], y_var=y_var[idx] if y_var is not None else y_var
-            )
-            log.write(
-                "Pre-train hyperparameters with {} random points".format(
-                    sample_size
-                )
-            )
-            model.fit(n_iter=pre_train_n_iter)
-            model.set_data(X, y, y_var=y_var)
-        else:
-            n_iter += pre_train_n_iter
-
     if n_iter > 0:
         log.write("Train hyperparameters by maximizing the evidence")
-        model.fit(n_iter=n_iter)
+        model.fit(n_iter=n_iter, learning_rate=learning_rate,
+                  optimizer=optimizer, lr_decay=lr_decay,
+                  gamma=gamma, patience=patience)
 
     fpath = "{}.model_params.pth".format(out_fpath)
-    log.write("Storing model parameteres at {}".format(fpath))
+    log.write("Storing model parameters at {}".format(fpath))
     model.save(fpath)
+
+    fpath = "{}.max_evid.model_params.pth".format(out_fpath)
+    log.write("Storing max evidence model parameters at {}".format(fpath))
+    model.save_max_evidence(fpath)
+    
+    log.write('Loading evidence maximizing parameters into model')
+    model.load(fpath)
     
     fpath = "{}.loss.csv".format(out_fpath)
     log.write("Storing loss history at {}".format(fpath))
@@ -308,15 +332,15 @@ def main():
             log.write("\tWriting estimates to {}".format(fpath))
             results.to_csv(fpath)
 
-    # Write execution time for tracking performance
-    fpath = "{}.time.txt".format(out_fpath)
-    log.write("Writing execution times to {}".format(fpath))
-    with open(fpath, "w") as fhand:
-        fhand.write("fit,{}\n".format(model.fit_time))
-        if hasattr(model, "pred_time"):
-            fhand.write("pred,{}\n".format(model.pred_time))
-        if hasattr(model, "contrast_time"):
-            fhand.write("contrast,{}\n".format(model.contrast_time))
+    # # Write execution time for tracking performance
+    # fpath = "{}.time.txt".format(out_fpath)
+    # log.write("Writing execution times to {}".format(fpath))
+    # with open(fpath, "w") as fhand:
+    #     fhand.write("fit,{}\n".format(model.fit_time))
+    #     if hasattr(model, "pred_time"):
+    #         fhand.write("pred,{}\n".format(model.pred_time))
+    #     if hasattr(model, "contrast_time"):
+    #         fhand.write("contrast,{}\n".format(model.contrast_time))
 
     log.finish()
 

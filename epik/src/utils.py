@@ -153,6 +153,13 @@ def get_tensor(ndarray, dtype=torch.float32, device=None):
     return to_device(ndarray, output_device=device)
 
 
+def to_numpy(v):
+    u = v.detach()
+    if u.is_cuda:
+        u = u.cpu()
+    return(u.numpy())
+
+
 def get_gpu_memory(device=None):
     mem = torch.cuda.memory_allocated(device) / 2**20
     suffix = "MB"
@@ -594,3 +601,9 @@ def inner_product(x1, x2, metric=None, diag=False):
             return x1 @ x2.T
         else:
             return x1 @ metric @ x2.T
+
+
+def cov2corr(cov):
+    v = 1 / torch.sqrt(torch.diag(cov))
+    corr = v.unsqueeze(0) * cov * v.unsqueeze(1)
+    return(corr)

@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 import sys
+import gc
 import unittest
 from functools import partial
 from os.path import join
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
 
+import gpytorch
 import numpy as np
 import pandas as pd
 import torch
@@ -27,6 +29,7 @@ from epik.src.utils import (
     get_mut_effs_contrast_matrix,
     one_hot_to_seq,
     seq_to_one_hot,
+    encode_seqs,
     calc_distance_covariance
 )
 
@@ -115,18 +118,48 @@ class ModelsTests(unittest.TestCase):
         assert(results.shape == (15, 1))
         
     def test_fit(self):
+        torch.manual_seed(0)
         alpha, sl, log_lambdas0, data = get_vc_random_landscape_data(sigma=0.01)
         train_x, train_y, _, _, train_y_var = data
 
         # Train new model
-        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=sl,
-                                         log_lambdas0=log_lambdas0)
+        kernel = VarianceComponentKernel(n_alleles=alpha, seq_length=sl)
         model = EpiK(kernel, track_progress=True)
         model.set_data(train_x, train_y, train_y_var)
-        model.fit(n_iter=100)
+        model.fit(n_iter=100, learning_rate=0.01)
         log_lambdas = kernel.log_lambdas.detach().cpu().numpy().flatten()
         r = pearsonr(log_lambdas[1:], log_lambdas0[1:])[0]
         assert(r > 0.6)
+    
+    def test_fit2(self):
+        torch.manual_seed(2)
+        
+        # data = pd.read_csv('/home/martigo/elzar/projects/epik_analysis/splits/qtls_li_hq.24.train.csv', index_col=0)
+        data = pd.read_csv('/home/martigo/elzar/projects/epik_analysis/splits/smn1.24.train.csv', index_col=0)
+        print(data)
+        X = encode_seqs(data.index.values, alphabet=['A', 'C', 'G', 'U'])
+        y = torch.Tensor(data['y'])
+        y_var = torch.Tensor(data['y_var'])
+        
+        # Train new model
+        # kernel = GeneralProductKernel(n_alleles=20, seq_length=4)
+        kernel = JengaKernel(n_alleles=4, seq_length=8)
+        model = EpiK(kernel,
+                    track_progress=True,
+                    train_noise=True)
+        model.set_data(X, y, y_var)
+        
+        # for n in [1, 2, 4, 8, 16, 32, 64, 128]:
+        #     with gpytorch.settings.cg_tolerance(1 ), gpytorch.settings.num_trace_samples(n):
+        #         values = []
+        #         for i in range(20):
+        #             values.append(model.calc_mll().detach().numpy())
+        #         print(np.mean(values), np.std(values))
+        # # exit
+        model.fit(n_iter=50, learning_rate=1e-4)
+        model.fit(n_iter=100, learning_rate=1e-6)
+        print(model.training_history)
+        print(model.max_mll)
     
     def test_fit_predict_kernels(self):
         torch.manual_seed(0)

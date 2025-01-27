@@ -273,6 +273,12 @@ class KernelsTests(unittest.TestCase):
         # Check decay rate
         delta = kernel.get_delta().detach().numpy()
         assert(np.allclose(delta, 1 - decay_factor))
+        
+        # Check random initialization
+        kernel = ExponentialKernel(n_alleles=a, seq_length=sl)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, cov2))
 
         # Check that it works for theta0 > 0
         theta0 = torch.Tensor(np.log([2]))
@@ -295,7 +301,7 @@ class KernelsTests(unittest.TestCase):
 
         diag = kernel.forward(x, x, diag=True).detach().numpy()
         assert np.allclose(diag, np.diag(cov))
-
+        
         # with 2 sites
         sl, a = 2, 2
         log_rho = -np.log(2) * torch.ones(sl)
@@ -309,6 +315,14 @@ class KernelsTests(unittest.TestCase):
 
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(cov, cov)
+        
+        # With different variance
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl,
+                                     theta0=log_rho,
+                                     log_var0=torch.Tensor([-1.]))
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).detach().numpy()
+        assert np.allclose(cov1, cov2)
 
         # With unequal decay factors
         log_rho = torch.tensor([-np.log(2), -np.log(3)], dtype=torch.float32)
@@ -331,9 +345,23 @@ class KernelsTests(unittest.TestCase):
         expected_delta = 1 - decay_factors
         assert(np.allclose(delta, expected_delta))
         
+        # Check random initialization
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, cov2))
+        
         # Check longer sequences
         sl, a = 6, 4
         kernel = ConnectednessKernel(n_alleles=a, seq_length=sl)
+        x = get_full_space_one_hot(sl, a)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
+        assert np.allclose(cov2, cov1)
+        
+        # Check longer sequences
+        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl,
+                                     log_var0=torch.Tensor([-1.]))
         x = get_full_space_one_hot(sl, a)
         cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
@@ -397,6 +425,12 @@ class KernelsTests(unittest.TestCase):
         expected_delta = 1 - np.sqrt((1-rho) / (1 + eta * rho))
         assert(np.allclose(delta, expected_delta))
         
+        # Check random initialization
+        kernel = JengaKernel(n_alleles=a, seq_length=sl)
+        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        cov2 = kernel._keops_forward(x, x).detach().numpy()
+        assert(np.allclose(cov1, cov2))
+        
         # Check longer sequences
         sl, a = 6, 4
         kernel = JengaKernel(n_alleles=a, seq_length=sl)
@@ -442,6 +476,12 @@ class KernelsTests(unittest.TestCase):
 
         K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(K1, K2)
+        
+        # Random initialization
+        kernel = GeneralProductKernel(a, sl)
+        K1 = kernel._nonkeops_forward(x, x).detach().numpy()
+        K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
+        assert np.allclose(K1, K2)
 
         # With larger spaces and random values
         seqs = ["ACGTAGCTAA", "GGGTAGCTAA", "GGGTAGCTCC"]
@@ -454,6 +494,7 @@ class KernelsTests(unittest.TestCase):
         K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(K1, K2)
         assert np.allclose(np.diag(K1), 1.0)
+        
         
     def test_kernel_aligner(self):
         n_alleles, seq_length = 2, 2
