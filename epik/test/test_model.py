@@ -11,7 +11,7 @@ import gpytorch
 import numpy as np
 import pandas as pd
 import torch
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, multivariate_normal
 
 from epik.src.kernel import (
     AdditiveKernel,
@@ -30,6 +30,7 @@ from epik.src.utils import (
     one_hot_to_seq,
     seq_to_one_hot,
     encode_seqs,
+    get_random_sequences,
     calc_distance_covariance
 )
 
@@ -46,6 +47,31 @@ def get_vc_random_landscape_data(sigma=0, ptrain=0.8):
 
 
 class ModelsTests(unittest.TestCase):
+    def test_calc_mll(self):
+        alphabet = ['A', 'C', 'G', 'T']
+        n_alleles= len(alphabet)
+        seq_length = 8
+        for n in [100, 200, 500, 1000]:
+            seqs = get_random_sequences(n=n, seq_length=seq_length, alphabet=alphabet)
+            X = encode_seqs(seqs, alphabet=alphabet)
+            y_var = 0.1 * np.ones(n)
+            D = np.diag(y_var)
+            with torch.no_grad():
+                kernel = ConnectednessKernel(n_alleles=n_alleles, seq_length=seq_length)
+                mu = np.zeros(n)
+                Sigma = kernel(X, X).to_dense().numpy() + D
+                
+                gaussian = multivariate_normal(mu, Sigma)
+                y = gaussian.rvs()
+                logp1 = gaussian.logpdf(y)
+                
+                model = EpiK(kernel)
+                model.set_data(X=X, y=y, y_var=y_var)
+                logp2 = model.calc_mll()
+                
+                print(logp1, logp2)
+                assert(np.allclose(logp1, logp2))
+        
     def test_simulate(self):
         sl, a = 2, 2
         X = get_full_space_one_hot(seq_length=sl, n_alleles=a)
