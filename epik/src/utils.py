@@ -10,6 +10,12 @@ from linear_operator.operators import LinearOperator, MatmulLinearOperator
 from scipy.special import logsumexp
 
 
+def get_random_sequences(n, seq_length, alphabet):
+    alleles = np.random.choice(alphabet, size=(n, seq_length), replace=True)
+    seqs = np.array([''.join(s) for s in alleles])
+    return(seqs)
+
+
 def get_one_hot_subseq_key(alphabet, max_l=1):
     subseq_key = {}
     for i, c in enumerate(alphabet):
@@ -607,3 +613,4 @@ def cov2corr(cov):
     v = 1 / torch.sqrt(torch.diag(cov))
     corr = v.unsqueeze(0) * cov * v.unsqueeze(1)
     return(corr)
+
