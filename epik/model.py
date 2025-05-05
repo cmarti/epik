@@ -148,21 +148,22 @@ class _Epik(object):
 
     def set_data(self, X, y, y_var=None):
         """
-        Load data into model
+        Set the training data for the model.
 
         Parameters
         ----------
-        X : torch.Tensor of shape (n_sequence, n_features)
-            Tensor containing the one-hot encoding of the
-            sequences to make predictions
-        y : torch.Tensor of shape (n_sequence,)
-            Tensor containing the phenotypic measurements for each
-            sequence in `X`
-        y_var : torch.Tensor of shape (n_sequence,) or None
-            If `y_var=None` it is assumed that there is no uncertainty
-            in the measurements. Otherwise, Tensor containing the
-            variance of the measurements in `y`.
+        X : torch.Tensor
+            A tensor of shape (n_sequences, n_features) containing the 
+            one-hot encoded input sequences.
 
+        y : torch.Tensor
+            A tensor of shape (n_sequences,) containing the phenotypic 
+            measurements corresponding to each sequence in `X`.
+
+        y_var : torch.Tensor, optional
+            A tensor of shape (n_sequences,) representing the variance 
+            of the measurements in `y`. If `None`, it is assumed that 
+            there is no uncertainty in the measurements.
         """
 
         self.X = self.get_tensor(X)
@@ -257,13 +258,12 @@ class _Epik(object):
 
     def save(self, fpath):
         """
-        Store model parameters for future use
+        Save the model parameters to a file for future use.
 
         Parameters
         ----------
         fpath : str
-            File path for the file to store the parameters
-            of the model
+            The file path where the model parameters will be saved.
         """
         torch.save(self.gp.state_dict(), fpath)
 
@@ -272,13 +272,15 @@ class _Epik(object):
 
     def load(self, fpath, **kwargs):
         """
-        Load model parameters from a file
+        Load model parameters from a file.
 
         Parameters
         ----------
         fpath : str
-            File path for the file with the stored model
-            parameters
+            Path to the file containing the stored model parameters.
+
+        **kwargs : dict, optional
+            Additional arguments to pass to `torch.load` for loading the parameters.
         """
         params = torch.load(fpath, **kwargs)
         self.set_params(params)
@@ -286,43 +288,53 @@ class _Epik(object):
 
 class EpiK(_Epik):
     """
-    Gaussian process regression model for inference of
+    Gaussian process regression model for inferring
     sequence-function relationships from experimental measurements
     using GPyTorch and KeOps backend.
 
     Parameters
     ----------
-    kernel : epik.src.Kernel
-        Instance of a kernel class characterizing the covariance
-        between pairs of sequences to use for Gaussian process
-        regression
+    kernel : epik.kernel.Kernel
+        An instance of a kernel class that defines the covariance
+        structure between pairs of sequences for Gaussian process regression.
 
-    device : torch.device
-        PyTorch device in which to run computation
+    device : str, optional
+        The device on which computations will be performed. Options are
+        "cpu" or "cuda". Default is "cpu".
 
-    train_mean : bool (False)
-        Option to optimize the mean function of the Gaussian Process.
-        By default it assumes a zero-mean
+    train_mean : bool, optional
+        Whether to optimize the mean function of the Gaussian Process.
+        By default, it assumes a zero-mean function. Default is False.
 
-    train_noise : bool (False)
-        Option to add unknown error to the Gaussian Process. By default
-        it assumes that the provided error estimates are reliable
+    train_noise : bool, optional
+        Whether to learn an additional noise parameter for the Gaussian Process.
+        By default, it assumes that the provided error estimates are reliable.
+        Default is False.
 
-    preconditioner_size : int (0)
-        Size of the preconditioner computed to accelerate
+    preconditioner_size : int, optional
+        The size of the preconditioner used to accelerate
         conjugate gradient convergence. By default, no
-        preconditioner is computed.
+        preconditioner is computed. Default is 0.
 
-    track_progress : bool (False)
-        Option to show a progress bar for model fitting
+    cg_tol : float, optional
+        The tolerance level for the conjugate gradient solver. This parameter
+        controls the precision of the solver. Lower values result in higher
+        precision but may increase computation time. Default is 1.0.
 
-    Returns
-    -------
-    model : epik.src.model.EpiK
-        Instance of Gaussian Process model
+    num_trace_samples : int, optional
+        The number of samples used to estimate the trace of a matrix during
+        computations. Increasing this value improves the accuracy of the trace
+        estimation but increases computational cost. Default is 50.
+
+    max_n_lanczos_iterations : int, optional
+        The maximum number of Lanczos iterations to perform during matrix
+        decompositions. Higher values may improve accuracy but increase
+        computation time. Default is 50.
+
+    track_progress : bool, optional
+        Whether to display a progress bar during model fitting. Default is False.
 
     """
-
     def define_likelihood(self):
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=self.y_var, learn_additional_noise=self.train_noise
@@ -420,31 +432,32 @@ class EpiK(_Epik):
 
     def make_contrasts(self, contrast_matrix, X, calc_variance=False):
         """
-        Function to make contrasts of phenotypes across sets of genotypes
-        under the Gaussian process model
+        Compute phenotypic contrasts across sets of genotypes
+        using the Gaussian process model.
 
         Parameters
         ----------
         contrast_matrix : torch.Tensor of shape (n_contrasts, n_sequences)
-            Tensor containing the linear combination of sequences in
-            encoded by `X` to compute posterior distribution of
+            A tensor representing the linear combinations of sequences 
+            encoded by `X` to compute the posterior distribution of 
             the contrasts.
 
         X : torch.Tensor of shape (n_sequences, n_features)
-            Tensor containing the one-hot encoding of the
-            sequences to make predictions
+            A tensor containing the one-hot encoded sequences for 
+            which predictions are to be made.
 
-        calc_variance : bool (False)
-            Option to compute the posterior (co)-variance in addition
-            to the posterior mean reported by default
+        calc_variance : bool, optional (default=False)
+            If True, computes the posterior (co)-variance in addition 
+            to the posterior mean.
 
         Returns
         -------
-        output : torch.Tensor or (torch.Tensor, torch.Tensor)
-            Tensor containing phenotypic predictions at the
-            desired sequences. If `calc_variance=True`, a second
-            Tensor containing the covariance matrix of the posterior
-            of the contrasts will be returned.
+        output : torch.Tensor or tuple of torch.Tensor
+            If `calc_variance=False`, returns a tensor containing the 
+            phenotypic predictions for the desired sequences. 
+            If `calc_variance=True`, returns a tuple where the first 
+            element is the phenotypic predictions and the second element 
+            is the covariance matrix of the posterior contrasts.
         """
         t0 = time()
         self.set_evaluation_mode()
@@ -480,6 +493,34 @@ class EpiK(_Epik):
         return results
 
     def predict_mut_effects(self, seq0, alleles, calc_variance=False, max_size=100):
+        """
+        Predict the effects of single mutations on the phenotype
+        using the Gaussian process model.
+
+        Parameters
+        ----------
+        seq0 : str
+            The reference sequence for which single mutation effects
+            are to be predicted.
+
+        alleles : list of str
+            A list of possible alleles for each position in the sequence.
+
+        calc_variance : bool, optional (default=False)
+            If True, computes the posterior variance in addition to the
+            posterior mean.
+
+        max_size : int, optional (default=100)
+            The maximum number of contrasts to process in a single batch.
+            Larger values may increase memory usage.
+
+        Returns
+        -------
+        pd.DataFrame
+            A DataFrame containing the predicted effects of single mutations
+            on the phenotype. If `calc_variance=True`, the DataFrame includes
+            posterior standard deviations and 95% credible interval bounds.
+        """
         contrast_matrix = get_mut_effs_contrast_matrix(seq0, alleles)
         return self.predict_contrasts(
             contrast_matrix, alleles, calc_variance=calc_variance, max_size=max_size
@@ -488,6 +529,35 @@ class EpiK(_Epik):
     def predict_epistatic_coeffs(
         self, seq0, alleles, calc_variance=False, max_size=100
     ):
+        """
+        Compute epistatic coefficients across sets of genotypes
+        using the Gaussian process model.
+
+        Parameters
+        ----------
+        seq0 : str
+            The reference sequence for which epistatic coefficients
+            are to be predicted.
+
+        alleles : list of str
+            A list of possible alleles for each position in the sequence.
+
+        calc_variance : bool, optional (default=False)
+            If True, computes the posterior (co)-variance in addition
+            to the posterior mean.
+
+        max_size : int, optional (default=100)
+            The maximum number of contrasts to process in a single batch.
+            Larger values may increase memory usage.
+
+        Returns
+        -------
+        pd.DataFrame
+            A DataFrame containing the predicted epistatic coefficients
+            for the desired sequences. If `calc_variance=True`, the DataFrame
+            includes posterior standard deviations and 95% credible interval
+            bounds.
+        """
         contrast_matrix = get_epistatic_coeffs_contrast_matrix(seq0, alleles)
         return self.predict_contrasts(
             contrast_matrix, alleles, calc_variance=calc_variance, max_size=max_size

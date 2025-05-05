@@ -22,6 +22,24 @@ from epik.utils import (
 
 
 class SequenceKernel(Kernel):
+    """
+    A kernel class for sequence data, inheriting from the base `Kernel` class.
+
+    This class implements methods for calculating kernel matrices and 
+    Hamming distances for sequence data, with optional support for 
+    KeOps for efficient computation on large datasets.
+    
+    Parameters
+    ----------
+    n_alleles : int
+        The number of alleles in the sequence data.
+    seq_length : int
+        The length of the sequences.
+    use_keops : bool, optional
+        Whether to use KeOps for kernel computation (default is False).
+    **kwargs : dict
+        Additional keyword arguments passed to the base `Kernel` class.
+    """
     def __init__(self, n_alleles, seq_length, use_keops=False, **kwargs):
         self.n_alleles = n_alleles
         self.seq_length = seq_length
@@ -177,20 +195,25 @@ class BaseVarianceComponentKernel(SequenceKernel):
 
 class AdditiveKernel(BaseVarianceComponentKernel):
     """
-    Kernel function for additive functions on sequence space, where the
-    covariance between two sequences is linear in the Hamming distance
-    that separates them, with parameters determined by the variance
-    explained by the constant and additive components.
+    Additive kernel for functions on sequence space.
+
+    This kernel computes the covariance between two sequences as a linear function
+    of the Hamming distance separating them. The parameters are derived from the
+    variance contributions of the constant and additive components.
 
     .. math::
-        K(x, y) = c_0 + c_1 * d(x, y)
-        c_0 = \lambda_0 + \ell * (\alpha - 1) * \lambda_1
-        c_1 = -\alpha * \lambda_1
+        K(x, y) = c_0 + c_1 \cdot d(x, y)
 
-    When instantiated at a set of one-hot sequence embeddings `x1` and `x2`,
-    it returns a linear operator that performs fast matrix-vector products
-    without explicitly building the full covariance matrix.
+    where:
+        c_0 = \lambda_0 + \ell \cdot (\alpha - 1) \cdot \lambda_1
+        c_1 = -\alpha \cdot \lambda_1
 
+    Here, `\lambda_0` and `\lambda_1` are variance parameters, `\ell` is the sequence
+    length, and `\alpha` is the number of alleles.
+
+    When applied to one-hot encoded sequence embeddings `x1` and `x2`, this kernel
+    returns a linear operator that facilitates efficient matrix-vector products
+    without explicitly constructing the full covariance matrix.
     """
 
     @property
@@ -217,8 +240,9 @@ class AdditiveKernel(BaseVarianceComponentKernel):
 
 class PairwiseKernel(BaseVarianceComponentKernel):
     """
-    Kernel function for additive functions on sequence space, where the
-    covariance between two sequences is quadratic in the Hamming distance
+    Pairwise kernel for functions on sequence space.
+     
+    The covariance between two sequences is quadratic in the Hamming distance
     that separates them, with coefficients determined by the variance
     explained by the constant, additive and pairwise components.
 
@@ -278,6 +302,19 @@ class PairwiseKernel(BaseVarianceComponentKernel):
 
 
 class VarianceComponentKernel(BaseVarianceComponentKernel):
+    """
+    Variance Component Kernel for functions on sequence space.
+
+    This kernel computes the covariance between two sequences using
+    Krawtchouk polynomials.
+
+    .. math::
+        K(x, y) = \sum_{k=0}^{\ell} \lambda_k \cdot K_k(x, y)
+
+    To ensure differentiability in PyTorch, the covariance for each
+    distance class is precomputed, and a kernel interpolation approach
+    is used to compute the covariance between input sequence pairs.
+    """
     is_stationary = True
 
     def __init__(
@@ -433,6 +470,21 @@ class SiteProductKernel(SequenceKernel):
 
 
 class ExponentialKernel(SiteProductKernel):
+    """
+    Exponential Kernel for functions on sequence space.
+
+    This kernel computes the covariance between two sequences as a
+    geometrically decaying function of the Hamming distance separating them.
+
+    .. math::
+        K(x, y) = \left(\frac{1-\rho}{1 + (\alpha - 1)\rho}\right)^d
+
+    where:
+        - :math:`\rho` is a parameter controlling the decay rate.
+        - :math:`\alpha` is the number of alleles.
+        - :math:`d` is the Hamming distance between sequences :math:`x` and :math:`y`.
+
+    """
     def get_site_kernel(self):
         rho = torch.exp(self.theta)
         v = (1 - rho) / (1 + (self.n_alleles - 1) * rho)
@@ -491,6 +543,21 @@ class ExponentialKernel(SiteProductKernel):
 
 
 class ConnectednessKernel(SiteProductKernel):
+    """
+    Connectedness Kernel for functions on sequence space.
+
+    This kernel computes the covariance between two sequences as a
+    geometrically decaying function of the Hamming distance separating them.
+
+    .. math::
+        K(x, y) = \prod_p^{\ell}\frac{1-\rho_p}{1 + (\alpha - 1)\rho_p}
+
+    where:
+        - :math:`\rho_p` is a parameter controlling the decay rate of site :math:`p`.
+        - :math:`\alpha` is the number of alleles.
+        - :math:`\ell` is the sequence length.
+
+    """
     def calc_theta0(self):
         if self.theta0 is None:
             q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
@@ -536,6 +603,23 @@ class ConnectednessKernel(SiteProductKernel):
 
 
 class JengaKernel(SiteProductKernel):
+    """
+    Jenga Kernel for functions on sequence space.
+
+    This kernel computes the covariance between two sequences as the product 
+    of allele- and site-specific factors at the alleles where they differ.
+
+    .. math::
+        K(x, y) = \prod_{p: x_p \neq y_p} 
+        \sqrt{\frac{1-\rho_p}{1 + \frac{1-\pi_p^{x_p}}{\pi_p^{x_p}}\rho_p}}
+        \sqrt{\frac{1-\rho_p}{1 + \frac{1-\pi_p^{y_p}}{\pi_p^{y_p}}\rho_p}}
+
+    where:
+        - :math:`\rho_p` is a parameter controlling the decay rate at site :math:`p`.
+        - :math:`\pi_p^{x_p}` and :math:`\pi_p^{y_p}` are site and allele specific probabilities.
+        - :math:`\ell` is the sequence length.
+    """
+
     def calc_theta0(self):
         if self.theta0 is None:
             q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
@@ -588,6 +672,23 @@ class JengaKernel(SiteProductKernel):
 
 
 class GeneralProductKernel(SiteProductKernel):
+    """
+    General Product Kernel for sequence data.
+
+    This kernel computes the covariance between two sequences as the product
+    of site-specific kernels, where each site kernel is parameterized by the
+    Cholesky factor of a correlation matrix.
+
+    .. math::
+        K(x, y) = \prod_{p=1}^\ell K_p(x_p, y_p),
+
+    where:
+    .. math::
+        K_p = L L^T,
+
+    and :math:`L` is the Cholesky factor of the correlation matrix, 
+    parameterized using the LKJ transform.
+    """
     is_stationary = True
 
     def __init__(self, n_alleles, seq_length, theta0=None, **kwargs):
