@@ -1,4 +1,3 @@
-import gc
 import sys
 
 import numpy as np
@@ -13,7 +12,7 @@ from torch.distributions import Wishart, Beta
 from torch.nn import Parameter
 from torch.linalg import cholesky
 
-from epik.src.utils import (
+from epik.utils import (
     HammingDistanceCalculator,
     KrawtchoukPolynomials,
     inner_product,
@@ -604,8 +603,8 @@ class GeneralProductKernel(SiteProductKernel):
             C = (1 - q) * torch.eye(self.n_alleles) + q * torch.ones(
                 (self.n_alleles, self.n_alleles)
             )
-            df = 20.
-            Ls = [cholesky(cov2corr(Wishart(torch.Tensor([df]), C).sample()[0] / df))
+            df = 21.
+            Ls = [cholesky(cov2corr(Wishart(torch.Tensor([df]), C).sample()[0]))
                   for _ in range(self.seq_length)]
             theta0 = torch.stack([self.theta_to_L._inverse(L)
                                   for L in Ls], axis=0)

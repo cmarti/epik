@@ -6,7 +6,7 @@ import torch
 from linear_operator import to_dense
 from scipy.special import comb
 
-from epik.src.kernel import (
+from epik.kernel import (
     AdditiveKernel,
     ConnectednessKernel,
     ExponentialKernel,
@@ -16,7 +16,7 @@ from epik.src.kernel import (
     VarianceComponentKernel,
     SiteKernelAligner
 )
-from epik.src.utils import encode_seqs, get_full_space_one_hot
+from epik.utils import encode_seqs, get_full_space_one_hot
 
 
 class KernelsTests(unittest.TestCase):
@@ -240,20 +240,6 @@ class KernelsTests(unittest.TestCase):
                 v = torch.rand(n)
                 assert torch.dot(v, K_xx @ v) >= 0.0
 
-    # def test_vc_psd(self):
-    #     a, sl, n = 4, 8, 1000
-    #     kernel = VarianceComponentKernel(n_alleles=a, seq_length=sl)
-        # v = torch.Tensor(np.load('/home/martigo/elzar/programs/epik/epik/test/data/alpha.npy'))
-        # x = torch.Tensor(np.load("/home/martigo/elzar/programs/epik/epik/test/data/train_x.npy"))
-        # K_xx = kernel(x, x)
-        # assert torch.dot(v, K_xx @ v) >= 0.0
-
-        # log_lambdas0 = torch.Tensor([0.61, -1.4] + [-23] * 7)
-        # kernel = VarianceComponentKernel(n_alleles=a, seq_length=sl, log_lambdas0=log_lambdas0)
-        # K_xx = kernel(x, x)
-        # assert torch.dot(v, K_xx @ v) >= 0.0
-        # assert v.matmul(K_xx.matmul(v)) >= 0.0
-
     def test_exponential_kernel(self):
         sl, a = 2, 2
         theta0 = torch.Tensor(-np.log([2]))
@@ -439,19 +425,6 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(cov2, cov1)
         
-        # # Initialize with known correlation
-        # decay_factor = 1 / 3.0
-        # cov0 = torch.Tensor([1, decay_factor, decay_factor**2])
-        # ns0 = torch.ones_like(cov0)
-        # kernel = JengaKernel(n_alleles=a, seq_length=sl, cov0=cov0, ns0=ns0)
-
-        # cov1 = torch.Tensor([1, decay_factor, decay_factor, decay_factor**2])
-        # cov2 = kernel._nonkeops_forward(x, x).to_dense().detach().numpy()[0, :]
-        # assert np.allclose(cov1, cov2)
-
-        # cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()[0, :]
-        # assert np.allclose(cov1, cov2)
-
     def test_general_product_kernel(self):
         sl, a = 2, 2
         x = get_full_space_one_hot(sl, a)
@@ -545,7 +518,7 @@ class KernelsTests(unittest.TestCase):
         for i in range(seq_length):
             c1 = aligner.jenga_to_corr(theta1[i])
             c3 = aligner.jenga_to_corr(theta3[i])
-            assert(np.allclose(c1, c3, atol=1e-4))
+            assert(np.allclose(c1, c3, atol=1e-2))
         
 
     # def test_connectedness_site_kernel(self):

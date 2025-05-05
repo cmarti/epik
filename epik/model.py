@@ -5,7 +5,6 @@ from copy import deepcopy
 from time import time
 from tqdm import tqdm
 
-from torch.optim.lr_scheduler import ReduceLROnPlateau, ExponentialLR
 from torch.optim import Adam, SGD
 from gpytorch.models import ApproximateGP, ExactGP
 from gpytorch.means import ZeroMean, ConstantMean
@@ -19,13 +18,14 @@ from gpytorch.variational import (
 from gpytorch.settings import (
     num_likelihood_samples,
     max_preconditioner_size,
+    max_lanczos_quadrature_iterations,
     fast_pred_var,
     skip_posterior_variances,
     cg_tolerance,
     num_trace_samples,
 )
 
-from epik.src.utils import (
+from epik.utils import (
     get_tensor,
     to_numpy,
     split_training_test,
@@ -104,7 +104,8 @@ class _Epik(object):
         train_noise=False,
         preconditioner_size=0,
         cg_tol=1.0,
-        num_trace_samples=20,
+        num_trace_samples=50,
+        max_n_lanczos_iterations=50,
         track_progress=False,
     ):
         self.kernel = kernel
@@ -115,6 +116,7 @@ class _Epik(object):
         self.preconditioner_size = preconditioner_size
         self.cg_tol = cg_tol
         self.num_trace_samples = num_trace_samples
+        self.max_n_lanczos_iterations = max_n_lanczos_iterations
         self.track_progress = track_progress
         self.fit_time = 0
         self.training_history = []
@@ -173,7 +175,12 @@ class _Epik(object):
         self.define_gp()
 
     def calc_mll(self):
-        return self.mll_layer(self.gp(self.X), self.y)
+        with max_preconditioner_size(self.preconditioner_size), cg_tolerance(
+            self.cg_tol
+        ), num_trace_samples(self.num_trace_samples), max_lanczos_quadrature_iterations(
+            self.max_n_lanczos_iterations
+        ):
+            return self.mll_layer(self.gp(self.X), self.y)
 
     def training_step(self):
         self.optimizer.zero_grad()
@@ -191,30 +198,37 @@ class _Epik(object):
             self.max_mll = self.mll
             self.max_params = deepcopy(self.params)
 
-    def fit(self, n_iter=100, learning_rate=0.1,
-            optimizer="Adam", lr_decay=False, gamma=0.8, 
-            patience=10):
+    def fit(self, n_iter=100, learning_rate=0.1, optimizer="Adam"):
         """
-        Function to optimize model hyperparamenters by maximizing
-        the marginal likelihood. This includes any kernel parameter,
-        as well as the optional mean and additional noise parameters.
+        Optimize model hyperparameters by maximizing the marginal likelihood.
+
+        This process adjusts kernel parameters, as well as optional mean and 
+        additional noise parameters, to improve the model's performance.
 
         Parameters
         ----------
+        n_iter : int, optional (default=100)
+            Number of iterations for the optimization process.
 
+        learning_rate : float, optional (default=0.1)
+            Learning rate for the optimizer.
+
+        optimizer : str, optional (default="Adam")
+            Optimizer to use for hyperparameter optimization. Options are 
+            "Adam" or "SGD".
+
+        Raises
+        ------
+        ValueError
+            If the specified optimizer is not recognized.
         """
         if optimizer == "Adam":
             self.optimizer = Adam(self.gp.parameters(), lr=learning_rate)
-            min_lr = 1e-4
         elif optimizer == "SGD":
             self.optimizer = SGD(self.gp.parameters(), lr=learning_rate)
-            min_lr = 1e-7
         else:
             raise ValueError("Optimizer {} not recognized".format(optimizer))
-        if lr_decay:
-            self.scheduler = ReduceLROnPlateau(
-                self.optimizer, mode="min", factor=gamma, patience=patience, min_lr=min_lr
-            )
+        
         self.set_training_mode()
 
         t0 = time()
@@ -222,43 +236,24 @@ class _Epik(object):
         if n_iter > 1 and self.track_progress:
             pbar = tqdm(pbar, desc="Optimizing hyperparameters")
 
-        with max_preconditioner_size(self.preconditioner_size), cg_tolerance(self.cg_tol), num_trace_samples(self.num_trace_samples):
-            for _ in pbar:
+        for _ in pbar:
+            try:
+                self.training_step()
+            except RuntimeError:
+                self.kernel.use_keops = True
                 self.training_step()
 
-                if n_iter > 1:
-                    self.report_progress(pbar)
+            if n_iter > 1:
+                self.report_progress(pbar)
 
-                if lr_decay:
-                    self.scheduler.step(-self.mll)
-                # self.scheduler.step()
-
-            # def closure():
-            #     self.optimizer.zero_grad()
-            #     self.mll = self.calc_mll()
-            #     loss = -self.mll
-            #     return loss
-
-            # self.optimizer = FullBatchLBFGS(self.gp.parameters(),lr=learning_rate)
-            # loss = closure()
-            # loss.backward()
-            # pbar = range(n_iter)
-            # pbar = tqdm(pbar, desc="Optimizing hyperparameters")
-            # for _ in pbar:
-            #     if n_iter > 1:
-            #         self.report_progress(pbar)
-            #     options = {'closure': closure, 'current_loss': loss, 'max_ls': 10}
-            #     loss, grad, _, _, _, _, _, fail = self.optimizer.step(options)
-
-            #     if fail:
-            #         print('Convergence reached!')
-            #         break
-
-            self.fit_time = time() - t0
+        self.fit_time = time() - t0
 
     @property
     def history(self):
         return pd.DataFrame({"mll": self.training_history})
+
+    def get_params(self):
+        return self.gp.state_dict()
 
     def save(self, fpath):
         """
@@ -272,18 +267,8 @@ class _Epik(object):
         """
         torch.save(self.gp.state_dict(), fpath)
 
-    def save_max_evidence(self, fpath):
-        """
-        Store model parameters for future use
-
-        Parameters
-        ----------
-        fpath : str
-            File path for the file to store the parameters
-            of the model
-        """
-        if hasattr(self, "max_params"):
-            torch.save(self.max_params, fpath)
+    def set_params(self, params):
+        self.gp.load_state_dict(params)
 
     def load(self, fpath, **kwargs):
         """
@@ -295,7 +280,8 @@ class _Epik(object):
             File path for the file with the stored model
             parameters
         """
-        self.gp.load_state_dict(torch.load(fpath, **kwargs))
+        params = torch.load(fpath, **kwargs)
+        self.set_params(params)
 
 
 class EpiK(_Epik):
@@ -479,7 +465,10 @@ class EpiK(_Epik):
         n = contrast_matrix.shape[0]
         n_chunks = int(n / max_size) + 1
         results = []
-        for i in tqdm(range(n_chunks), total=n_chunks):
+        chunks = range(n_chunks)
+        if self.track_progress:
+            chunks = tqdm(chunks, total=n_chunks)
+        for i in chunks:
             df = contrast_matrix.iloc[i * max_size : (i + 1) * max_size, :]
             seqs, labels = df.columns, df.index
             X = encode_seqs(seqs, alphabet=alleles)
@@ -542,6 +531,39 @@ class EpiK(_Epik):
         return y
 
     def simulate_dataset(self, X, sigma=0, ptrain=0.8):
+        """
+        Simulate a dataset by sampling random sequence-function relationships 
+        from the prior and splitting the data into training and test sets.
+
+        Parameters
+        ----------
+        X : torch.Tensor of shape (n_sequence, n_features)
+            Tensor containing the one-hot encoding of the sequences 
+            to make predictions.
+
+        sigma : float, optional (default=0)
+            Standard deviation of the noise to add to the training data. 
+            If `sigma=0`, no noise is added.
+
+        ptrain : float, optional (default=0.8)
+            Proportion of the data to include in the training set. 
+            The remaining data will be used as the test set.
+
+        Returns
+        -------
+        tuple
+            A tuple containing:
+            - train_x : torch.Tensor
+            Training set input features.
+            - train_y : torch.Tensor
+            Training set target values.
+            - test_x : torch.Tensor
+            Test set input features.
+            - test_y : torch.Tensor
+            Test set target values.
+            - train_y_var : torch.Tensor
+            Variance of the training set target values.
+        """
         y_true = self.simulate(X, n=1).flatten()
         y_true = y_true / y_true.std()
 

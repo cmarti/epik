@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epik"
+version = "0.1.0"
+description = "Epistatic Kernels for GPU-accelerated Gaussian process regression"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Carlos Martí-Gómez", email = "martigo@cshl.edu" }
+]
+dependencies = [
+    "tqdm",
+    "numpy",
+    "pandas",
+    "torch",
+    "gpytorch>=1.11",
+    "pykeops",
+]
+requires-python = ">=3.8"
+keywords = [
+    "genotype-phenotype maps",
+    "fitness landscape",
+    "gaussian process"
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+
+[project.scripts]
+EpiK = "epik.bin.EpiK:main"
+
+[tool.setuptools]
+packages = ["epik"]
+
+[project.urls]
+Documentation = "https://epik.readthedocs.io"
+Repository = "https://github.com/cmarti/epik.git"
