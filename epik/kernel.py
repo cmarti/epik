@@ -882,6 +882,56 @@ class SiteKernelAligner(object):
         return np.vstack(thetas)
 
 
+class FactorAnalysisKernel(Kernel):
+    def __init__(self, n_alleles, seq_length, ndim, **kwargs):
+        self.n_alleles = n_alleles
+        self.seq_length = seq_length
+        self.ndim = ndim
+        self.nfeatures = seq_length * n_alleles
+        super().__init__(**kwargs)
+
+        q_raw0 = torch.normal(0, 1, size=(self.nfeatures, self.ndim))
+        q_raw = Parameter(q_raw0, requires_grad=True)
+
+        log_lambdas0_sqrt0 = torch.linspace(0, -2, self.ndim).unsqueeze(0)
+        log_lambdas0_sqrt = Parameter(log_lambdas0_sqrt0, requires_grad=True)
+        log_sigma2 = Parameter(torch.Tensor([0.]), requires_grad=True)
+
+        self.register_parameter(name="log_lambdas_sqrt", parameter=log_lambdas0_sqrt)
+        self.register_parameter(name="q_raw", parameter=q_raw)
+        self.register_parameter(name="log_sigma2", parameter=log_sigma2)
+
+    @property
+    def lambdas_sqrt(self):
+        return(torch.exp(self.log_lambdas_sqrt))
+
+    @property
+    def q(self):
+        return(torch.linalg.qr(self.q_raw)[0])
+    
+    @property
+    def sigma2(self):
+        return torch.exp(self.log_sigma2)
+
+    def forward(self, x1, x2, diag=False, **kwargs):
+        Q = self.q * self.lambdas_sqrt
+        v1 = x1 @ Q
+        v2 = x2 @ Q
+
+        if diag:
+            min_size = min(x1.shape[0], x2.shape[0])
+            kernel = self.sigma2 * torch.ones((min_size, ))
+            
+        else:
+            # Equivalent to squared distance in the linear subspace
+            z1 = torch.sum(torch.square(v1), axis=1).unsqueeze(1)
+            z2 = torch.sum(torch.square(v2), axis=1).unsqueeze(0)
+            kernel = torch.exp(self.log_sigma2 + 2 * v1 @ v2.T - z1 - z2)
+
+        return kernel
+
+
+
 # class SiteKernel(SequenceKernel):
 #     def __init__(self, n_alleles, site, fixed_theta=False, **kwargs):
 #         self.site = site
