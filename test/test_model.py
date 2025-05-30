@@ -19,6 +19,7 @@ from epik.kernel import (
     JengaKernel,
     PairwiseKernel,
     VarianceComponentKernel,
+    FactorAnalysisKernel,
 )
 from epik.model import EpiK
 from epik.settings import BIN_DIR, KERNELS
@@ -130,11 +131,12 @@ class ModelsTests(unittest.TestCase):
 
     def test_contrast(self):
         # Define target sequences and contrast
-        test_x = torch.tensor([[1, 0, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 3,
-                               [0, 1, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 3,
-                               [1, 0, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 3,
-                               [0, 1, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 3,])
+        test_x = torch.tensor([[1, 0, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 2,
+                               [0, 1, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 2,
+                               [1, 0, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 2,
+                               [0, 1, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 2,])
         contrast_matrix = torch.tensor([[1, -1, -1, 1]])
+        print(contrast_matrix.shape)
         
         # Define model
         model = EpiK(self.kernel, track_progress=False)
@@ -272,6 +274,33 @@ class ModelsTests(unittest.TestCase):
                     "--calc_variance",
                 ]
                 check_call(cmd)
+    
+    def test_FA(self):
+        # Simulate data
+        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
+        model = EpiK(kernel, track_progress=True)
+        y = model.simulate(self.X_train).flatten()
+        q_true = kernel.q.detach().numpy()
+        lda_true = kernel.lambdas_sqrt.detach().numpy()
+
+        # Infer 1
+        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
+        model = EpiK(kernel, track_progress=True)
+        model.set_data(self.X_train, y, self.y_var)
+        model.fit(n_iter=2000, learning_rate=0.01)
+        q1 = kernel.q
+        lda1 = kernel.lambdas_sqrt
+
+        # Infer 2
+        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
+        model = EpiK(kernel, track_progress=True)
+        model.set_data(self.X_train, y, self.y_var)
+        model.fit(n_iter=2000, learning_rate=0.01)
+        q2 = kernel.q
+        lda2 = kernel.lambdas_sqrt
+        print(lda_true, lda1, lda2)
+        # print(q1[:5] @ q1[:5].T, q2[:5] @ q2[:5].T)
+
     
         
 if __name__ == '__main__':
