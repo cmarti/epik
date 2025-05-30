@@ -6,26 +6,31 @@ API Reference
 Model
 -----
 
-.. autoclass:: epik.src.model.EpiK
-    :members: fit, predict, make_contrasts
-    :inherited-members: set_data, simulate, save, load
+.. autoclass:: epik.model.EpiK
+    :members: set_data, simulate, fit, predict, make_contrasts, 
+        predict_mut_effects, predict_epistatic_coeffs, save, load
+
 
 Kernels
 -------
 
-.. autoclass:: epik.src.kernel.AdditiveKernel
+.. autoclass:: epik.kernel.AdditiveKernel
     :members: forward
-.. autoclass:: epik.src.kernel.PairwiseKernel
+.. autoclass:: epik.kernel.PairwiseKernel
     :members: forward
-.. autoclass:: epik.src.kernel.VarianceComponentKernel
-.. autoclass:: epik.src.kernel.ExponentialKernel
-.. autoclass:: epik.src.kernel.ConnectednessKernel
-.. autoclass:: epik.src.kernel.JengaKernel
-.. autoclass:: epik.src.kernel.GeneralProductKernel
-.. autoclass:: epik.src.kernel.AdditiveHeteroskedasticKernel
+.. autoclass:: epik.kernel.VarianceComponentKernel
+    :members: forward
+.. autoclass:: epik.kernel.ExponentialKernel
+    :members: forward
+.. autoclass:: epik.kernel.ConnectednessKernel
+    :members: forward, get_delta
+.. autoclass:: epik.kernel.JengaKernel
+    :members: forward, get_delta, get_mutation_delta
+.. autoclass:: epik.kernel.GeneralProductKernel
+    :members: forward, get_delta
 
 Utilities
 ----------
 
-.. autofunction:: epik.src.utils.split_training_test
-.. autofunction:: epik.src.utils.encode_seqs
+.. autofunction:: epik.utils.split_training_test
+.. autofunction:: epik.utils.encode_seqs

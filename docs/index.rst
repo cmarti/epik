@@ -2,46 +2,38 @@
 EpiK: Epistatic Kernels for GPU-accelerated Gaussian process regression
 =======================================================================
 
-EpiK is a python library to infer sequence-function relationships using Gaussian 
-Process models. EpiK builts on top of `GPyTorch <https://docs.gpytorch.ai>`_ and `KeOps <https://www.kernel-operations.io>`_
-to enable fitting these models on large datasets comprising hundreds of thousands to millions
-of sequence measurements. We provide a series of kernel functions whose parameters have
-clear biological interpretations and provide better predictive performance
-over typical kernel functions on continuous spaces. 
+`EpiK` is a Python library designed to infer sequence-function relationships using Gaussian process models. Built on top of `GPyTorch <https://docs.gpytorch.ai>`_ and `KeOps <https://www.kernel-operations.io>`_, `EpiK` enables fitting these models to large datasets containing hundreds of thousands to millions of sequence measurements.
+
+The library provides a series of highly interpretable kernel functions, parameterized by how specific mutations affect the predictability of other mutations. These parameters can be inferred from data through evidence maximization and visualized as heatmaps to guide the exploration of complex sequence-function relationships. For example, the heatmaps below illustrate how amino acid substitutions at each of the 28 positions in the dataset influence the predictability of mutations at other positions.
+
+.. image:: figures/decay_factors.png
+    :width: 100%
+
+`EpiK` harnesses the power of Gaussian process models alongside novel interpretable kernels to analyze large experimental datasets for studying complex sequence-function relationships while rigorously quantifying uncertainty.
+
+Key features include:
+
+- Inference of kernel hyperparameters that determine how specific mutations impact the predictability of other mutations.
+
+- Phenotypic predictions for unobserved sequences.
+
+- Estimation of mutational effects and epistatic coefficients across diverse genetic backgrounds.
+
+- Reconstruction of complete combinatorial genotype-phenotype maps for subsets of positions in specific genetic backgrounds, enabling investigation into how multiple mutations interact.
 
 
-EpiK is written for Python 3 and is provided under an MIT open source license.
-The documentation provided here is meant guide users through the basic application of the 
-implemented models and the interpretation of the inferred hyperparameters.
+Citation
+========
 
-Please do not hesitate to contact us with any questions or suggestions for improvements.
-
-* For technical assistance or to report bugs, please contact Carlos Marti (`Email: martigo@cshl.edu <martigo@cshl.edu>`_, `Twitter: @cmarti_ga <https://twitter.com/cmarti_ga>`_).
-
-* For more general correspondence, please contact David McCandlish (`Email: mccandlish@cshl.edu <mccandlish@cshl.edu>`_, `Twitter: @TheDMMcC <https://twitter.com/TheDMMcC>`_).
+- Juannan Zhou, Carlos Martí-Gómez, Samantha Petti, David M. McCandlish. 
+  Learning sequence-function relationships with scalable, interpretable Gaussian processes (2025)
+  In preparation.
 
 
 .. toctree::
-    :maxdepth: 1
+    :maxdepth: 2
     :caption: Table of Contents
 
     installation
-    tutorial
+    usage/tutorial.ipynb
     api 
-
-References
-==========
-
-.. [#mem] `Zhou J and McCandlsih DM.
-    Minimum epistasis interpolation for sequence-function relationships (2020)
-    <https://www.nature.com/articles/s41467-020-15512-5>`_
-
-.. [#vc] `Zhou J, Wong MS, Chen WC, Krainer AR, Kinney JB, McCandlsih DM.
-    Higher order epistasis and phenotypic prediction (2022) 
-    <https://www.pnas.org/doi/full/10.1073/pnas.2204233119>`_
-
-
-Links
-=====
-
-- `McCandlish Lab <https://www.cshl.edu/research/faculty-staff/david-mccandlish/#research>`_
