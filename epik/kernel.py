@@ -194,7 +194,7 @@ class BaseVarianceComponentKernel(SequenceKernel):
 
 
 class AdditiveKernel(BaseVarianceComponentKernel):
-    """
+    r"""
     Additive kernel for functions on sequence space.
 
     This kernel computes the covariance between two sequences as a linear function
@@ -205,13 +205,17 @@ class AdditiveKernel(BaseVarianceComponentKernel):
         K(x, y) = c_0 + c_1 \cdot d(x, y)
 
     where:
+    
+    .. math::
         c_0 = \lambda_0 + \ell \cdot (\alpha - 1) \cdot \lambda_1
+        
+    .. math::
         c_1 = -\alpha \cdot \lambda_1
 
-    Here, `\lambda_0` and `\lambda_1` are variance parameters, `\ell` is the sequence
-    length, and `\alpha` is the number of alleles.
+    Here, :math:`\lambda_0` and :math:`\lambda_1` are variance parameters, :math:`\ell` is the sequence
+    length, and :math:`\alpha` is the number of alleles.
 
-    When applied to one-hot encoded sequence embeddings `x1` and `x2`, this kernel
+    When applied to one-hot encoded sequence embeddings :math:`x_1` and :math:`x_2`, this kernel
     returns a linear operator that facilitates efficient matrix-vector products
     without explicitly constructing the full covariance matrix.
     """
@@ -247,7 +251,7 @@ class PairwiseKernel(BaseVarianceComponentKernel):
     explained by the constant, additive and pairwise components.
 
     .. math::
-        K(x, y) = c_0 + c_1 * d(x, y) + c_2 * d(x, y)^2
+        K(x, y) = c_0 + c_1 \cdot d(x, y) + c_2 \cdot d(x, y)^2
 
     These coefficients result from expanding the Krawtchouk polynomials
     of order 2, as in the additive kernel, and allows computing the covariance
@@ -461,27 +465,53 @@ class SiteProductKernel(SequenceKernel):
         return kernel
 
     def get_delta(self):
+        """
+        Compute the decay factors of the kernel.
+
+        The decay factors represent the percentage decrease in predictability 
+        when introducing a specific mutation.
+
+        Returns
+        -------
+        delta : torch.Tensor
+            A tensor containing the decay factors.
+        """
         delta = self.theta_to_delta(self.theta, n_alleles=self.n_alleles)
         return delta
 
     def get_mutation_delta(self):
+        """
+        Compute the mutation-specific decay factors of the kernel.
+
+        The decay factors represent the percentage decrease in predictability 
+        when introducing a specific mutation.
+
+        Returns
+        -------
+        delta : torch.Tensor
+            A tensor containing the decay factors for each possible mutation.
+        """
         Ks = self.get_site_kernels()
         return 1 - Ks
 
 
 class ExponentialKernel(SiteProductKernel):
-    """
+    r"""
     Exponential Kernel for functions on sequence space.
 
     This kernel computes the covariance between two sequences as a
     geometrically decaying function of the Hamming distance separating them.
 
+
     .. math::
-        K(x, y) = \left(\frac{1-\rho}{1 + (\alpha - 1)\rho}\right)^d
+        K(x, y) = \left( \frac{ 1-\rho }{ 1 + (\alpha - 1)\rho } \right)^d
 
     where:
+    
         - :math:`\rho` is a parameter controlling the decay rate.
+        
         - :math:`\alpha` is the number of alleles.
+        
         - :math:`d` is the Hamming distance between sequences :math:`x` and :math:`y`.
 
     """
@@ -543,18 +573,23 @@ class ExponentialKernel(SiteProductKernel):
 
 
 class ConnectednessKernel(SiteProductKernel):
-    """
+    r"""
     Connectedness Kernel for functions on sequence space.
 
-    This kernel computes the covariance between two sequences as a
-    geometrically decaying function of the Hamming distance separating them.
+    This kernel computes the covariance between two sequences where
+    mutations at different sites have different effects on the 
+    predictability of other mutations
+    
 
     .. math::
         K(x, y) = \prod_p^{\ell}\frac{1-\rho_p}{1 + (\alpha - 1)\rho_p}
 
     where:
+    
         - :math:`\rho_p` is a parameter controlling the decay rate of site :math:`p`.
+        
         - :math:`\alpha` is the number of alleles.
+        
         - :math:`\ell` is the sequence length.
 
     """
@@ -603,7 +638,7 @@ class ConnectednessKernel(SiteProductKernel):
 
 
 class JengaKernel(SiteProductKernel):
-    """
+    r"""
     Jenga Kernel for functions on sequence space.
 
     This kernel computes the covariance between two sequences as the product 
@@ -615,8 +650,11 @@ class JengaKernel(SiteProductKernel):
         \sqrt{\frac{1-\rho_p}{1 + \frac{1-\pi_p^{y_p}}{\pi_p^{y_p}}\rho_p}}
 
     where:
+    
         - :math:`\rho_p` is a parameter controlling the decay rate at site :math:`p`.
+        
         - :math:`\pi_p^{x_p}` and :math:`\pi_p^{y_p}` are site and allele specific probabilities.
+        
         - :math:`\ell` is the sequence length.
     """
 
@@ -683,6 +721,7 @@ class GeneralProductKernel(SiteProductKernel):
         K(x, y) = \prod_{p=1}^\ell K_p(x_p, y_p),
 
     where:
+    
     .. math::
         K_p = L L^T,
 
