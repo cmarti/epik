@@ -1,6 +1,6 @@
 # Epistatic Kernels for GPU-accelerated Gaussian process regression
 
-`EpiK` is a Python library designed to infer sequence-function relationships using Gaussian process models. Built on top of `GPyTorch <https://docs.gpytorch.ai>`_ and `KeOps <https://www.kernel-operations.io>`_, `EpiK` enables fitting these models to large datasets containing hundreds of thousands to millions of sequence measurements.
+`EpiK` is a Python library designed to infer sequence-function relationships using Gaussian process models. Built on top of [GPyTorch](https://docs.gpytorch.ai) and [KeOps](https://www.kernel-operations.io), `EpiK` enables fitting these models to large datasets containing hundreds of thousands to millions of sequence measurements.
 
 You can find more detailed documentation and tutorials [here](https://epik.readthedocs.io)
 
