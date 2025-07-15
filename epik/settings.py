@@ -7,4 +7,5 @@ BIN_DIR = join(BASE_DIR, 'bin')
 
 KERNELS = ['Additive', 'Pairwise', 'VC', 
            'Exponential', 'Connectedness', 'Jenga', 
-           'GeneralProduct']
+           'GeneralProduct', 'LinearEmbedding',
+           'FactorAnalysis']

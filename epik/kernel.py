@@ -772,7 +772,8 @@ class GeneralProductKernel(SiteProductKernel):
 
 
 def get_kernel(
-    kernel, n_alleles, seq_length, theta0=None, log_var0=None, log_lambdas0=None
+    kernel, n_alleles, seq_length, theta0=None, log_var0=None, log_lambdas0=None,
+    ndim=3,
 ):
     kernels = {
         "Additive": AdditiveKernel,
@@ -782,6 +783,8 @@ def get_kernel(
         "Connectedness": ConnectednessKernel,
         "Jenga": JengaKernel,
         "GeneralProduct": GeneralProductKernel,
+        "LinearEmbedding": LinearEmbeddingKernel,
+        "FactorAnalysis": FactorAnalysisKernel
     }
     kernel = kernels[kernel](
         n_alleles,
@@ -789,6 +792,7 @@ def get_kernel(
         theta0=theta0,
         log_var0=log_var0,
         log_lambdas0=log_lambdas0,
+        ndim=ndim,
     )
     return kernel
 
@@ -922,7 +926,7 @@ class SiteKernelAligner(object):
 
 
 class FactorAnalysisKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, ndim, **kwargs):
+    def __init__(self, n_alleles, seq_length, ndim, add_diag=False, **kwargs):
         self.n_alleles = n_alleles
         self.seq_length = seq_length
         self.ndim = ndim
@@ -932,7 +936,7 @@ class FactorAnalysisKernel(Kernel):
         q_raw0 = torch.normal(0, 1, size=(self.nfeatures, self.ndim))
         q_raw = Parameter(q_raw0, requires_grad=True)
 
-        log_lambdas0_sqrt0 = torch.linspace(0, -2, self.ndim).unsqueeze(0)
+        log_lambdas0_sqrt0 = torch.linspace(0, -2, self.ndim+1).unsqueeze(0)
         log_lambdas0_sqrt = Parameter(log_lambdas0_sqrt0, requires_grad=True)
         log_sigma2 = Parameter(torch.Tensor([0.]), requires_grad=True)
 
@@ -940,17 +944,39 @@ class FactorAnalysisKernel(Kernel):
         self.register_parameter(name="q_raw", parameter=q_raw)
         self.register_parameter(name="log_sigma2", parameter=log_sigma2)
 
+        self.add_diag = add_diag
+        if add_diag:
+            log_diag_sqrt0 = torch.normal(0, 1, size=(self.nfeatures,))
+            log_diag_sqrt = Parameter(log_diag_sqrt0, requires_grad=True)
+            self.register_parameter(name="log_diag_sqrt", parameter=log_diag_sqrt)
+
     @property
     def lambdas_sqrt(self):
         return(torch.exp(self.log_lambdas_sqrt))
 
     @property
     def q(self):
-        return(torch.linalg.qr(self.q_raw)[0])
+        ones = torch.ones(size=(self.nfeatures, 1), device=self.q_raw.device)
+        q_raw = torch.hstack([ones, self.q_raw])
+        return(torch.linalg.qr(q_raw)[0])
     
     @property
     def sigma2(self):
         return torch.exp(self.log_sigma2)
+    
+    def get_D_values(self):
+        return torch.exp(2 * self.log_diag_sqrt)
+
+    def get_D(self):
+        D = torch.diag(torch.exp(2 * self.log_diag_sqrt))
+        return(D)
+
+    def get_M(self):
+        Q = self.q * self.lambdas_sqrt
+        M = Q @ Q.T
+        if self.add_diag:
+            M = M + self.get_D()
+        return(M)
 
     def forward(self, x1, x2, diag=False, **kwargs):
         Q = self.q * self.lambdas_sqrt
@@ -959,13 +985,91 @@ class FactorAnalysisKernel(Kernel):
 
         if diag:
             min_size = min(x1.shape[0], x2.shape[0])
-            kernel = self.sigma2 * torch.ones((min_size, ))
-            
+            z1 = torch.sum(torch.square(v1[:min_size, :]), axis=1)
+            z2 = torch.sum(torch.square(v2[:min_size, :]), axis=1)
+            z = (v1[:min_size, :] * v2[:min_size, :]).sum(axis=1)
+            distance = 2 * z - z1 - z2
+
+            if self.add_diag:
+                diag_values = self.get_D_values()
+                z1 = torch.sum(x1[:min_size] * diag_values, axis=1)
+                z2 = torch.sum(x2[:min_size] * diag_values, axis=1)
+                z = (x1[:min_size, :] * x2[:min_size, :] * diag_values).sum(axis=1)
+                distance += 2 * z - z1 - z2
+
+            kernel = torch.exp(self.log_sigma2 + distance)
+
         else:
             # Equivalent to squared distance in the linear subspace
+            # sigma2 * exp(-(x-y)^T Q \lambda Q^T (x-y))
             z1 = torch.sum(torch.square(v1), axis=1).unsqueeze(1)
             z2 = torch.sum(torch.square(v2), axis=1).unsqueeze(0)
-            kernel = torch.exp(self.log_sigma2 + 2 * v1 @ v2.T - z1 - z2)
+            distance = 2 * v1 @ v2.T - z1 - z2
+            
+            if self.add_diag:
+                diag_values = self.get_D_values().unsqueeze(0)
+                z1 = torch.sum(x1 * diag_values, axis=1).unsqueeze(1)
+                z2 = torch.sum(x2 * diag_values, axis=1).unsqueeze(0)
+                distance += 2 * (x1 * diag_values) @ x2.T - z1 - z2
+
+            kernel = torch.exp(self.log_sigma2 + distance)
+
+        return kernel
+    
+
+class LinearEmbeddingKernel(Kernel):
+    def __init__(self, n_alleles, seq_length, **kwargs):
+        self.n_alleles = n_alleles
+        self.seq_length = seq_length
+        self.nfeatures = seq_length * n_alleles
+        self.theta_dim = int(comb(self.nfeatures, 2))
+        self.theta_to_L = CorrCholeskyTransform()
+        super().__init__(**kwargs)
+
+        theta0 = torch.normal(0, 1, size=(self.theta_dim,))
+        log_diag_sqrt0 = torch.zeros(size=(self.nfeatures, 1))
+        
+        theta = Parameter(theta0, requires_grad=True)
+        log_diag_sqrt = Parameter(log_diag_sqrt0, requires_grad=True)
+        log_sigma2 = Parameter(torch.Tensor([0.0]), requires_grad=True)
+
+        self.register_parameter(name="log_diag_sqrt", parameter=log_diag_sqrt)
+        self.register_parameter(name="theta", parameter=theta)
+        self.register_parameter(name="log_sigma2", parameter=log_sigma2)
+
+    def get_M_cholesky(self):
+        L = torch.exp(self.log_diag_sqrt) * self.theta_to_L(self.theta)
+        return(L)
+
+    @property
+    def sigma2(self):
+        return torch.exp(self.log_sigma2)
+
+    def get_M(self):
+        L = self.get_M_cholesky()
+        M = L @ L.T
+        return M
+
+    def forward(self, x1, x2, diag=False, **kwargs):
+        L = self.get_M_cholesky()
+        v1 = x1 @ L
+        v2 = x2 @ L
+
+        if diag:
+            min_size = min(x1.shape[0], x2.shape[0])
+            z1 = torch.sum(torch.square(v1[:min_size, :]), axis=1)
+            z2 = torch.sum(torch.square(v2[:min_size, :]), axis=1)
+            z = (v1[:min_size, :] * v2[:min_size, :]).sum(axis=1)
+            distance = 2 * z - z1 - z2
+            kernel = torch.exp(self.log_sigma2 + distance)
+
+        else:
+            # Equivalent to squared distance in the linear subspace
+            # sigma2 * exp(-(x-y)^T Q \lambda Q^T (x-y))
+            z1 = torch.sum(torch.square(v1), axis=1).unsqueeze(1)
+            z2 = torch.sum(torch.square(v2), axis=1).unsqueeze(0)
+            distance = 2 * v1 @ v2.T - z1 - z2
+            kernel = torch.exp(self.log_sigma2 + distance)
 
         return kernel
 
