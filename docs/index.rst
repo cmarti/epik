@@ -29,6 +29,13 @@ Citation
   Learning sequence-function relationships with scalable, interpretable Gaussian processes (2025)
   In preparation.
 
+YouTube Talk
+============
+
+We presented this work at the `2025 Mutational Scanning Symposium <https://www.varianteffect.org/mss2025/>`_, and the talk is publicly available on its YouTube channel `here <https://www.youtube.com/watch?v=3mNrpdtGNMA>`_.
+
+.. youtube:: 3mNrpdtGNMA
+
 
 .. toctree::
     :maxdepth: 2

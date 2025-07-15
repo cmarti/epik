@@ -33,7 +33,9 @@ release = '0.1.0'
 extensions = ['nbsphinx',
               'sphinx.ext.autodoc', 
               'sphinx.ext.mathjax', 
-              'numpydoc']
+              'numpydoc',
+              'sphinxcontrib.youtube',
+]
 
 # Do NOT automatically execute notebooks when building.
 nbsphinx_execute = 'never'
