@@ -36,7 +36,7 @@ classifiers = [
 EpiK = "epik.bin.EpiK:main"
 
 [tool.setuptools]
-packages = ["epik"]
+packages = ["epik", "epik.bin"]
 
 [project.urls]
 Documentation = "https://epik.readthedocs.io"
