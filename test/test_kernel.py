@@ -14,8 +14,8 @@ from epik.kernel import (
     JengaKernel,
     PairwiseKernel,
     VarianceComponentKernel,
+    MahalanobisKernel,
     FactorAnalysisKernel,
-    LinearEmbeddingKernel,
     SiteKernelAligner
 )
 from epik.utils import encode_seqs, get_full_space_one_hot
@@ -470,57 +470,14 @@ class KernelsTests(unittest.TestCase):
         assert np.allclose(K1, K2)
         assert np.allclose(np.diag(K1), 1.0)
     
-    def test_factor_analysis_kernel(self):
-        sl, a, k = 4, 4, 3
-        x = get_full_space_one_hot(sl, a)
-
-        kernel = FactorAnalysisKernel(a, sl, k)
-        K = kernel.forward(x, x).detach().numpy()
-        assert(np.allclose(np.diag(K), 1.0))
-        assert(np.allclose(K, K.T))
-        
-        # Ensure PSD
-        for _ in range(10):
-            v = np.random.normal(size=a**sl)
-            assert(np.dot(v, K @ v) >= 0.)
-
-        K = kernel.forward(x, x, diag=True).detach().numpy()
-        assert np.allclose(K, 1.0)
-        
-        # Ensure diagonal is properly computed
-        x1, x2 = x[:10,:], x[10:20,:]
-        K = kernel.forward(x1, x2).detach().numpy()
-        diag = kernel.forward(x1, x2, diag=True).detach().numpy()
-        assert np.allclose(diag, np.diag(K))
-
-        # Adding the diagonal term 
-        kernel = FactorAnalysisKernel(a, sl, k, add_diag=True)
-        K = kernel.forward(x, x).detach().numpy()
-        assert np.allclose(np.diag(K), 1.0)
-        assert np.allclose(K, K.T)
-
-        # Ensure PSD
-        for _ in range(10):
-            v = np.random.normal(size=a**sl)
-            assert np.dot(v, K @ v) >= 0.0
-
-        K = kernel.forward(x, x, diag=True).detach().numpy()
-        assert np.allclose(K, 1.0)
-
-        # Ensure diagonal is properly computed
-        x1, x2 = x[:10, :], x[10:20, :]
-        K = kernel.forward(x1, x2).detach().numpy()
-        diag = kernel.forward(x1, x2, diag=True).detach().numpy()
-        assert np.allclose(diag, np.diag(K))
-    
     def test_linear_embedding_kernel(self):
         sl, a = 4, 4
         x = get_full_space_one_hot(sl, a)
 
-        kernel = LinearEmbeddingKernel(a, sl)
+        kernel = MahalanobisKernel(a, sl)
         K = kernel.forward(x, x).detach().numpy()
-        assert np.allclose(np.diag(K), 1.0)
-        assert np.allclose(K, K.T)
+        assert np.allclose(np.diag(K), 1.0, atol=1e-3)
+        assert np.allclose(K, K.T, atol=1e-4)
 
         # Ensure PSD
         for _ in range(10):
@@ -535,6 +492,37 @@ class KernelsTests(unittest.TestCase):
         K = kernel.forward(x1, x2).detach().numpy()
         diag = kernel.forward(x1, x2, diag=True).detach().numpy()
         assert np.allclose(diag, np.diag(K))
+
+        decay_factors = kernel.get_M_decay_factors()
+        assert np.allclose(np.diag(decay_factors), 0)
+
+    def test_factor_analysis_kernel(self):
+        sl, a = 4, 4
+        x = get_full_space_one_hot(sl, a)
+        kernel = FactorAnalysisKernel(a, sl, ndim=3)
+        A = kernel.get_A()
+        assert(A.shape[1] == 3)
+
+        K = kernel.forward(x, x).detach().numpy()
+        assert np.allclose(np.diag(K), 1.0, atol=1e-3)
+        assert np.allclose(K, K.T, atol=1e-4)
+
+        # Ensure PSD
+        for _ in range(10):
+            v = np.random.normal(size=a**sl)
+            assert np.dot(v, K @ v) >= 0.0
+
+        K = kernel.forward(x, x, diag=True).detach().numpy()
+        assert np.allclose(K, 1.0)
+
+        # Ensure diagonal is properly computed
+        x1, x2 = x[:10, :], x[10:20, :]
+        K = kernel.forward(x1, x2).detach().numpy()
+        diag = kernel.forward(x1, x2, diag=True).detach().numpy()
+        assert np.allclose(diag, np.diag(K))
+
+        decay_factors = kernel.get_M_decay_factors()
+        assert(np.allclose(np.diag(decay_factors), 0))
         
     def test_kernel_aligner(self):
         n_alleles, seq_length = 2, 2

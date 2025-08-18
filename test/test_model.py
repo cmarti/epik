@@ -20,7 +20,7 @@ from epik.kernel import (
     PairwiseKernel,
     VarianceComponentKernel,
     FactorAnalysisKernel,
-    LinearEmbeddingKernel
+    MahalanobisKernel,
 )
 from epik.model import EpiK
 from epik.settings import BIN_DIR, KERNELS
@@ -30,7 +30,8 @@ from epik.utils import (
     one_hot_to_seq,
     seq_to_one_hot,
     encode_seqs,
-    get_random_sequences
+    get_random_sequences,
+    split_training_test,
 )
 
 
@@ -94,6 +95,16 @@ class ModelsTests(unittest.TestCase):
                     for _ in range(5):
                         logp2 = model.calc_mll().item()
                         assert(np.allclose(logp1, logp2, atol=20))
+    
+    def test_diagnose_mll(self):
+        kernel = ConnectednessKernel(n_alleles=self.alpha, seq_length=self.l)
+        model = EpiK(kernel)
+        model.set_data(X=self.X_train, y=self.y_train, y_var=self.y_var)
+        with gpytorch.settings.max_cholesky_size(10):
+            mll_diagnosis = model.diagnose_mll()
+        
+        assert mll_diagnosis.shape[0] == 100
+        assert np.all(mll_diagnosis.columns == ['n_lanczos', 'mll'])
         
     def test_simulate(self):
         sl, a, lambdas0 = 2, 2, torch.log(torch.tensor([0.001, 1, 0.2]))
@@ -278,66 +289,26 @@ class ModelsTests(unittest.TestCase):
     
     def test_FA(self):
         # Simulate data
-        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
-        model = EpiK(kernel, track_progress=True)
+        k1 = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2, train_sigma2=True)
+        k2 = JengaKernel(n_alleles=self.alpha, seq_length=self.l)
+        model = EpiK(k1, track_progress=True)
         y = model.simulate(self.X_train).flatten()
-        q_true = kernel.q.detach().numpy()
-        M_true = kernel.get_M().detach().numpy()
-        lda_true = kernel.lambdas_sqrt.detach().numpy()
-
-        # Infer 1
-        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
-        model = EpiK(kernel, track_progress=True)
-        model.set_data(self.X_train, y, self.y_var)
-        model.fit(n_iter=2000, learning_rate=0.01)
-        q1 = kernel.q.detach().numpy()
-        lda1 = kernel.lambdas_sqrt.detach().numpy()
-        M1 = kernel.get_M().detach().numpy()
-
-        # Infer 2
-        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
-        model = EpiK(kernel, track_progress=True)
-        model.set_data(self.X_train, y, self.y_var)
-        model.fit(n_iter=2000, learning_rate=0.01)
-        q2 = kernel.q.detach().numpy()
-        lda2 = kernel.lambdas_sqrt.detach().numpy()
-        M2 = kernel.get_M().detach().numpy()
-        # print(q1[:5] @ q1[:5].T, q2[:5] @ q2[:5].T)
-
-        # Check if the marginal log-likelihood is increasing        
+        print(y.shape)
         
-        print(pearsonr(M1.flatten(), M2.flatten())[0])
-        import itertools
-        for i, j in itertools.product(range(2), repeat=2):
-            print(i, j, pearsonr(q_true[:, i], q1[:, j])[0], pearsonr(q_true[:, i], q2[:, j])[0], pearsonr(q1[:, i], q2[:, j])[0])
-        
-    def test_LE(self):
-        # Simulate data
-        kernel = LinearEmbeddingKernel(n_alleles=self.alpha, seq_length=self.l)
-        model = EpiK(kernel, track_progress=True)
-        y = model.simulate(self.X_train).flatten()
-
-        # Infer 1
-        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
-        model = EpiK(kernel, track_progress=True, max_n_lanczos_iterations=100)
-        model.set_data(self.X_train, y, self.y_var)
-        model.fit(n_iter=2000, learning_rate=0.005)
-        
-        M1 = kernel.get_M().detach().numpy()
-        l1, q1 = np.linalg.eigh(M1)
-
-        # Infer 2
-        kernel = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2)
-        model = EpiK(kernel, track_progress=True, max_n_lanczos_iterations=100)
-        model.set_data(self.X_train, y, self.y_var)
-        model.fit(n_iter=2000, learning_rate=0.005)
-
-        M2 = kernel.get_M().detach().numpy()
-        l2, q2 = np.linalg.eigh(M2)
-        print(l1)
-        print(l2)
-        print(q1)
-        print(q2)
+        for _ in range(3):
+            k1 = FactorAnalysisKernel(n_alleles=self.alpha, seq_length=self.l, ndim=2, train_sigma2=True)
+            k2 = JengaKernel(n_alleles=self.alpha, seq_length=self.l)
+            with gpytorch.settings.max_cholesky_size(5000):
+                model = EpiK(k1, track_progress=True)
+                model.set_data(self.X_train, y, self.y_var)
+                model.fit(n_iter=1000, learning_rate=0.1)
+            
+            M1 = k1.get_M().detach().numpy()
+            l1, q1 = np.linalg.eigh(M1)
+            print(l1)
+            # print(k1.get_diag())
+            # print(q1[:, -2:].T @ q1[:, -2:])
+            print(k1.get_delta().detach().numpy())
 
 
 if __name__ == '__main__':

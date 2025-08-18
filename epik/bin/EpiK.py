@@ -53,6 +53,8 @@ def main():
     help_msg = "Option to activate training of noise variance"
     options_group.add_argument("--train_noise", default=False, action='store_true',
                                help=help_msg)
+    options_group.add_argument("--ndim", default=None, help=help_msg)
+    help_msg = "Max number of dimensions to embed sequences in (None)"
 
     comp_group = parser.add_argument_group("Computational options")
     comp_group.add_argument(
@@ -137,6 +139,8 @@ def main():
     output_group.add_argument(
         "-o", "--output", required=True, help="Output file prefix"
     )
+    output_group.add_argument('--diagnose_mll', default=False, 
+                              action='store_true')
 
     # Parse arguments
     parsed_args = parser.parse_args()
@@ -148,6 +152,9 @@ def main():
     log_var0_fpath = parsed_args.log_var0
     theta0_fpath = parsed_args.theta0
     train_noise = parsed_args.train_noise
+    ndim = parsed_args.ndim
+    if ndim is not None:
+        ndim = int(ndim)
 
     gpu = parsed_args.gpu
     num_trace_samples = parsed_args.num_trace_samples
@@ -164,6 +171,7 @@ def main():
     seq0s = parsed_args.seq0
     calc_variance = parsed_args.calc_variance
     calc_epi_coef = parsed_args.calc_epi_coef
+    diagnose_mll = parsed_args.diagnose_mll
 
     # Initialize logger
     log = LogTrack()
@@ -218,7 +226,7 @@ def main():
     log.write("Selected {} kernel".format(kernel_label))
     kernel = get_kernel(
         kernel_label, n_alleles, seq_length, theta0=theta0, log_var0=log_var0,
-        log_lambdas0=log_lambdas0,
+        log_lambdas0=log_lambdas0, ndim=ndim,
     )
 
     # Define device
@@ -279,9 +287,14 @@ def main():
             log.write("Storing loss history at {}".format(fpath))
             model.history.to_csv(fpath)
 
-        # Predict phenotype in new sequences
+        if diagnose_mll:
+            log.write('Diagnosing accuracy of MLL computation')
+            mll_diagnosis = model.diagnose_mll()
+            fpath = "{}.mll_diagnosis.csv".format(out_fpath)
+            mll_diagnosis.to_csv(fpath)
+
         if test_seqs.shape[0] > 0:
-            log.write("Obtain phenotypic predictions for test data")
+            log.write("Obtaining phenotypic predictions for test data")
             X_test = encode_seqs(test_seqs, alphabet=alleles)
             result = model.predict(
                 X_test, calc_variance=calc_variance, labels=test_seqs

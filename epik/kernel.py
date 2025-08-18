@@ -2,6 +2,8 @@ import sys
 
 import numpy as np
 import torch as torch
+
+from itertools import product
 from gpytorch.kernels import Kernel
 from linear_operator.operators import KernelLinearOperator
 from pykeops.torch import LazyTensor
@@ -595,6 +597,7 @@ class ConnectednessKernel(SiteProductKernel):
     """
     def calc_theta0(self):
         if self.theta0 is None:
+            # TODO: review default values
             q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
             qs = Beta(20 * q, 20 * (1 - q)).sample((self.seq_length, ))
             rho = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
@@ -783,8 +786,8 @@ def get_kernel(
         "Connectedness": ConnectednessKernel,
         "Jenga": JengaKernel,
         "GeneralProduct": GeneralProductKernel,
-        "LinearEmbedding": LinearEmbeddingKernel,
-        "FactorAnalysis": FactorAnalysisKernel
+        "FactorAnalysis": FactorAnalysisKernel,
+        "MahalanobisRBF": MahalanobisRBFKernel,
     }
     kernel = kernels[kernel](
         n_alleles,
@@ -925,63 +928,34 @@ class SiteKernelAligner(object):
         return np.vstack(thetas)
 
 
-class FactorAnalysisKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, ndim, add_diag=False, **kwargs):
+class BaseLinearEmbeddingKernel(Kernel):
+    def __init__(self, n_alleles, seq_length, **kwargs):
         self.n_alleles = n_alleles
         self.seq_length = seq_length
-        self.ndim = ndim
-        self.nfeatures = seq_length * n_alleles
+        self.nfeatures = seq_length * (n_alleles - 1)
         super().__init__(**kwargs)
-
-        q_raw0 = torch.normal(0, 1, size=(self.nfeatures, self.ndim))
-        q_raw = Parameter(q_raw0, requires_grad=True)
-
-        log_lambdas0_sqrt0 = torch.linspace(0, -2, self.ndim+1).unsqueeze(0)
-        log_lambdas0_sqrt = Parameter(log_lambdas0_sqrt0, requires_grad=True)
-        log_sigma2 = Parameter(torch.Tensor([0.]), requires_grad=True)
-
-        self.register_parameter(name="log_lambdas_sqrt", parameter=log_lambdas0_sqrt)
-        self.register_parameter(name="q_raw", parameter=q_raw)
-        self.register_parameter(name="log_sigma2", parameter=log_sigma2)
-
-        self.add_diag = add_diag
-        if add_diag:
-            log_diag_sqrt0 = torch.normal(0, 1, size=(self.nfeatures,))
-            log_diag_sqrt = Parameter(log_diag_sqrt0, requires_grad=True)
-            self.register_parameter(name="log_diag_sqrt", parameter=log_diag_sqrt)
-
-    @property
-    def lambdas_sqrt(self):
-        return(torch.exp(self.log_lambdas_sqrt))
-
-    @property
-    def q(self):
-        ones = torch.ones(size=(self.nfeatures, 1), device=self.q_raw.device)
-        q_raw = torch.hstack([ones, self.q_raw])
-        return(torch.linalg.qr(q_raw)[0])
+        self.init_params(**kwargs)
     
+    def calc_P(self):
+        P_i = torch.eye(self.n_alleles) - torch.ones((self.n_alleles, self.n_alleles)) / self.n_alleles
+        P = torch.block_diag(*[P_i] * self.seq_length) 
+        U, S, _ = torch.linalg.svd(P, full_matrices=False)
+        P = U[:, S > 1e-4]
+        return(P)
+
     @property
     def sigma2(self):
         return torch.exp(self.log_sigma2)
-    
-    def get_D_values(self):
-        return torch.exp(2 * self.log_diag_sqrt)
-
-    def get_D(self):
-        D = torch.diag(torch.exp(2 * self.log_diag_sqrt))
-        return(D)
 
     def get_M(self):
-        Q = self.q * self.lambdas_sqrt
-        M = Q @ Q.T
-        if self.add_diag:
-            M = M + self.get_D()
-        return(M)
+        A = self.get_A()
+        M = A @ A.T
+        return M
 
     def forward(self, x1, x2, diag=False, **kwargs):
-        Q = self.q * self.lambdas_sqrt
-        v1 = x1 @ Q
-        v2 = x2 @ Q
+        A = self.get_A()
+        v1 = x1 @ A
+        v2 = x2 @ A
 
         if diag:
             min_size = min(x1.shape[0], x2.shape[0])
@@ -990,90 +964,124 @@ class FactorAnalysisKernel(Kernel):
             z = (v1[:min_size, :] * v2[:min_size, :]).sum(axis=1)
             distance = 2 * z - z1 - z2
 
-            if self.add_diag:
-                diag_values = self.get_D_values()
-                z1 = torch.sum(x1[:min_size] * diag_values, axis=1)
-                z2 = torch.sum(x2[:min_size] * diag_values, axis=1)
-                z = (x1[:min_size, :] * x2[:min_size, :] * diag_values).sum(axis=1)
+            if hasattr(self, "get_diag"):
+                diag = self.get_diag()
+                z1 = x1[:min_size, :] @ diag
+                z2 = x2[:min_size, :] @ diag
+                z = (x1[:min_size, :] * x2[:min_size, :] * diag.unsqueeze(0)).sum(axis=1)
                 distance += 2 * z - z1 - z2
 
             kernel = torch.exp(self.log_sigma2 + distance)
 
         else:
             # Equivalent to squared distance in the linear subspace
-            # sigma2 * exp(-(x-y)^T Q \lambda Q^T (x-y))
+            # sigma2 * exp(-(x-y)^T A A^T (x-y))
             z1 = torch.sum(torch.square(v1), axis=1).unsqueeze(1)
             z2 = torch.sum(torch.square(v2), axis=1).unsqueeze(0)
             distance = 2 * v1 @ v2.T - z1 - z2
-            
-            if self.add_diag:
-                diag_values = self.get_D_values().unsqueeze(0)
-                z1 = torch.sum(x1 * diag_values, axis=1).unsqueeze(1)
-                z2 = torch.sum(x2 * diag_values, axis=1).unsqueeze(0)
-                distance += 2 * (x1 * diag_values) @ x2.T - z1 - z2
+
+            if hasattr(self, 'get_diag'):
+                diag = self.get_diag()
+                z1 = (x1 @ diag).unsqueeze(1)
+                z2 = (x2 @ diag).unsqueeze(0)
+                distance += 2 * x1 @ (x2 * diag.unsqueeze(0)).T - z1 -z2
 
             kernel = torch.exp(self.log_sigma2 + distance)
 
         return kernel
     
+    def get_M_decay_factors(self):
+        M = self.get_M().detach().numpy()
+        positions = list(range(self.seq_length))
+        alleles = list(range(self.n_alleles))
 
-class LinearEmbeddingKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, **kwargs):
-        self.n_alleles = n_alleles
-        self.seq_length = seq_length
-        self.nfeatures = seq_length * n_alleles
+        decay_factors = np.zeros_like(M)
+        for p, q in product(positions, repeat=2):
+            for a1, a2 in product(alleles, repeat=2):
+                x = np.zeros(self.n_alleles)
+                x[a1] = 1.
+                y = np.zeros(self.n_alleles)
+                y[a2] = 1
+                i = p * self.n_alleles + a1
+                s1, e1 = p * self.n_alleles, (p + 1) * (self.n_alleles)
+                s2, e2 = q * self.n_alleles, (q + 1) * (self.n_alleles)
+                j = q * self.n_alleles + a2
+                decay_factors[i, j] = 1 - np.exp(-np.dot(x - y, M[s1:e1, :][:, s2:e2] @ (x - y)))
+        return decay_factors
+
+
+class MahalanobisRBFKernel(BaseLinearEmbeddingKernel):
+    def init_params(self, **kwargs):
         self.theta_dim = int(comb(self.nfeatures, 2))
         self.theta_to_L = CorrCholeskyTransform()
-        super().__init__(**kwargs)
-
-        theta0 = torch.normal(0, 1, size=(self.theta_dim,))
-        log_diag_sqrt0 = torch.zeros(size=(self.nfeatures, 1))
+        
+        # v = np.exp(0.05 * np.random.normal(size=self.n_alleles * self.seq_length))
+        v = np.ones(self.n_alleles * self.seq_length)
+        M0 = torch.diag(torch.Tensor(v))
+        P = self.calc_P()
+        B = torch.linalg.inv(P.T @ P) @ P.T
+        L = torch.linalg.cholesky(B @ M0 @ B.T)
+        theta0 = self.theta_to_L._inverse(L)
         
         theta = Parameter(theta0, requires_grad=True)
-        log_diag_sqrt = Parameter(log_diag_sqrt0, requires_grad=True)
+        P = Parameter(P, requires_grad=False)
+        log_diag_sqrt = Parameter(torch.zeros(self.nfeatures, 1), requires_grad=True)
         log_sigma2 = Parameter(torch.Tensor([0.0]), requires_grad=True)
 
+        self.register_parameter(name="P", parameter=P)
         self.register_parameter(name="log_diag_sqrt", parameter=log_diag_sqrt)
         self.register_parameter(name="theta", parameter=theta)
         self.register_parameter(name="log_sigma2", parameter=log_sigma2)
-
-    def get_M_cholesky(self):
-        L = torch.exp(self.log_diag_sqrt) * self.theta_to_L(self.theta)
-        return(L)
-
-    @property
-    def sigma2(self):
-        return torch.exp(self.log_sigma2)
-
-    def get_M(self):
-        L = self.get_M_cholesky()
-        M = L @ L.T
-        return M
-
-    def forward(self, x1, x2, diag=False, **kwargs):
-        L = self.get_M_cholesky()
-        v1 = x1 @ L
-        v2 = x2 @ L
-
-        if diag:
-            min_size = min(x1.shape[0], x2.shape[0])
-            z1 = torch.sum(torch.square(v1[:min_size, :]), axis=1)
-            z2 = torch.sum(torch.square(v2[:min_size, :]), axis=1)
-            z = (v1[:min_size, :] * v2[:min_size, :]).sum(axis=1)
-            distance = 2 * z - z1 - z2
-            kernel = torch.exp(self.log_sigma2 + distance)
-
-        else:
-            # Equivalent to squared distance in the linear subspace
-            # sigma2 * exp(-(x-y)^T Q \lambda Q^T (x-y))
-            z1 = torch.sum(torch.square(v1), axis=1).unsqueeze(1)
-            z2 = torch.sum(torch.square(v2), axis=1).unsqueeze(0)
-            distance = 2 * v1 @ v2.T - z1 - z2
-            kernel = torch.exp(self.log_sigma2 + distance)
-
-        return kernel
+    
+    def get_A(self):
+        diag_sqrt = torch.exp(self.log_diag_sqrt)
+        L = diag_sqrt * self.theta_to_L(self.theta)
+        A = self.P @ L
+        return A
 
 
+class FactorAnalysisKernel(BaseLinearEmbeddingKernel):
+    def init_params(self, ndim, **kwargs):
+        if ndim is None:
+            ndim = 3
+        self.ndim = ndim
+        self.theta_dim = self.ndim * self.nfeatures
+        
+        # v = np.exp(0.05 * np.random.normal(size=self.n_alleles * self.seq_length))
+        v = np.ones(self.n_alleles * self.seq_length)
+        M0 = torch.diag(torch.Tensor(v))
+        P = self.calc_P()
+        B = torch.linalg.inv(P.T @ P) @ P.T
+        M_prime = B @ M0 @ B.T
+        lda, q = torch.linalg.eigh(M_prime)
+        log_sqrt_lda0 = 0.5 * torch.log(lda[-self.ndim:]).unsqueeze(0)
+        q0 = q[:, -self.ndim:]
+        log_diag0 = torch.zeros(self.n_alleles * self.seq_length)
+        
+        q = Parameter(q0, requires_grad=True)
+        log_sigma2 = Parameter(torch.Tensor([0.0]), requires_grad=True)
+        P = Parameter(self.calc_P(), requires_grad=False)
+        log_sqrt_lda = Parameter(log_sqrt_lda0, requires_grad=True)
+        log_diag = Parameter(log_diag0, requires_grad=True)
+
+        self.register_parameter(name="P", parameter=P)
+        self.register_parameter(name="log_sqrt_lda", parameter=log_sqrt_lda)
+        self.register_parameter(name="q", parameter=q)
+        self.register_parameter(name="log_sigma2", parameter=log_sigma2)
+        self.register_parameter(name="log_diag", parameter=log_diag)
+    
+    def get_A(self):
+        q = torch.linalg.qr(self.q)[0]
+        A = self.P @ (q * torch.exp(self.log_sqrt_lda))
+        return(A)
+    
+    def get_diag(self):
+        return(torch.exp(self.log_diag))
+    
+    def get_delta(self):
+        deltas = (1 - torch.exp(-self.get_diag()))
+        return deltas.reshape(self.seq_length, self.n_alleles).T
+    
 
 # class SiteKernel(SequenceKernel):
 #     def __init__(self, n_alleles, site, fixed_theta=False, **kwargs):
