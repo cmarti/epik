@@ -1,3 +1,8 @@
+Docs
+- Include numerical issues in the tutorial: check convergence, rank orderings of the marginal likelihoods and diagnose the MLL calculation. 
+- Write somewhere in the documentation that all kernels expect one-hot encoded sequences.
+
+Old
 - Implement option to load directly all kernel parameters and store them easily in the kernel class: read and write 
 - implemente method to take all hyperparameters from the set of kernels in Epik (even in the presence of ScaleKernel or constant module)
 - Add method to priors that take the kernel as argument and return the transformed parameters automatically
