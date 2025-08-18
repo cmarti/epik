@@ -1,5 +1,6 @@
 import pandas as pd
 import torch
+import numpy as np
 
 from copy import deepcopy
 from time import time
@@ -182,6 +183,24 @@ class _Epik(object):
             self.max_n_lanczos_iterations
         ):
             return self.mll_layer(self.gp(self.X), self.y)
+        
+    def diagnose_mll(self, min_n_lanczos=20, max_n_lanczos=1000):
+        with torch.no_grad(), max_preconditioner_size(
+            self.preconditioner_size
+        ), cg_tolerance(self.cg_tol), num_trace_samples(
+            self.num_trace_samples
+        ):
+            
+            max_value = max(self.max_n_lanczos_iterations + 50, max_n_lanczos)
+            records = []
+            ns = np.linspace(min_n_lanczos, max_value, 100)
+            if self.track_progress:
+                ns = tqdm(ns)
+            for n in ns:
+                with max_lanczos_quadrature_iterations(int(n)):
+                    mll = self.calc_mll().item()
+                    records.append({"n_lanczos": n, "mll": mll})
+            return pd.DataFrame(records)
 
     def training_step(self):
         self.optimizer.zero_grad()
