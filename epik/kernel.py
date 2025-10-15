@@ -597,9 +597,7 @@ class ConnectednessKernel(SiteProductKernel):
     """
     def calc_theta0(self):
         if self.theta0 is None:
-            # TODO: review default values
-            q = torch.Tensor([np.exp(-np.log(10) / self.seq_length)])
-            qs = Beta(20 * q, 20 * (1 - q)).sample((self.seq_length, ))
+            qs = 0.9 * torch.ones(size=(self.seq_length,))
             rho = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
             theta0 = torch.log(rho)
         else:
@@ -621,9 +619,11 @@ class ConnectednessKernel(SiteProductKernel):
         return kernels
 
     def get_site_log_kernels(self):
-        ws = log1mexp(self.theta) - torch.log1p(
-            (self.n_alleles - 1) * torch.exp(self.theta)
-        )
+        log_rho = self.theta
+        log_eta = np.log(self.n_alleles - 1)
+        zeros = torch.zeros_like(log_rho)
+        log1p_eta_rho = torch.logaddexp(zeros, log_eta + log_rho)
+        ws = log1mexp(log_rho) - log1p_eta_rho
         log_kernels = []
         size = (self.n_alleles, self.n_alleles)
         for w in ws:
@@ -638,6 +638,79 @@ class ConnectednessKernel(SiteProductKernel):
         rho = torch.exp(theta)
         delta = 1 - (1 - rho) / (1 + (n_alleles - 1) * rho)
         return delta
+
+
+class SimplifiedConnectednessKernel(SiteProductKernel):
+    def __init__(
+        self,
+        n_alleles,
+        seq_length,
+        log_var0=None,
+        theta0=None,
+        **kwargs,
+    ):
+        super().__init__(n_alleles, seq_length, **kwargs)
+        self.theta0 = theta0
+        self.log_var0 = log_var0
+        self.set_params()
+        self.site_shape = (self.n_alleles, self.n_alleles)
+
+    def calc_log_var0(self):
+        if self.log_var0 is None:
+            log_var0 = torch.zeros(1)
+        else:
+            log_var0 = self.log_var0
+        return log_var0
+
+    def set_params(self):
+        theta = Parameter(self.calc_theta0(), requires_grad=True)
+        log_var0 = Parameter(self.calc_log_var0(), requires_grad=True)
+        self.register_parameter(name="theta", parameter=theta)
+        self.register_parameter(name="log_var", parameter=log_var0)
+
+    def forward(self, x1, x2, diag=False, **kwargs):
+        site_log_kernels = self.get_site_log_kernels()
+
+        if diag:
+            min_size = min(x1.shape[0], x2.shape[0])
+            log_kernel = 0.0
+            for i in range(self.seq_length):
+                log_kernel += (
+                    (self.select_site(x1[:min_size], site=i) @ site_log_kernels[i])
+                    * self.select_site(x2[:min_size], site=i)
+                ).sum(1)
+
+        else:
+            log_kernel = 0
+            for i in range(self.seq_length):
+                log_kernel += (
+                    self.select_site(x1, site=i)
+                    @ site_log_kernels[i]
+                    @ self.select_site(x2, site=i).T
+                )
+
+        return torch.exp(self.log_var + log_kernel)
+
+    def calc_theta0(self):
+        if self.theta0 is None:
+            qs = 0.9 * torch.ones(size=(self.seq_length,))
+            rho = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
+            theta0 = torch.log(rho / (1-rho))
+        else:
+            theta0 = self.theta0
+        return theta0
+
+    def get_site_log_kernels(self):
+        zeros = torch.zeros_like(self.theta)
+        logrho = self.theta - torch.logaddexp(zeros, self.theta)
+        ws = log1mexp(logrho) - torch.logaddexp(zeros, np.log(self.n_alleles - 1) + logrho)
+        log_kernels = []
+        size = (self.n_alleles, self.n_alleles)
+        for w in ws:
+            log_kernel = w * torch.ones(size, device=self.theta.device)
+            log_kernels.append(log_kernel.fill_diagonal_(0.0))
+        return torch.stack(log_kernels, axis=0)
+
 
 
 class JengaKernel(SiteProductKernel):
@@ -995,20 +1068,33 @@ class BaseLinearEmbeddingKernel(Kernel):
         positions = list(range(self.seq_length))
         alleles = list(range(self.n_alleles))
 
-        decay_factors = np.zeros_like(M)
+        allele_pairs = list(product(alleles, repeat=2))
+        n = len(allele_pairs)
+        decay_factors = {}
         for p, q in product(positions, repeat=2):
-            for a1, a2 in product(alleles, repeat=2):
-                x = np.zeros(self.n_alleles)
-                x[a1] = 1.
-                y = np.zeros(self.n_alleles)
-                y[a2] = 1
-                i = p * self.n_alleles + a1
-                s1, e1 = p * self.n_alleles, (p + 1) * (self.n_alleles)
-                s2, e2 = q * self.n_alleles, (q + 1) * (self.n_alleles)
-                j = q * self.n_alleles + a2
-                decay_factors[i, j] = 1 - np.exp(-np.dot(x - y, M[s1:e1, :][:, s2:e2] @ (x - y)))
+            decay_factors_pq = np.zeros((n, n))
+            if p == q:
+                for i, (x, y) in enumerate(allele_pairs):
+                    s, e = p * self.n_alleles, (p + 1) * (self.n_alleles)
+                    M_pp = M[s:e, :][:, s:e]
+                    delta = 1 - np.exp(2 * M_pp[x, y] - M_pp[x, x] - M_pp[y, y])
+                    decay_factors_pq[i, i] = delta
+            else:
+                for i, (x_p, y_p) in enumerate(allele_pairs):
+                    for j, (x_q, y_q) in enumerate(allele_pairs):
+                        s1, e1 = p * self.n_alleles, (p + 1) * (self.n_alleles)
+                        s2, e2 = q * self.n_alleles, (q + 1) * (self.n_alleles)
+                        M_pq = M[s1:e1, :][:, s2:e2]
+                        delta = 1 - np.exp(
+                            M_pq[x_p, y_q]
+                            + M_pq[y_p, x_q]
+                            - M_pq[x_p, x_q]
+                            - M_pq[y_p, y_q]
+                        )
+                        decay_factors_pq[i, j] = delta
+            decay_factors[(p, q)] = decay_factors_pq
         return decay_factors
-
+    
 
 class MahalanobisRBFKernel(BaseLinearEmbeddingKernel):
     def init_params(self, **kwargs):
