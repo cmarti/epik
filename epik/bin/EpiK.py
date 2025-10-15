@@ -53,7 +53,9 @@ def main():
     help_msg = "Option to activate training of noise variance"
     options_group.add_argument("--train_noise", default=False, action='store_true',
                                help=help_msg)
-    options_group.add_argument("--ndim", default=None, help=help_msg)
+    help_msg = "Option to activate training of GP mean"
+    options_group.add_argument("--train_mean", default=False, action="store_true", help=help_msg)
+    options_group.add_argument("--ndim", default=None, help='Number of dimensions in linear embedding')
     help_msg = "Max number of dimensions to embed sequences in (None)"
 
     comp_group = parser.add_argument_group("Computational options")
@@ -152,6 +154,7 @@ def main():
     log_var0_fpath = parsed_args.log_var0
     theta0_fpath = parsed_args.theta0
     train_noise = parsed_args.train_noise
+    train_mean = parsed_args.train_mean
     ndim = parsed_args.ndim
     if ndim is not None:
         ndim = int(ndim)
@@ -239,6 +242,7 @@ def main():
         kernel,
         track_progress=True,
         train_noise=train_noise,
+        train_mean=train_mean,
         device=device,
         cg_tol=cg_tol,
         num_trace_samples=num_trace_samples,
