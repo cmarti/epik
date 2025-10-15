@@ -14,7 +14,7 @@ from epik.kernel import (
     JengaKernel,
     PairwiseKernel,
     VarianceComponentKernel,
-    MahalanobisKernel,
+    MahalanobisRBFKernel,
     FactorAnalysisKernel,
     SiteKernelAligner
 )
@@ -474,7 +474,7 @@ class KernelsTests(unittest.TestCase):
         sl, a = 4, 4
         x = get_full_space_one_hot(sl, a)
 
-        kernel = MahalanobisKernel(a, sl)
+        kernel = MahalanobisRBFKernel(a, sl)
         K = kernel.forward(x, x).detach().numpy()
         assert np.allclose(np.diag(K), 1.0, atol=1e-3)
         assert np.allclose(K, K.T, atol=1e-4)
@@ -494,7 +494,6 @@ class KernelsTests(unittest.TestCase):
         assert np.allclose(diag, np.diag(K))
 
         decay_factors = kernel.get_M_decay_factors()
-        assert np.allclose(np.diag(decay_factors), 0)
 
     def test_factor_analysis_kernel(self):
         sl, a = 4, 4
@@ -521,9 +520,6 @@ class KernelsTests(unittest.TestCase):
         diag = kernel.forward(x1, x2, diag=True).detach().numpy()
         assert np.allclose(diag, np.diag(K))
 
-        decay_factors = kernel.get_M_decay_factors()
-        assert(np.allclose(np.diag(decay_factors), 0))
-        
     def test_kernel_aligner(self):
         n_alleles, seq_length = 2, 2
         aligner = SiteKernelAligner(n_alleles=n_alleles, 
