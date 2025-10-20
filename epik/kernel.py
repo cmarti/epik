@@ -73,8 +73,22 @@ class SequenceKernel(Kernel):
             s = (x1_ * x2_).sum(-1)
             d = float(self.seq_length) - s
         return d
+    
+    def check_dimensions(self, x1, x2):
+        if x1.shape[1] != x2.shape[1]:
+            raise ValueError(
+                f"Input features have different shapes: {x1.shape} and {x2.shape}. "
+                f"Make sure sequences have the same length"
+            )
+
+        if x1.shape[1] != self.n_features:
+            raise ValueError(
+                f"Input features have incorrect shape. Expected {self.n_features}, "
+                f"got {x1.shape[1]}. Check kernel `seq_length` matches x1 and x2"
+            )
 
     def forward(self, x1, x2, diag=False, **kwargs):
+        self.check_dimensions(x1, x2)
         if diag:
             kernel = self._nonkeops_forward(x1, x2, diag=True, **kwargs)
 
@@ -230,6 +244,7 @@ class AdditiveKernel(BaseVarianceComponentKernel):
         return c_bk
 
     def forward(self, x1, x2, diag=False, **kwargs):
+        self.check_dimensions(x1, x2)
         c_b = self.get_c_b()
         if diag:
             d = self.calc_hamming_distance(x1, x2, diag=True)
@@ -921,15 +936,12 @@ class SiteKernelAligner(object):
         return np.vstack(thetas)
 
 
-class FactorAnalysisKernel(Kernel):
-    def __init__(self, n_alleles, seq_length, ndim, **kwargs):
-        self.n_alleles = n_alleles
-        self.seq_length = seq_length
+class FactorAnalysisKernel(SequenceKernel):
+    def __init__(self, n_alleles, seq_length, ndim=1, **kwargs):
         self.ndim = ndim
-        self.nfeatures = seq_length * n_alleles
-        super().__init__(**kwargs)
+        super().__init__(n_alleles, seq_length, **kwargs)
 
-        q_raw0 = torch.normal(0, 1, size=(self.nfeatures, self.ndim))
+        q_raw0 = torch.normal(0, 1, size=(self.n_features, self.ndim))
         q_raw = Parameter(q_raw0, requires_grad=True)
 
         log_lambdas0_sqrt0 = torch.linspace(0, -2, self.ndim).unsqueeze(0)
@@ -953,6 +965,7 @@ class FactorAnalysisKernel(Kernel):
         return torch.exp(self.log_sigma2)
 
     def forward(self, x1, x2, diag=False, **kwargs):
+        self.check_dimensions(x1, x2)
         Q = self.q * self.lambdas_sqrt
         v1 = x1 @ Q
         v2 = x2 @ Q

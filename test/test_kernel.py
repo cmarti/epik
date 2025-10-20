@@ -21,6 +21,28 @@ from epik.utils import encode_seqs, get_full_space_one_hot
 
 
 class KernelsTests(unittest.TestCase):
+    def test_kernel_errors(self):
+        sl, a = 2, 2
+        x1 = get_full_space_one_hot(sl, a)
+        x2 = get_full_space_one_hot(sl, a + 1)
+        x3 = get_full_space_one_hot(sl + 1, a)
+
+        for kernel in [
+            AdditiveKernel,
+            PairwiseKernel,
+            VarianceComponentKernel,
+            ExponentialKernel,
+            ConnectednessKernel,
+            JengaKernel,
+            GeneralProductKernel,
+            FactorAnalysisKernel
+        ]:
+            k = kernel(n_alleles=a, seq_length=sl)
+            self.assertRaises(ValueError, k.forward, x1, x2)
+            self.assertRaises(ValueError, k.forward, x2, x2)
+            self.assertRaises(ValueError, k.forward, x3, x3)
+        
+
     def test_additive_kernel(self):
         sl, a = 1, 2
         x = get_full_space_one_hot(sl, a)
