@@ -69,6 +69,18 @@ class ModelsTests(unittest.TestCase):
             GeneralProductKernel,
         ]
 
+    def test_seq_length_error(self):
+        seq_length, n = 4, 100
+        seqs = get_random_sequences(
+            n=n, seq_length=seq_length + 1, alphabet=self.alphabet
+        )
+        X = encode_seqs(seqs, alphabet=self.alphabet)
+        y = np.random.normal(size=n)
+        for kernel in [AdditiveKernel, PairwiseKernel, VarianceComponentKernel,
+                       ExponentialKernel, ConnectednessKernel, JengaKernel,
+                       GeneralProductKernel, FactorAnalysisKernel]:
+            model = EpiK(kernel(n_alleles=self.alpha, seq_length=seq_length))
+            self.assertRaises(ValueError, model.set_data, X=X, y=y)
 
     def test_calc_mll(self):
         seq_length = 8

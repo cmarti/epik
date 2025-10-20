@@ -165,8 +165,12 @@ class _Epik(object):
             of the measurements in `y`. If `None`, it is assumed that 
             there is no uncertainty in the measurements.
         """
-
         self.X = self.get_tensor(X)
+        if self.X.shape[1] != self.kernel.n_features:
+            raise ValueError(
+                f"Input features have different shapes: {self.X.shape}"
+                " and kernel n_features={self.kernel.n_features}."
+            )
         self.y = self.get_tensor(y)
         self.y_var = (
             torch.zeros_like(self.y) if y_var is None else self.get_tensor(y_var)
