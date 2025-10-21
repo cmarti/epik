@@ -522,13 +522,23 @@ class ExponentialKernel(SiteProductKernel):
         K(x, y) = \left( \frac{ 1-\rho }{ 1 + (\alpha - 1)\rho } \right)^d
 
     where:
-    
+
         - :math:`\rho` is a parameter controlling the decay rate.
-        
+
         - :math:`\alpha` is the number of alleles.
-        
+
         - :math:`d` is the Hamming distance between sequences :math:`x` and :math:`y`.
 
+    Parameters
+    ----------
+    n_alleles : int
+        The number of alleles in the sequence data.
+    seq_length : int
+        The length of the sequences.
+    log_var0 : float or torch.Tensor , optional
+        Initial log variance value for the kernel.
+    theta0 : torch.Tensor of shape (1, ), optional
+        Initial parameter value for the kernel corresponding to `\log(\rho)`.
     """
     def get_site_kernel(self):
         rho = torch.exp(self.theta)
@@ -592,20 +602,31 @@ class ConnectednessKernel(SiteProductKernel):
     Connectedness Kernel for functions on sequence space.
 
     This kernel computes the covariance between two sequences where
-    mutations at different sites have different effects on the 
+    mutations at different sites have different effects on the
     predictability of other mutations
-    
+
 
     .. math::
         K(x, y) = \prod_p^{\ell}\frac{1-\rho_p}{1 + (\alpha - 1)\rho_p}
 
     where:
-    
+
         - :math:`\rho_p` is a parameter controlling the decay rate of site :math:`p`.
-        
+
         - :math:`\alpha` is the number of alleles.
-        
+
         - :math:`\ell` is the sequence length.
+
+    Parameters
+    ----------
+    n_alleles : int
+        The number of alleles in the sequence data.
+    seq_length : int
+        The length of the sequences.
+    log_var0 : float or torch.Tensor , optional
+        Initial log variance value for the kernel.
+    theta0 : torch.Tensor of shape (seq_length, ), optional
+        Initial parameter values for the kernel corresponding to `\log(\rho_p)`.
 
     """
     def calc_theta0(self):
@@ -656,21 +677,33 @@ class JengaKernel(SiteProductKernel):
     r"""
     Jenga Kernel for functions on sequence space.
 
-    This kernel computes the covariance between two sequences as the product 
+    This kernel computes the covariance between two sequences as the product
     of allele- and site-specific factors at the alleles where they differ.
 
     .. math::
-        K(x, y) = \prod_{p: x_p \neq y_p} 
+        K(x, y) = \sigma^2\prod_{p: x_p \neq y_p}
         \sqrt{\frac{1-\rho_p}{1 + \frac{1-\pi_p^{x_p}}{\pi_p^{x_p}}\rho_p}}
         \sqrt{\frac{1-\rho_p}{1 + \frac{1-\pi_p^{y_p}}{\pi_p^{y_p}}\rho_p}}
 
     where:
-    
+
         - :math:`\rho_p` is a parameter controlling the decay rate at site :math:`p`.
-        
+
         - :math:`\pi_p^{x_p}` and :math:`\pi_p^{y_p}` are site and allele specific probabilities.
-        
+
         - :math:`\ell` is the sequence length.
+
+    Parameters
+    ----------
+    n_alleles : int
+        The number of alleles in the sequence data.
+    seq_length : int
+        The length of the sequences.
+    log_var0 : float or torch.Tensor , optional
+        Initial log variance value for the kernel.
+    theta0 : torch.Tensor of shape (seq_length, n_alleles + 1), optional
+        Initial parameter values for the kernel. The first column corresponds to
+        `\log(\rho_p)` and the remaining columns correspond to `\log(\pi_p^a)`.
     """
 
     def calc_theta0(self):
