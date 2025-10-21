@@ -27,7 +27,7 @@ Citation
 
 - Juannan Zhou, Carlos Martí-Gómez, Samantha Petti, David M. McCandlish. 
   Learning sequence-function relationships with scalable, interpretable Gaussian processes (2025)
-  In preparation.
+  doi: `https://doi.org/10.1101/2025.08.15.670613 <https://doi.org/10.1101/2025.08.15.670613 >`_.
 
 YouTube Talk
 ============
