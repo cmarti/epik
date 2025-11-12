@@ -375,6 +375,30 @@ class EpiK(_Epik):
         self.mll_layer = ExactMLL(self.likelihood, self.gp)
 
     def get_posterior(self, X, calc_variance=False, calc_covariance=False):
+        """
+        Obtain the posterior distribution of the Gaussian process model
+        for the given input sequences.
+
+        Parameters
+        ----------
+        X : torch.Tensor of shape (n_sequences, n_features)
+            A tensor containing the one-hot encoded input sequences
+            for which the posterior distribution is to be computed.
+
+        calc_variance : bool, optional (default=False)
+            If True, computes the posterior variance in addition to the
+            posterior mean.
+
+        calc_covariance : bool, optional (default=False)
+            If True, computes the posterior covariance matrix. This option
+            overrides `calc_variance` if both are set to True.
+
+        Returns
+        -------
+        f : gpytorch.distributions.MultivariateNormal
+            The posterior distribution of the Gaussian process model
+            evaluated at the input sequences.
+        """
         self.set_evaluation_mode()
         X = self.get_tensor(X)
 
