@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 import argparse
+import pickle
 from os.path import exists
 
 import numpy as np
 import pandas as pd
 import torch
-import gpytorch
 
 from epik.kernel import get_kernel
 from epik.model import EpiK
@@ -51,14 +51,25 @@ def main():
     help_msg = "CSV File containing theta to initialize site-product models"
     options_group.add_argument("--theta0", default=None, help=help_msg)
     help_msg = "Option to activate training of noise variance"
-    options_group.add_argument("--train_noise", default=False, action='store_true',
-                               help=help_msg)
+    options_group.add_argument(
+        "--train_noise", default=False, action="store_true", help=help_msg
+    )
     help_msg = "Option to activate training of GP mean"
-    options_group.add_argument("--train_mean", default=False, action="store_true", help=help_msg)
-    options_group.add_argument("--ndim", default=None, help='Number of dimensions in linear embedding')
+    options_group.add_argument(
+        "--train_mean", default=False, action="store_true", help=help_msg
+    )
+    options_group.add_argument(
+        "--ndim", default=None, help="Number of dimensions in linear embedding"
+    )
     help_msg = "Max number of dimensions to embed sequences in (None)"
 
     comp_group = parser.add_argument_group("Computational options")
+    comp_group.add_argument(
+        "--method",
+        default='cg',
+        type=str,
+        help="Approach to compute marginal log-likelihood {'cg', 'cholesky'} ('cg')",
+    )
     comp_group.add_argument(
         "--gpu", default=False, action="store_true", help="Use GPU for computation"
     )
@@ -73,7 +84,7 @@ def main():
     )
     comp_group.add_argument(
         "--cg_tol",
-        default=1.,
+        default=1.0,
         type=float,
         help="Tolerance for Conjugate Gradient during Evidence Maximization",
     )
@@ -89,7 +100,6 @@ def main():
         type=int,
         help="Number of vectors to use for estimating log-determinant (20)",
     )
-    
 
     training_group = parser.add_argument_group("Training options")
     training_group.add_argument(
@@ -106,12 +116,6 @@ def main():
         type=float,
         help="Learning rate for optimization (0.1)",
     )
-    training_group.add_argument(
-        "--optimizer",
-        default='Adam',
-        help="Optimizer to use: Adam (def) or SGD",
-    )
-
     pred_group = parser.add_argument_group("Prediction options")
     pred_group.add_argument(
         "-p", "--pred", help="File containing sequences for predicting genotype"
@@ -141,8 +145,6 @@ def main():
     output_group.add_argument(
         "-o", "--output", required=True, help="Output file prefix"
     )
-    output_group.add_argument('--diagnose_mll', default=False, 
-                              action='store_true')
 
     # Parse arguments
     parsed_args = parser.parse_args()
@@ -160,11 +162,11 @@ def main():
         ndim = int(ndim)
 
     gpu = parsed_args.gpu
-    num_trace_samples = parsed_args.num_trace_samples
+    method = parsed_args.method
+    n_trace_samples = parsed_args.num_trace_samples
     n_lanczos = parsed_args.n_lanczos
     cg_tol = parsed_args.cg_tol
     n_iter = parsed_args.n_iter
-    optimizer = parsed_args.optimizer
     learning_rate = parsed_args.learning_rate
     max_contrasts = parsed_args.max_contrasts
 
@@ -174,7 +176,6 @@ def main():
     seq0s = parsed_args.seq0
     calc_variance = parsed_args.calc_variance
     calc_epi_coef = parsed_args.calc_epi_coef
-    diagnose_mll = parsed_args.diagnose_mll
 
     # Initialize logger
     log = LogTrack()
@@ -213,13 +214,13 @@ def main():
             torch.exp(log_var0)
         )
         log.write(msg)
-    
+
     log_lambdas0 = None
     if log_lambdas0_fpath is not None and exists(log_lambdas0_fpath):
         msg = "Loading log_lambdas0 from {}".format(log_lambdas0_fpath)
         log.write(msg)
-        log_lambdas0 = torch.Tensor(pd.read_csv(log_lambdas0_fpath)['log_lambdas'])
-    
+        log_lambdas0 = torch.Tensor(pd.read_csv(log_lambdas0_fpath)["log_lambdas"])
+
     theta0 = None
     if theta0_fpath is not None and exists(theta0_fpath):
         msg = "Loading theta0 from {}".format(theta0_fpath)
@@ -228,12 +229,17 @@ def main():
 
     log.write("Selected {} kernel".format(kernel_label))
     kernel = get_kernel(
-        kernel_label, n_alleles, seq_length, theta0=theta0, log_var0=log_var0,
-        log_lambdas0=log_lambdas0, ndim=ndim,
+        kernel_label,
+        n_alleles,
+        seq_length,
+        theta0=theta0,
+        log_var0=log_var0,
+        log_lambdas0=log_lambdas0,
+        ndim=ndim,
     )
 
     # Define device
-    device = 'cuda' if gpu else 'cpu'
+    device = "cuda" if gpu else "cpu"
     log.write("Running computations on {}".format(device))
 
     # Create model
@@ -243,120 +249,98 @@ def main():
         track_progress=True,
         train_noise=train_noise,
         train_mean=train_mean,
+        method=method,
         device=device,
         cg_tol=cg_tol,
-        num_trace_samples=num_trace_samples,
+        n_trace_samples=n_trace_samples,
+        n_lanczos_iter=n_lanczos,
     )
     model.set_data(X, y, y_var=y_var)
+    log.write(f"Using {method} to compute MLL and posterior distribution")
 
     # Load hyperparameters if provided
     if params_fpath is None:
-        n = 2000
-        if n < X.shape[0]:
-            idx = np.arange(X.shape[0])
-            # sel_idx = np.random.choice(idx, n, replace=False)
-            # X_sample, y_sample, y_var_sample = X[sel_idx], y[sel_idx], y_var[sel_idx]
-            # with gpytorch.settings.max_cholesky_size(n+1):
-            #     log.write("Pre-training model with {} sequences".format(n))
-            #     model.set_data(X_sample, y_sample, y_var=y_var_sample)
-            #     model.fit(
-            #         n_iter=500,
-            #         learning_rate=learning_rate,
-            #         optimizer=optimizer,
-            #     )
-            #     params = model.get_params()
-            #     model.set_data(X, y, y_var=y_var)
-            #     model.set_params(params)
-            #     model.training_history = []
-    
+        log.write("No custom hyperparameter initialization")
+    elif not exists(params_fpath):
+        log.write("Hyperparameters file not found: {}".format(params_fpath))
     else:
-        if not exists(params_fpath):
-            log.write("Hyperparameters file not found: {}".format(params_fpath))
-        else:
-            log.write("Load hyperparameters from {}".format(params_fpath))
-            model.load(params_fpath)
+        log.write("Load hyperparameters from {}".format(params_fpath))
+        model.load(params_fpath)
 
-    with gpytorch.settings.max_lanczos_quadrature_iterations(n_lanczos):
-        if n_iter > 0:
-            log.write("Train hyperparameters by maximizing the evidence")
-            log.write("\tLearning rate set to {}".format(learning_rate))
-            model.fit(n_iter=n_iter, learning_rate=learning_rate,
-                    optimizer=optimizer)
+    if n_iter > 0:
+        log.write("Train hyperparameters by maximizing the evidence")
+        log.write("\tLearning rate set to {}".format(learning_rate))
+        model.fit(n_iter=n_iter, learning_rate=learning_rate)
 
-            fpath = "{}.model_params.pth".format(out_fpath)
-            log.write("Storing model parameters at {}".format(fpath))
-            model.save(fpath)
+        fpath = "{}.model_params.pth".format(out_fpath)
+        log.write("Storing model parameters at {}".format(fpath))
+        model.save(fpath)
 
-            fpath = "{}.loss.csv".format(out_fpath)
-            log.write("Storing loss history at {}".format(fpath))
-            model.history.to_csv(fpath)
+        fpath = "{}.loss.csv".format(out_fpath)
+        log.write("Storing loss history at {}".format(fpath))
+        model.history.to_csv(fpath)
 
-        if diagnose_mll:
-            log.write('Diagnosing accuracy of MLL computation')
-            mll_diagnosis = model.diagnose_mll()
+        fpath = "{}.model_params_history.csv".format(out_fpath)
+        log.write("Storing model params history at {}".format(fpath))
+        with open(fpath, "wb") as fhand:
+            pickle.dump(model.params_history, fhand)
+        
+        fpath = "{}.model_params_grad_history.csv".format(out_fpath)
+        log.write("Storing model params history at {}".format(fpath))
+        with open(fpath, "wb") as fhand:
+            pickle.dump(model.grad_history, fhand)
+
+        if method == 'cg':
+            log.write("Diagnosing accuracy of MLL computation")
+            mll_diagnosis = model.diagnose_mll(max_n_lanczos=min(X.shape[0], 1000))
             fpath = "{}.mll_diagnosis.csv".format(out_fpath)
+            log.write("Storing MLL diagnostics at {}".format(fpath))
             mll_diagnosis.to_csv(fpath)
 
-        if test_seqs.shape[0] > 0:
-            log.write("Obtaining phenotypic predictions for test data")
-            X_test = encode_seqs(test_seqs, alphabet=alleles)
-            result = model.predict(
-                X_test, calc_variance=calc_variance, labels=test_seqs
-            )
-            log.write("\tWriting predictions to {}".format(out_fpath))
-            result.to_csv(out_fpath)
+    if test_seqs.shape[0] > 0:
+        log.write("Obtaining phenotypic predictions for test data")
+        X_test = encode_seqs(test_seqs, alphabet=alleles)
+        result = model.predict(X_test, calc_variance=calc_variance, labels=test_seqs)
+        log.write("\tWriting predictions to {}".format(out_fpath))
+        result.to_csv(out_fpath)
 
-        if contrast_matrix_fpath is not None:
-            if exists(contrast_matrix_fpath):
-                log.write(
-                    "Loading contrast matrix from {}".format(contrast_matrix_fpath)
+    if contrast_matrix_fpath is not None:
+        if exists(contrast_matrix_fpath):
+            log.write("Loading contrast matrix from {}".format(contrast_matrix_fpath))
+            contrast_matrix = pd.read_csv(contrast_matrix_fpath, index_col=0)
+            results = model.predict_contrasts(
+                contrast_matrix,
+                alleles,
+                calc_variance=calc_variance,
+                max_size=max_contrasts,
+            )
+            fpath = "{}.contrasts.csv".format(out_fpath)
+            log.write("\tWriting estimates to {}".format(fpath))
+            results.to_csv(fpath)
+        else:
+            log.write("Contrast matrix not found at {}".format(contrast_matrix_fpath))
+
+    if seq0s is not None:
+        for seq0 in seq0s.split(","):
+            log.write(
+                "Estimating mutational effects and epistatic coefficients around {}".format(
+                    seq0
                 )
-                contrast_matrix = pd.read_csv(contrast_matrix_fpath, index_col=0)
-                results = model.predict_contrasts(
-                    contrast_matrix,
+            )
+            results = model.predict_mut_effects(
+                seq0, alleles, calc_variance=calc_variance, max_size=max_contrasts
+            )
+            if calc_epi_coef:
+                df2 = model.predict_epistatic_coeffs(
+                    seq0,
                     alleles,
                     calc_variance=calc_variance,
                     max_size=max_contrasts,
                 )
-                fpath = "{}.contrasts.csv".format(out_fpath)
-                log.write("\tWriting estimates to {}".format(fpath))
-                results.to_csv(fpath)
-            else:
-                log.write(
-                    "Contrast matrix not found at {}".format(contrast_matrix_fpath)
-                )
-
-        if seq0s is not None:
-            for seq0 in seq0s.split(","):
-                log.write(
-                    "Estimating mutational effects and epistatic coefficients around {}".format(
-                        seq0
-                    )
-                )
-                results = model.predict_mut_effects(
-                    seq0, alleles, calc_variance=calc_variance, max_size=max_contrasts
-                )
-                if calc_epi_coef:
-                    df2 = model.predict_epistatic_coeffs(
-                        seq0,
-                        alleles,
-                        calc_variance=calc_variance,
-                        max_size=max_contrasts,
-                    )
-                    results = pd.concat([results, df2])
-                fpath = "{}.{}_expansion.csv".format(out_fpath, seq0)
-                log.write("\tWriting estimates to {}".format(fpath))
-                results.to_csv(fpath)
-
-    # # Write execution time for tracking performance
-    # fpath = "{}.time.txt".format(out_fpath)
-    # log.write("Writing execution times to {}".format(fpath))
-    # with open(fpath, "w") as fhand:
-    #     fhand.write("fit,{}\n".format(model.fit_time))
-    #     if hasattr(model, "pred_time"):
-    #         fhand.write("pred,{}\n".format(model.pred_time))
-    #     if hasattr(model, "contrast_time"):
-    #         fhand.write("contrast,{}\n".format(model.contrast_time))
+                results = pd.concat([results, df2])
+            fpath = "{}.{}_expansion.csv".format(out_fpath, seq0)
+            log.write("\tWriting estimates to {}".format(fpath))
+            results.to_csv(fpath)
 
     log.finish()
 
