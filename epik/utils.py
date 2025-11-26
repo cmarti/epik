@@ -107,7 +107,10 @@ def encode_seqs(seqs, alphabet, encoding_type="one_hot", max_n=500):
     return X
 
 
-def seq_to_one_hot(X, alleles=None):
+def seq_to_one_hot(X, alleles=None, alleles_list=None):
+    if alleles_list is not None and alleles is not None:
+        raise ValueError("Provide only one of `alleles` or `alleles_list`")
+    
     m = np.array([[a for a in x] for x in X])
     onehot = []
     for i in range(m.shape[1]):
@@ -337,7 +340,6 @@ def calc_vandermonde_inverse(values, n=None):
             p = np.sum([np.prod(v) for v in v_k_combs])
             B[power, k] = sign[power, k] * p * norm_factor
             sign[power, k] = (-1) ** (power)
-            print(1 / norm_factor, p)
     return B
 
 
@@ -523,7 +525,6 @@ class WkAligner(torch.nn.Module):
             self.ns = torch.ones_like(cov)
         
 
-        print(self.cov)
         b = self.cov[1] / (self.cov[0] - self.cov[1])
         beta0 = np.log(self.cov[0]) + self.seq_length * (np.log(1 + self.n_alleles * b) - np.log(1 + b))
         beta1 = np.log(1 + self.n_alleles * b)
@@ -557,10 +558,6 @@ class WkAligner(torch.nn.Module):
             loss = self.calc_loss(self.log_lambdas)
             loss.backward()
             optimizer.step()
-            print(loss.detach().item())
-        print(self.log_lambdas)
-        print(self.predict(self.log_lambdas))
-        print(self.cov)
 
 
 class SquaredMatMulOperator(LinearOperator):
