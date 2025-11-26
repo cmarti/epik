@@ -6,7 +6,8 @@ from copy import deepcopy
 from time import time
 from tqdm import tqdm
 
-from torch.optim import Adam, SGD
+from torch.optim import Adam
+from torch.utils.checkpoint import checkpoint
 from gpytorch.models import ApproximateGP, ExactGP
 from gpytorch.means import ZeroMean, ConstantMean
 from gpytorch.mlls import MarginalLogLikelihood, VariationalELBO
@@ -24,6 +25,9 @@ from gpytorch.settings import (
     skip_posterior_variances,
     cg_tolerance,
     num_trace_samples,
+    max_cholesky_size,
+    max_root_decomposition_size,
+    max_cg_iterations,
 )
 
 from epik.utils import (
@@ -103,10 +107,12 @@ class _Epik(object):
         device="cpu",
         train_mean=False,
         train_noise=False,
+        method="cg",
         preconditioner_size=0,
         cg_tol=1.0,
-        num_trace_samples=50,
-        max_n_lanczos_iterations=50,
+        max_cg_iter=5000,
+        n_trace_samples=50,
+        n_lanczos_iter=50,
         track_progress=False,
     ):
         self.kernel = kernel
@@ -114,14 +120,17 @@ class _Epik(object):
         self.train_mean = train_mean
         self.train_noise = train_noise
 
+        self.method = method
         self.preconditioner_size = preconditioner_size
         self.cg_tol = cg_tol
-        self.num_trace_samples = num_trace_samples
-        self.max_n_lanczos_iterations = max_n_lanczos_iterations
+        self.max_cg_iter = max_cg_iter
+        self.n_trace_samples = n_trace_samples
+        self.n_lanczos_iter = n_lanczos_iter
         self.track_progress = track_progress
         self.fit_time = 0
         self.training_history = []
         self.params_history = []
+        self.grad_history = []
 
     def report_progress(self, pbar):
         if self.track_progress:
@@ -154,76 +163,258 @@ class _Epik(object):
         Parameters
         ----------
         X : torch.Tensor
-            A tensor of shape (n_sequences, n_features) containing the 
+            A tensor of shape (n_sequences, n_features) containing the
             one-hot encoded input sequences.
 
         y : torch.Tensor
-            A tensor of shape (n_sequences,) containing the phenotypic 
+            A tensor of shape (n_sequences,) containing the phenotypic
             measurements corresponding to each sequence in `X`.
 
         y_var : torch.Tensor, optional
-            A tensor of shape (n_sequences,) representing the variance 
-            of the measurements in `y`. If `None`, it is assumed that 
+            A tensor of shape (n_sequences,) representing the variance
+            of the measurements in `y`. If `None`, it is assumed that
             there is no uncertainty in the measurements.
         """
 
         self.X = self.get_tensor(X)
         self.y = self.get_tensor(y)
-        self.y_var = (
-            torch.zeros_like(self.y) if y_var is None else self.get_tensor(y_var)
-        )
+        if y_var is None:
+            self.y_var = torch.zeros_like(self.y)
+        else:
+            self.y_var = self.get_tensor(y_var)
+
+        if self.X.shape[0] != self.y.shape[0] or self.y.shape[0] != self.y_var.shape[0]:
+            msg = "X, y and y_var should have the same size {}, {}, {}"
+            raise ValueError(
+                msg.format(self.X.shape[0], self.y.shape[0], self.y_var.shape[0])
+            )
+
+        if self.X.shape[1] != self.kernel.n_features:
+            msg = "Number of features in X ({}) should match the kernel features ({})"
+            raise ValueError(msg.format(self.X.shape[1], self.kernel.n_features))
 
         self.define_likelihood()
         self.define_gp()
+        self.n = X.shape[0]
 
-    def calc_mll(self):
-        with max_preconditioner_size(self.preconditioner_size), cg_tolerance(
-            self.cg_tol
-        ), num_trace_samples(self.num_trace_samples), max_lanczos_quadrature_iterations(
-            self.max_n_lanczos_iterations
-        ):
-            return self.mll_layer(self.gp(self.X), self.y)
+    def calc_mll(
+        self,
+        method="cg",
+        cg_tol=None,
+        n_lanczos_iter=None,
+        preconditioner_size=None,
+        n_trace_samples=None,
+        max_cg_iter=None,
+    ):
+        """
+        Calculate the marginal log likelihood (MLL) for the Gaussian process model.
+
+        This method computes the MLL using either the conjugate gradient (CG) method
+        or the Cholesky decomposition, depending on the specified `method`. It also
+        allows for customization of various parameters such as tolerance, maximum
+        iterations, preconditioner size, and the number of trace samples.
+
+        Parameters
+        ----------
+        method : str, optional
+            The method to use for MLL computation. Must be one of ["cg", "cholesky"].
+            Default is "cg".
+        cg_tol : float, optional
+            The tolerance for the conjugate gradient method. If not provided, the
+            default value from the object (`self.cg_tol`) is used.
+        n_lanczos_iter : int, optional
+            The maximum number of Lanczos iterations. If not provided, the default
+            value from the object (`self.max_n_lanczos_iterations`) is used.
+        preconditioner_size : int, optional
+            The size of the preconditioner. If not provided, the default value from
+            the object (`self.preconditioner_size`) is used.
+        n_trace_samples : int, optional
+            The number of trace samples to use. If not provided, the default value
+            from the object (`self.n_trace_samples`) is used.
+
+        Returns
+        -------
+        float
+            The computed marginal log likelihood.
+
+        Notes
+        -----
+        This method uses context managers to temporarily set various parameters
+        during the computation of the MLL. The `max_preconditioner_size`,
+        `cg_tolerance`, `num_trace_samples`, `max_lanczos_quadrature_iterations`,
+        and `max_cholesky_size` context managers are used to manage these settings.
+        """
+        allowed = ["cg", "cholesky"]
+        if method not in allowed:
+            raise ValueError(f"method {method} should be one of {allowed}")
+
+        if method == "cg":
+            max_n = self.n - 1
+        else:
+            max_n = self.n + 1
+
+        if cg_tol is None:
+            cg_tol = self.cg_tol
+        if max_cg_iter is None:
+            max_cg_iter = self.max_cg_iter
         
-    def diagnose_mll(self, min_n_lanczos=20, max_n_lanczos=1000):
-        with torch.no_grad(), max_preconditioner_size(
-            self.preconditioner_size
-        ), cg_tolerance(self.cg_tol), num_trace_samples(
-            self.num_trace_samples
-        ):
-            
-            max_value = max(self.max_n_lanczos_iterations + 50, max_n_lanczos)
-            records = []
-            ns = np.linspace(min_n_lanczos, max_value, 100)
-            if self.track_progress:
-                ns = tqdm(ns)
+        if preconditioner_size is None:
+            preconditioner_size = self.preconditioner_size
+
+        if n_lanczos_iter is None:
+            n_lanczos_iter = self.n_lanczos_iter
+        if n_trace_samples is None:
+            n_trace_samples = self.n_trace_samples
+
+        with max_preconditioner_size(preconditioner_size), cg_tolerance(
+            cg_tol
+        ), num_trace_samples(n_trace_samples), max_lanczos_quadrature_iterations(
+            n_lanczos_iter
+        ), max_cholesky_size(max_n), max_cg_iterations(max_cg_iter):
+            return self.mll_layer(self.gp(self.X), self.y)
+
+    def diagnose_mll(
+        self,
+        min_n_lanczos=20,
+        max_n_lanczos=1000,
+        min_cg_tol=0.001,
+        max_cg_tol=10,
+        min_n_trace_samples=10,
+        max_n_trace_samples=200,
+        add_cholesky=False,
+    ):
+        """
+        Diagnose the marginal log likelihood (MLL) by varying the number of
+        Lanczos iterations, CG tolerance, and the number of trace samples,
+        and recording the resulting MLL values.
+
+        Parameters
+        ----------
+        min_n_lanczos : int
+            Minimum number of Lanczos iterations to test.
+        max_n_lanczos : int
+            Maximum number of Lanczos iterations to test.
+        min_cg_tol : float
+            Minimum CG tolerance to test.
+        max_cg_tol : float
+            Maximum CG tolerance to test.
+        min_n_trace_samples : int
+            Minimum number of trace samples to test.
+        max_n_trace_samples : int
+            Maximum number of trace samples to test.
+        add_cholesky : bool
+            Whether to compute MLL with Cholesky decomposition as well.
+
+        Returns
+        -------
+        pd.DataFrame
+            A DataFrame containing the number of Lanczos iterations
+            (`n_lanczos`), CG tolerance (`cg_tol`), and
+            number of samples for stochastic trace estimation (`n_trace_samples`)
+            with the corresponding MLL values (`mll`).
+        """
+        max_value = max(self.n_lanczos_iter + 50, max_n_lanczos)
+        records = []
+        ns = np.linspace(min_n_lanczos, max_value, 50)
+        cg_tols = np.geomspace(min_cg_tol, max_cg_tol, 50)
+        ns_trace_samples = np.linspace(min_n_trace_samples, max_n_trace_samples, 50)
+
+        if self.track_progress:
+            ns = tqdm(ns)
+            cg_tols = tqdm(cg_tols)
+            ns_trace_samples = tqdm(ns_trace_samples)
+
+        with torch.inference_mode():
             for n in ns:
-                with max_lanczos_quadrature_iterations(int(n)):
-                    mll = self.calc_mll().item()
-                    records.append({"n_lanczos": n, "mll": mll})
-            return pd.DataFrame(records)
+                mll = self.calc_mll(method="cg", n_lanczos_iter=int(n)).item()
+                records.append(
+                    {
+                        "param": "n_lanczos",
+                        "n_lanczos": n,
+                        "cg_tol": self.cg_tol,
+                        "n_trace_samples": self.n_trace_samples,
+                        "mll": mll,
+                    }
+                )
+
+            for cg_tol in cg_tols:
+                mll = self.calc_mll(method="cg", cg_tol=cg_tol).item()
+                records.append(
+                    {
+                        "param": "cg_tol",
+                        "n_lanczos": self.n_lanczos_iter,
+                        "cg_tol": cg_tol,
+                        "n_trace_samples": self.n_trace_samples,
+                        "mll": mll,
+                    }
+                )
+
+            for n_trace_samples in ns_trace_samples:
+                mll = self.calc_mll(
+                    method="cg", n_trace_samples=int(n_trace_samples)
+                ).item()
+                records.append(
+                    {
+                        "param": "n_trace_samples",
+                        "n_lanczos": self.n_lanczos_iter,
+                        "cg_tol": self.cg_tol,
+                        "n_trace_samples": n_trace_samples,
+                        "mll": mll,
+                    }
+                )
+            if add_cholesky:
+                mll = self.calc_mll(method="cholesky").item()
+                records.append(
+                    {
+                        "param": "cholesky",
+                        "n_lanczos": None,
+                        "cg_tol": None,
+                        "n_trace_samples": None,
+                        "mll": mll,
+                    }
+                )
+
+        return pd.DataFrame(records)
 
     def training_step(self):
         self.optimizer.zero_grad()
         torch.cuda.empty_cache()
-        neg_mll = -self.calc_mll()
-        neg_mll.backward()
+        mll = self.calc_mll(self.method)
+        if self.training_history:
+            sd = np.std(self.training_history[-10:])
+            threshold = self.training_history[-1] - 10 * sd
+            n = 0
+
+            # Recalculate MLL until is above threshold
+            while mll.item() < threshold and n < 10:
+                print('Recalculating MLL to avoid spurious low value...')
+                mll = self.calc_mll(self.method)
+                n += 1
+
+        mll.backward()
         self.optimizer.step()
 
         self.params = self.gp.state_dict()
-        self.mll = -neg_mll.detach().item()
-        self.params_history.append(self.params)
+        self.mll = mll.detach().item()
+
+        params = {}
+        grad = {}
+        for name, param in self.mll_layer.named_parameters():
+            new_name = name.split(".")[-1]
+            if param.grad is not None:
+                params[new_name] = param.detach().to(device="cpu").numpy()
+                grad[new_name] = param.grad.detach().to(device="cpu").numpy()
+        self.params_history.append(params)
+        self.grad_history.append(grad)
         self.training_history.append(self.mll)
 
         if not hasattr(self, "max_mll") or self.mll > self.max_mll:
             self.max_mll = self.mll
             self.max_params = deepcopy(self.params)
 
-    def fit(self, n_iter=100, learning_rate=0.1, optimizer="Adam"):
+    def fit(self, n_iter=100, learning_rate=0.1):
         """
         Optimize model hyperparameters by maximizing the marginal likelihood.
-
-        This process adjusts kernel parameters, as well as optional mean and 
-        additional noise parameters, to improve the model's performance.
 
         Parameters
         ----------
@@ -233,23 +424,14 @@ class _Epik(object):
         learning_rate : float, optional (default=0.1)
             Learning rate for the optimizer.
 
-        optimizer : str, optional (default="Adam")
-            Optimizer to use for hyperparameter optimization. Options are 
-            "Adam" or "SGD".
-
         Raises
         ------
         ValueError
             If the specified optimizer is not recognized.
         """
-        if optimizer == "Adam":
-            self.optimizer = Adam(self.gp.parameters(), lr=learning_rate)
-        elif optimizer == "SGD":
-            self.optimizer = SGD(self.gp.parameters(), lr=learning_rate)
-        else:
-            raise ValueError("Optimizer {} not recognized".format(optimizer))
-        
         self.set_training_mode()
+        self.optimizer = Adam(self.gp.parameters(), lr=learning_rate,
+                              maximize=True)
 
         t0 = time()
         pbar = range(n_iter)
@@ -259,9 +441,13 @@ class _Epik(object):
         for _ in pbar:
             try:
                 self.training_step()
-            except RuntimeError:
-                self.kernel.use_keops = True
-                self.training_step()
+            except RuntimeError as error:
+                if "out of memory" in str(error):
+                    torch.cuda.empty_cache()
+                    self.kernel.use_keops = True
+                    self.training_step()
+                else:
+                    raise RuntimeError(error)
 
             if n_iter > 1:
                 self.report_progress(pbar)
@@ -354,6 +540,7 @@ class EpiK(_Epik):
         Whether to display a progress bar during model fitting. Default is False.
 
     """
+
     def define_likelihood(self):
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=self.y_var, learn_additional_noise=self.train_noise
@@ -402,12 +589,18 @@ class EpiK(_Epik):
         self.set_evaluation_mode()
         X = self.get_tensor(X)
 
-        with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
+        with torch.inference_mode(), max_preconditioner_size(
+            self.preconditioner_size
+        ), max_root_decomposition_size(self.n_lanczos_iter), cg_tolerance(self.cg_tol):
             if calc_covariance:
                 f = self.gp(X)
             elif calc_variance:
-                with fast_pred_var():
-                    f = self.gp(X)
+                if self.method == 'cg':
+                    with fast_pred_var(num_probe_vectors=self.n_trace_samples):
+                        f = self.gp(X)
+                else:
+                    with fast_pred_var(False):
+                        f = self.gp(X)
             else:
                 with skip_posterior_variances():
                     f = self.gp(X)
@@ -464,11 +657,16 @@ class EpiK(_Epik):
 
         """
         t0 = time()
-        self.set_evaluation_mode()
         X = self.get_tensor(X)
         f = self.get_posterior(X, calc_variance=calc_variance)
 
-        res = (f.mean, f.variance) if calc_variance else f.mean
+        if self.method == 'cg':
+            with fast_pred_var(num_probe_vectors=self.n_trace_samples), max_root_decomposition_size(self.n_lanczos_iter):
+                res = (f.mean, f.variance) if calc_variance else f.mean
+        else:
+            with fast_pred_var(False):
+                res = (f.mean, f.variance) if calc_variance else f.mean
+
         df = self.pred_to_df(res, calc_variance=calc_variance, labels=labels)
         self.pred_time = time() - t0
         return df
@@ -481,30 +679,28 @@ class EpiK(_Epik):
         Parameters
         ----------
         contrast_matrix : torch.Tensor of shape (n_contrasts, n_sequences)
-            A tensor representing the linear combinations of sequences 
-            encoded by `X` to compute the posterior distribution of 
+            A tensor representing the linear combinations of sequences
+            encoded by `X` to compute the posterior distribution of
             the contrasts.
 
         X : torch.Tensor of shape (n_sequences, n_features)
-            A tensor containing the one-hot encoded sequences for 
+            A tensor containing the one-hot encoded sequences for
             which predictions are to be made.
 
         calc_variance : bool, optional (default=False)
-            If True, computes the posterior (co)-variance in addition 
+            If True, computes the posterior (co)-variance in addition
             to the posterior mean.
 
         Returns
         -------
         output : torch.Tensor or tuple of torch.Tensor
-            If `calc_variance=False`, returns a tensor containing the 
-            phenotypic predictions for the desired sequences. 
-            If `calc_variance=True`, returns a tuple where the first 
-            element is the phenotypic predictions and the second element 
+            If `calc_variance=False`, returns a tensor containing the
+            phenotypic predictions for the desired sequences.
+            If `calc_variance=True`, returns a tuple where the first
+            element is the phenotypic predictions and the second element
             is the covariance matrix of the posterior contrasts.
         """
         t0 = time()
-        self.set_evaluation_mode()
-
         B = self.get_tensor(contrast_matrix)
         f = self.get_posterior(X, calc_covariance=calc_variance)
 
@@ -635,31 +831,35 @@ class EpiK(_Epik):
             Tensor containing the simulated landscapes
             evaluated in the input sequences
         """
+        if self.method == "cg":
+            max_n = X.shape[0] - 1
+        else:
+            max_n = X.shape[0] + 1
 
-        with torch.no_grad(), max_preconditioner_size(self.preconditioner_size):
+        with max_cholesky_size(max_n), max_root_decomposition_size(self.n_lanczos_iter):
             prior = self.get_prior(X, sigma2=sigma2)
             v = torch.zeros(n)
-            y = prior.rsample(v.size())
+            y = prior.sample(v.size())
 
         return y
 
     def simulate_dataset(self, X, sigma=0, ptrain=0.8):
         """
-        Simulate a dataset by sampling random sequence-function relationships 
+        Simulate a dataset by sampling random sequence-function relationships
         from the prior and splitting the data into training and test sets.
 
         Parameters
         ----------
         X : torch.Tensor of shape (n_sequence, n_features)
-            Tensor containing the one-hot encoding of the sequences 
+            Tensor containing the one-hot encoding of the sequences
             to make predictions.
 
         sigma : float, optional (default=0)
-            Standard deviation of the noise to add to the training data. 
+            Standard deviation of the noise to add to the training data.
             If `sigma=0`, no noise is added.
 
         ptrain : float, optional (default=0.8)
-            Proportion of the data to include in the training set. 
+            Proportion of the data to include in the training set.
             The remaining data will be used as the test set.
 
         Returns
