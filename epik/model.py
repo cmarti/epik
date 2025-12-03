@@ -1,6 +1,7 @@
 import pandas as pd
 import torch
 import numpy as np
+import sys
 
 from copy import deepcopy
 from time import time
@@ -73,13 +74,15 @@ class ExactMLL(MarginalLogLikelihood):
 
 
 class GPModel(ExactGP):
-    def __init__(self, train_x, train_y, kernel, likelihood, train_mean=False):
+    def __init__(self, train_x, train_y, kernel, likelihood, train_mean=False,
+                 mean0=0.):
         super(GPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean() if train_mean else ZeroMean()
         self.covar_module = kernel
+        self.mean0 = mean0
 
     def forward(self, x):
-        mean_x = self.mean_module(x)
+        mean_x = self.mean0 + self.mean_module(x)
         covar_x = self.covar_module(x)
         return MultivariateNormal(mean_x, covar_x)
 
@@ -107,6 +110,7 @@ class _Epik(object):
         device="cpu",
         train_mean=False,
         train_noise=False,
+        mean0=0.,
         method="cg",
         preconditioner_size=0,
         cg_tol=1.0,
@@ -119,6 +123,7 @@ class _Epik(object):
         self.device = device
         self.train_mean = train_mean
         self.train_noise = train_noise
+        self.mean0 = mean0
 
         self.method = method
         self.preconditioner_size = preconditioner_size
@@ -377,21 +382,24 @@ class _Epik(object):
         return pd.DataFrame(records)
 
     def training_step(self):
-        self.optimizer.zero_grad()
         torch.cuda.empty_cache()
         mll = self.calc_mll(self.method)
+
+        skip_grad = False
         if self.training_history:
             sd = np.std(self.training_history[-10:])
             threshold = self.training_history[-1] - 10 * sd
-            n = 0
+            
+            # Only update gradient if MLL is safe
+            if mll.item() < threshold: 
+                msg = f"Gradient calculation skipped due to unusually low MLL={mll.item()}"
+                sys.stderr.write(msg)
+                skip_grad = True
+        
+        if not skip_grad:
+            self.optimizer.zero_grad()
+            mll.backward()
 
-            # Recalculate MLL until is above threshold
-            while mll.item() < threshold and n < 10:
-                print('Recalculating MLL to avoid spurious low value...')
-                mll = self.calc_mll(self.method)
-                n += 1
-
-        mll.backward()
         self.optimizer.step()
 
         self.params = self.gp.state_dict()
@@ -507,6 +515,11 @@ class EpiK(_Epik):
         The device on which computations will be performed. Options are
         "cpu" or "cuda". Default is "cpu".
 
+    mean0 : float, optional
+        Value of the prior mean to use for the Gaussian process model.
+        Default is 0. If `train_mean=True`, then this value initializes
+        the mean function to learn.
+
     train_mean : bool, optional
         Whether to optimize the mean function of the Gaussian Process.
         By default, it assumes a zero-mean function. Default is False.
@@ -550,7 +563,8 @@ class EpiK(_Epik):
             self.likelihood = self.likelihood.cuda()
 
     def get_gp(self, likelihood, x=None, y=None):
-        gp = GPModel(x, y, self.kernel, likelihood, train_mean=self.train_mean)
+        gp = GPModel(x, y, self.kernel, likelihood,
+                     train_mean=self.train_mean, mean0=self.mean0)
 
         if self.device == "cuda":
             gp = gp.cuda()

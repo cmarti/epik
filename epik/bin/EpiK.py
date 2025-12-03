@@ -58,6 +58,8 @@ def main():
     options_group.add_argument(
         "--train_mean", default=False, action="store_true", help=help_msg
     )
+    help_msg = "Value to initialize the GP mean"
+    options_group.add_argument("--mean0", default=0., help=help_msg, type=float)
     options_group.add_argument(
         "--ndim", default=None, help="Number of dimensions in linear embedding"
     )
