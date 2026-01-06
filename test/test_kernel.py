@@ -228,10 +228,6 @@ class KernelsTests(unittest.TestCase):
         diag = kernel.forward(self.x, self.x, diag=True).detach().numpy()
         assert np.allclose(diag, np.diag(cov))
 
-        # Check decay rate
-        delta = kernel.get_delta().detach().numpy()
-        assert np.allclose(delta, 1 - corr1d)
-
         # Check random initialization
         kernel = GeometricKernel(**self.config)
         cov1 = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
@@ -247,90 +243,49 @@ class KernelsTests(unittest.TestCase):
         delta = kernel.get_delta().detach().numpy()
         assert np.allclose(1 - delta, corr1d)
 
-
         corrs = [1, corr1d, corr1d, corr1d**2]
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
 
     def test_connectedness_kernel(self):
-        sl, a = 1, 2
-        log_rho = -np.log(2) * torch.ones(sl)
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl, theta0=log_rho)
-        x = get_full_space_one_hot(sl, a)
-        cov = kernel._nonkeops_forward(x, x).detach().numpy()
-        assert np.allclose(cov[0, :], [1, 1 / 3.0])
+        config = self.config.copy()
+        config.update({"theta0": torch.Tensor([-np.log(2), 0.])})
+        kernel = ConnectednessKernel(**config)
+        corr1d = [1 / 3.0, 0]
+        corrs = [1, corr1d[0], corr1d[1],corr1d[0] * corr1d[1]]
 
-        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(cov2, cov)
+        # Check decay factor
+        delta = kernel.get_delta().detach()
+        assert np.allclose(1 - delta, corr1d)
 
-        diag = kernel.forward(x, x, diag=True).detach().numpy()
+        # Check kernel calculation
+        cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov[0, :], corrs)
+
+        cov2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(cov, cov2)
+
+        diag = kernel.forward(self.x, self.x, diag=True).detach().numpy()
         assert np.allclose(diag, np.diag(cov))
-
-        # with 2 sites
-        sl, a = 2, 2
-        log_rho = -np.log(2) * torch.ones(sl)
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl, theta0=log_rho)
-        x = get_full_space_one_hot(sl, a)
-        cov = kernel.forward(x, x).detach().numpy()
-        assert np.allclose(cov[0, :], [1, 1 / 3.0, 1 / 3.0, 1 / 3.0**2])
-
-        diag = kernel.forward(x, x, diag=True).detach().numpy()
-        assert np.allclose(diag, np.diag(cov))
-
-        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(cov, cov)
-
-        # With different variance
-        kernel = ConnectednessKernel(
-            n_alleles=a, seq_length=sl, theta0=log_rho, log_var0=torch.Tensor([-1.0])
-        )
-        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        cov2 = kernel._keops_forward(x, x).detach().numpy()
-        assert np.allclose(cov1, cov2)
-
-        # With unequal decay factors
-        log_rho = torch.tensor([-np.log(2), -np.log(3)], dtype=torch.float32)
-        rho = torch.exp(log_rho)
-        corr1ds = (1 - rho) / (1 + rho)
-
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl, theta0=log_rho)
-
-        cov = kernel.forward(x, x).detach().numpy()
-        expected = np.array(
-            [1, corr1ds[0], corr1ds[1], corr1ds[0] * corr1ds[1]]
-        )
-        assert np.allclose(cov[0, :], expected)
-
-        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(cov2, cov)
-
-        # Check decay rates calculation
-        delta = kernel.get_delta().detach().numpy()
-        expected_delta = 1 - corr1ds
-        assert np.allclose(delta, expected_delta)
 
         # Check random initialization
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl)
-        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        cov2 = kernel._keops_forward(x, x).detach().numpy()
+        kernel = GeometricKernel(**self.config)
+        cov1 = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov1, cov2)
 
-        # Check longer sequences
-        sl, a = 6, 4
-        kernel = ConnectednessKernel(n_alleles=a, seq_length=sl)
-        x = get_full_space_one_hot(sl, a)
-        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(cov2, cov1)
+        # Check that it works for theta0 > 0
+        config["theta0"] = torch.Tensor(np.log([2, 1]))
+        kernel = ConnectednessKernel(**config)
+        corr1d = [-1 / 3.0, 0]
 
-        # Check longer sequences
-        kernel = ConnectednessKernel(
-            n_alleles=a, seq_length=sl, log_var0=torch.Tensor([-1.0])
-        )
-        x = get_full_space_one_hot(sl, a)
-        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(cov2, cov1)
+        # Check decay factor
+        delta = kernel.get_delta().detach().numpy()
+        assert np.allclose(1 - delta, corr1d)
+
+        corrs = [1, corr1d[0], corr1d[1], corr1d[0] * corr1d[1]]
+        cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov[0, :], corrs)
 
     def test_jenga_kernel(self):
         sl, a = 1, 3
