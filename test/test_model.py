@@ -15,13 +15,12 @@ from gpytorch.distributions import MultivariateNormal
 from epik.kernel import (
     AdditiveKernel,
     ConnectednessKernel,
-    ExponentialKernel,
+    GeometricKernel,
     GeneralProductKernel,
     JengaKernel,
     PairwiseKernel,
     VarianceComponentKernel,
     FactorAnalysisKernel,
-    SimplifiedConnectednessKernel,
 )
 from epik.model import EpiK
 from epik.settings import BIN_DIR, KERNELS
@@ -62,11 +61,11 @@ class ModelsTests(unittest.TestCase):
         self.vc_kernels = [
             AdditiveKernel,
             PairwiseKernel,
-            ExponentialKernel,
+            GeometricKernel,
             VarianceComponentKernel,
         ]
         self.product_kernels = [
-            ExponentialKernel,
+            GeometricKernel,
             ConnectednessKernel,
             JengaKernel,
             GeneralProductKernel,
@@ -423,19 +422,6 @@ class ModelsTests(unittest.TestCase):
             # print(k1.get_diag())
             # print(q1[:, -2:].T @ q1[:, -2:])
             print(k1.get_delta().detach().numpy())
-
-    def test_simplified_connectedness(self):
-        # Simulate data
-        k = SimplifiedConnectednessKernel(n_alleles=self.alpha, seq_length=self.l)
-        model = EpiK(k, track_progress=True)
-        y = model.simulate(self.X_train).flatten()
-
-        for _ in range(3):
-            k = SimplifiedConnectednessKernel(n_alleles=self.alpha, seq_length=self.l)
-            with gpytorch.settings.max_cholesky_size(5000):
-                model = EpiK(k, track_progress=True)
-                model.set_data(self.X_train, y, self.y_var)
-                model.fit(n_iter=1000, learning_rate=0.1)
 
 
 if __name__ == "__main__":

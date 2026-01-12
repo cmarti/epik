@@ -84,12 +84,13 @@ class SequenceKernel(Kernel):
 
         if any(len(site_alphabet) <= 1 for site_alphabet in alphabet_list):
             raise ValueError("All sites must have at least two alleles")
-    
+
         if seq_length is None:
             seq_length = len(alphabet_list)
 
         self.alphabet_list = alphabet_list
         self.alphas = np.array([len(site) for site in alphabet_list])
+
         self.starts = np.cumsum(np.append([0], self.alphas[:-1]))
         self.ends = np.cumsum(self.alphas)
 
@@ -100,7 +101,11 @@ class SequenceKernel(Kernel):
 
         self.logn = np.sum(np.log(self.alphas))
         self.logam1 = np.log(self.alphas - 1)
+        self.logam1_max = np.max(self.logam1)
         self.loga = np.log(self.alphas)
+        self.loga_max = np.max(self.loga)
+        self.a_max = np.max(self.alphas)
+
         self.use_keops = use_keops
         super().__init__(**kwargs)
 
@@ -294,7 +299,7 @@ class VarianceComponentKernel(SequenceKernel):
         log_lambdas: torch.Tensor,
         diag: bool = False,
         **kwargs: Any,
-    ) -> Union[torch.Tensor, KernelLinearOperator]:
+    ) -> Union[torch.Tensor, LazyTensor, KernelLinearOperator]:
         c_b = self.calc_c_b(log_lambdas)
         d = self.calc_hamming_distance(x1, x2, diag=diag)
         return self.distance_to_cov(d, c_b, keops=False)
@@ -322,7 +327,7 @@ class VarianceComponentKernel(SequenceKernel):
         return kernel
 
     def calc_basis(
-        self, d: torch.Tensor, keops: bool = False
+        self, d: Union[torch.Tensor, LazyTensor], keops: bool = False
     ) -> Generator[torch.Tensor, None, None]:
         for i in range(self.l + 1):
             d_i = float(i)
@@ -460,6 +465,7 @@ class PairwiseKernel(VarianceComponentKernel):
 
 class SiteProductKernel(SequenceKernel):
     is_stationary = True
+
     def __init__(
         self,
         seq_length: Optional[int] = None,
@@ -478,32 +484,15 @@ class SiteProductKernel(SequenceKernel):
             **kwargs,
         )
         self._set_params(log_var0, theta0)
-        self.logam1_max = np.max(self.logam1)
-        self.loga_max = np.max(self.loga)
         self.site_shapes = [(a, a) for a in self.alphas]
-
-    def is_positive(self) -> bool:
-        return False
 
     def get_log_var0(self, log_var0: Optional[torch.Tensor]):
         if log_var0 is None:
             log_var0 = torch.zeros((1,))
-        if log_var0.shape != (1, ):
-            raise ValueError('log_var0 should be a tensor of shape (1,)')
+        if log_var0.shape != (1,):
+            raise ValueError("log_var0 should be a tensor of shape (1,)")
 
         return log_var0
-
-    def _set_params(
-        self,
-        log_var0: Optional[torch.Tensor] = None,
-        theta0: Optional[torch.Tensor] = None,
-    ) -> None:
-        
-        theta = Parameter(self.get_theta0(theta0), requires_grad=True)
-        log_var = Parameter(self.get_log_var0(log_var0), requires_grad=True)
-
-        self.register_parameter(name="theta", parameter=theta)
-        self.register_parameter(name="log_var", parameter=log_var)
 
     def _nonkeops_forward(
         self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
@@ -606,10 +595,9 @@ class SiteProductKernel(SequenceKernel):
         delta : torch.Tensor
             A tensor containing the decay factors.
         """
-        delta = self.theta_to_delta(self.theta)
-        return delta
+        return self.theta_to_delta(self.theta)
 
-    def get_mutation_delta(self) -> torch.Tensor:
+    def get_mutation_delta(self) -> List[torch.Tensor]:
         """
         Compute the mutation-specific decay factors of the kernel.
 
@@ -618,14 +606,25 @@ class SiteProductKernel(SequenceKernel):
 
         Returns
         -------
-        delta : torch.Tensor
-            A tensor containing the decay factors for each possible mutation.
+        delta : list of torch.Tensor
+            A list of tensors containing the decay factors for each possible mutation
+            at each site.
         """
-        Ks = self.get_site_kernels()
-        return 1 - Ks
+        return [1 - K for K in self.get_site_kernels()]
 
 
 class AlleleSymmetricProductKernel(SiteProductKernel):
+    def _set_params(
+        self,
+        log_var0: Optional[torch.Tensor] = None,
+        theta0: Optional[torch.Tensor] = None,
+    ) -> None:
+        theta = Parameter(self.get_theta0(theta0), requires_grad=True)
+        log_var = Parameter(self.get_log_var0(log_var0), requires_grad=True)
+
+        self.register_parameter(name="theta", parameter=theta)
+        self.register_parameter(name="log_var", parameter=log_var)
+
     def is_positive(self) -> bool:
         return torch.all(self.theta < 0.0)
 
@@ -643,25 +642,6 @@ class AlleleSymmetricProductKernel(SiteProductKernel):
         log_delta = self.theta_to_log_delta(theta)
         return torch.exp(log_delta)
 
-    def get_site_kernels(self) -> List[torch.Tensor]:
-        v = 1 - self.theta_to_delta(self.theta)
-
-        kernels = []
-        for shape in self.site_shapes:
-            kernel = v * torch.ones(shape, device=self.theta.device)
-            kernels.append(kernel.fill_diagonal_(1.0))
-
-        return kernels
-
-    def get_site_log_kernels(self) -> torch.Tensor:
-        w = self.theta_to_log_corr_1d(self.theta)
-
-        log_kernels = []
-        for shape in self.site_shapes:
-            log_kernel = w * torch.ones(shape, device=self.theta.device)
-            log_kernels.append(log_kernel.fill_diagonal_(0.0))
-
-        return log_kernels
 
 class GeometricKernel(AlleleSymmetricProductKernel):
     r"""
@@ -672,13 +652,15 @@ class GeometricKernel(AlleleSymmetricProductKernel):
 
 
     .. math::
-        K(x, y) = \left( \frac{ 1-\mu }{ 1 + (\alpha - 1)\mu } \right)^d
+        K(x, y) = \sigma^2 \left( \frac{ 1-\mu }{ 1 + (\alpha - 1)\mu } \right)^d
 
     where:
 
+        - :math:`\sigma^2` corresponds to the kernel variance.
+
         - :math:`\mu` is a parameter controlling the decay rate.
 
-        - :math:`\alpha` is the number of alleles.
+        - :math:`\alpha` is the max number of alleles across sites.
 
         - :math:`d` is the Hamming distance between sequences :math:`x` and :math:`y`.
 
@@ -687,30 +669,30 @@ class GeometricKernel(AlleleSymmetricProductKernel):
     def get_theta0(self, theta0: Optional[torch.Tensor]) -> torch.Tensor:
         if theta0 is None:
             q = torch.Tensor([np.exp(-np.log(10) / self.l)])
-            qs = Beta(20 * q, 20 * (1 - q)).sample((1,))
+            qs = Beta(20 * q, 20 * (1 - q)).sample((1,))  # type: ignore
             mu = (1 - qs) / (1 + (np.max(self.alphas) - 1) * qs)
             theta0 = torch.log(mu).flatten()
 
         if theta0.shape != (1,):
-            raise ValueError(f'theta should have shape (1,), got {theta0.shape}')
+            raise ValueError(f"theta should have shape (1,), got {theta0.shape}")
         return theta0
-    
+
     def get_site_kernels(self) -> List[torch.Tensor]:
-        v = 1 - self.theta_to_delta(self.theta)
+        v = -torch.expm1(self.theta_to_log_delta(self.theta))
 
         kernels = []
         for shape in self.site_shapes:
-            kernel = v * torch.ones(shape, device=self.theta.device)
+            kernel = v * torch.ones(shape, device=self.theta.device)  # type: ignore
             kernels.append(kernel.fill_diagonal_(1.0))
 
-        return(kernels)
+        return kernels
 
-    def get_site_log_kernels(self) -> torch.Tensor:
-        w = self.theta_to_log_corr_1d(self.theta)
+    def get_site_log_kernels(self) -> List[torch.Tensor]:
+        w = self.theta_to_log_corr_1d(self.theta)  # type: ignore
 
         log_kernels = []
         for shape in self.site_shapes:
-            log_kernel = w * torch.ones(shape, device=self.theta.device)
+            log_kernel = w * torch.ones(shape, device=self.theta.device)  # type: ignore
             log_kernels.append(log_kernel.fill_diagonal_(0.0))
 
         return log_kernels
@@ -718,13 +700,46 @@ class GeometricKernel(AlleleSymmetricProductKernel):
     def _nonkeops_forward(
         self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
     ) -> Union[torch.Tensor, KernelLinearOperator]:
+        d = self.calc_hamming_distance(x1, x2, diag=diag, keops=self.use_keops)
         if self.is_positive():
-            w = self.theta_to_log_corr_1d(self.theta)
-            d = self.calc_hamming_distance(x1, x2, diag=diag, keops=self.use_keops)
+            w = self.theta_to_log_corr_1d(self.theta)  # type: ignore
             return (self.log_var + w * d).exp()
 
         else:
-            return super()._nonkeops_forward(x1, x2, diag=diag, **kwargs)
+            v = 1 - self.theta_to_delta(self.theta)  # type: ignore
+            return torch.exp(self.log_var) * v**d
+
+    def _covar_func(
+        self, x1: torch.Tensor, x2: torch.Tensor, **kwargs: Any
+    ) -> LazyTensor:
+        x1_ = LazyTensor(self.select_site(x1, site=0)[:, None, :])
+        x2_ = LazyTensor(self.select_site(x2, site=0)[None, :, :])
+        K = (x1_ * x2_).sum(-1)
+
+        for i in range(1, self.l):
+            x1_ = LazyTensor(self.select_site(x1, site=i)[:, None, :])
+            x2_ = LazyTensor(self.select_site(x2, site=i)[None, :, :])
+            K *= (x1_ * x2_).sum(-1)
+
+        return K
+
+    def _keops_forward(
+        self, x1: torch.Tensor, x2: torch.Tensor, **kwargs: Any
+    ) -> KernelLinearOperator:
+        if self.is_positive():
+            w = self.theta_to_log_corr_1d(self.theta)
+            kernel = KernelLinearOperator(
+                self.log_var + w - w * x1, x2, covar_func=self._covar_func_log, **kwargs
+            )
+
+        else:
+            site_kernels = [x for x in self.get_site_kernels()]
+            sigma2 = torch.exp(self.log_var)
+            M = torch.block_diag(*site_kernels)
+            kernel = sigma2 * KernelLinearOperator(
+                x1 @ M, x2, covar_func=self._covar_func, **kwargs
+            )
+        return kernel
 
 
 class ConnectednessKernel(AlleleSymmetricProductKernel):
@@ -737,13 +752,15 @@ class ConnectednessKernel(AlleleSymmetricProductKernel):
 
 
     .. math::
-        K(x, y) = \prod_p^{\ell}\frac{1-\mu_p}{1 + (\alpha - 1)\mu_p}
+        K(x, y) = \sigma^2 \prod_p^{\ell}\frac{1-\mu_p}{1 + (\alpha - 1)\mu_p}
 
     where:
 
+        - :math:`\sigma^2` corresponds to the kernel variance.
+
         - :math:`\mu_p` is a parameter controlling the decay rate of site :math:`p`.
 
-        - :math:`\alpha` is the number of alleles.
+        - :math:`\alpha` is the max number of alleles across sites.
 
         - :math:`\ell` is the sequence length.
 
@@ -752,28 +769,30 @@ class ConnectednessKernel(AlleleSymmetricProductKernel):
     def get_theta0(self, theta0: Optional[torch.Tensor]) -> torch.Tensor:
         if theta0 is None:
             qs = 0.9 * torch.ones(size=(self.l,))
-            mu = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
+            mu = (1 - qs) / (1 + (self.a_max - 1) * qs)  # type: ignore
             theta0 = torch.log(mu)
         if theta0.shape != (self.l,):
-            raise ValueError(f"theta0 shape should be ({self.l},) but got {theta0.shape}")
+            raise ValueError(
+                f"theta0 shape should be ({self.l},) but got {theta0.shape}"
+            )
         return theta0
 
     def get_site_kernels(self) -> List[torch.Tensor]:
-        vs = 1 - self.theta_to_delta(self.theta)
+        vs = -torch.expm1(self.theta_to_log_delta(self.theta))
 
         kernels = []
         for v, shape in zip(vs, self.site_shapes):
-            kernel = v * torch.ones(shape, device=self.theta.device)
+            kernel = v * torch.ones(shape, device=self.theta.device)  # type: ignore
             kernels.append(kernel.fill_diagonal_(1.0))
 
         return kernels
 
     def get_site_log_kernels(self) -> torch.Tensor:
-        ws = self.theta_to_log_corr_1d(self.theta)
+        ws = self.theta_to_log_corr_1d(self.theta)  # type: ignore
 
         log_kernels = []
         for w, shape in zip(ws, self.site_shapes):
-            log_kernel = w * torch.ones(shape, device=self.theta.device)
+            log_kernel = w * torch.ones(shape, device=self.theta.device)  # type: ignore
             log_kernels.append(log_kernel.fill_diagonal_(0.0))
 
         return log_kernels
@@ -787,11 +806,13 @@ class JengaKernel(SiteProductKernel):
     of allele- and site-specific factors at the alleles where they differ.
 
     .. math::
-        K(x, y) = \prod_{p: x_p \neq y_p}
+        K(x, y) = \sigma^2 \prod_{p: x_p \neq y_p}
         \sqrt{\frac{1-\mu_p}{1 + \frac{1-\pi_p^{x_p}}{\pi_p^{x_p}}\mu_p}}
         \sqrt{\frac{1-\mu_p}{1 + \frac{1-\pi_p^{y_p}}{\pi_p^{y_p}}\mu_p}}
 
     where:
+
+        - :math:`\sigma^2` corresponds to the kernel variance.
 
         - :math:`\mu_p` is a parameter controlling the decay rate at site :math:`p`.
 
@@ -800,56 +821,120 @@ class JengaKernel(SiteProductKernel):
         - :math:`\ell` is the sequence length.
     """
 
-    def calc_theta0(self) -> torch.Tensor:
-        if self.theta0 is None:
-            q = torch.Tensor([np.exp(-np.log(10) / self.l)])
-            qs = Beta(20 * q, 20 * (1 - q)).sample((self.l,))
-            mu = (1 - qs) / (1 + (self.n_alleles - 1) * qs)
-            theta0 = torch.randn((self.l, self.n_alleles + 1))
-            theta0[:, :1] = torch.log(mu)
-        else:
-            theta0 = self.theta0
-        return theta0
+    def __init__(
+        self,
+        seq_length: Optional[int] = None,
+        alphabet_type: Optional[str] = None,
+        alphabet: Optional[List[str]] = None,
+        alphabet_list: Optional[List[List[str]]] = None,
+        log_var0: Optional[torch.Tensor] = None,
+        log_mu0: Optional[torch.Tensor] = None,
+        log_pi0: Optional[List[torch.Tensor]] = None,
+        **kwargs: Any,
+    ) -> None:
+        SequenceKernel.__init__(
+            self,
+            seq_length=seq_length,
+            alphabet_type=alphabet_type,
+            alphabet=alphabet,
+            alphabet_list=alphabet_list,
+            **kwargs,
+        )
+        self.site_shapes = [(a, a) for a in self.alphas]
+        self._set_params(log_var0, log_mu0, log_pi0)
 
-    def get_log_mu_log1p_eta_mu(
-        self, theta: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        log_mu = theta[:, 0].unsqueeze(1)
-        log_p = theta[:, 1:] - torch.logsumexp(theta[:, 1:], 1).unsqueeze(1)
-        log_eta = log1mexp(log_p) - log_p
+    def get_log_mu0(self, log_mu0: Optional[torch.Tensor]) -> torch.Tensor:
+        if log_mu0 is None:
+            qs = 0.9 * torch.ones(size=(self.l,))
+            mu = (1 - qs) / (1 + (self.a_max - 1) * qs)  # type: ignore
+            log_mu0 = torch.log(mu)
+        if log_mu0.shape != (self.l,):
+            raise ValueError(
+                f"theta0 shape should be ({self.l},) but got {log_mu0.shape}"
+            )
+        return log_mu0
 
-        log1p_eta_mu = torch.logaddexp(torch.zeros_like(log_eta), log_mu + log_eta)
-        return log_mu, log1p_eta_mu
+    def get_log_pi0(self, log_pi0: Optional[List[torch.Tensor]]) -> List[torch.Tensor]:
+        if log_pi0 is None:
+            log_pi0 = [torch.zeros(alpha) for alpha in self.alphas]
 
-    def get_site_kernels(self) -> torch.Tensor:
-        log_mu, log1p_eta_mu = self.get_log_mu_log1p_eta_mu(self.theta)
-        mu = torch.exp(log_mu).reshape((self.l, 1, 1))
-        allele_factors = 0.5 * log1p_eta_mu
-        denom = torch.exp(-allele_factors.unsqueeze(1) - allele_factors.unsqueeze(2))
-        kernel = (1 - mu) * denom
-        for i in range(self.l):
-            kernel[i].fill_diagonal_(1.0)
-        return kernel
+        if len(log_pi0) != self.l:
+            raise ValueError(
+                f"log_pi0 should have dimension {self.l}, but got {len(log_pi0)}"
+            )
 
-    def get_site_log_kernels(self) -> torch.Tensor:
-        log_mu, log1p_eta_mu = self.get_log_mu_log1p_eta_mu(self.theta)
-        log1m_mu = log1mexp(log_mu)
-        zs = 0.5 * (log1m_mu - log1p_eta_mu)
-        log_kernels = []
-        for z in zs:
-            log_kernel = z.unsqueeze(0) + z.unsqueeze(1)
-            log_kernels.append(log_kernel.fill_diagonal_(0.0))
-        return torch.stack(log_kernels, axis=0)
+        shapes = [x.shape for x in log_pi0]
+        exp_shapes = [(alpha,) for alpha in self.alphas]
+
+        if shapes != exp_shapes:
+            raise ValueError(
+                f"log_pi0 shapes should be ({exp_shapes},) but got {shapes}"
+            )
+        return log_pi0
+
+    def _set_params(
+        self,
+        log_var0: Optional[torch.Tensor],
+        log_mu0: Optional[torch.Tensor],
+        log_pi0: Optional[List[torch.Tensor]],
+    ) -> None:
+        log_var = Parameter(self.get_log_var0(log_var0), requires_grad=True)
+        self.register_parameter(name="log_var", parameter=log_var)
+
+        log_var = Parameter(self.get_log_mu0(log_mu0), requires_grad=True)
+        self.register_parameter(name="log_mu", parameter=log_var)
+
+        for i, log_pi0_i in enumerate(self.get_log_pi0(log_pi0)):
+            log_pi0_i = Parameter(log_pi0_i, requires_grad=True)
+            self.register_parameter(name=f"log_pi_{i}", parameter=log_pi0_i)
 
     def is_positive(self) -> bool:
-        return torch.all(self.theta[:, 0] < 0.0)
+        return torch.all(self.log_mu < 0.0)  # type: ignore
 
-    def theta_to_delta(self, theta: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-        log_mu, log1p_eta_mu = self.get_log_mu_log1p_eta_mu(theta)
-        onemmu = 1 - torch.exp(log_mu)
-        site_factors = torch.exp(-0.5 * log1p_eta_mu)
-        delta = 1 - torch.sign(onemmu) * torch.sqrt(torch.abs(onemmu)) * site_factors
-        return delta
+    def get_log_pi_p(self, p):
+        log_pi_p = getattr(self, f"log_pi_{p}")
+        log_pi_p = log_pi_p - torch.logsumexp(log_pi_p, dim=0)
+        return log_pi_p
+
+    def get_log1p_eta_mu_p(self, p) -> List[torch.Tensor]:
+        log_pi_p = self.get_log_pi_p(p)
+        log_eta_p = log1mexp(log_pi_p) - log_pi_p
+        log1p_eta_mu_p = torch.logaddexp(
+            torch.zeros_like(log_eta_p), self.log_mu[p] + log_eta_p
+        )
+        return log1p_eta_mu_p
+
+    def get_site_kernels(self) -> List[torch.Tensor]:
+        kernels = []
+        for p in range(self.l):
+            kernel = -torch.expm1(self.get_log_delta_p(p)).fill_diagonal_(-1.0)
+            kernels.append(kernel)
+        return kernels
+
+    def get_site_log_kernels(self) -> List[torch.Tensor]:
+        log_kernels = []
+        log1m_mu = log1mexp(self.log_mu)
+        for p in range(self.l):
+            v = 0.5 * (log1m_mu[p] - self.get_log1p_eta_mu_p(p))
+            log_kernel = (v.unsqueeze(0) + v.unsqueeze(1)).fill_diagonal_(0.0)
+            log_kernels.append(log_kernel)
+
+        return log_kernels
+
+    def get_log_delta_p(self, p):
+        log_mu_p = self.log_mu[p]
+        v = 0.5 * self.get_log1p_eta_mu_p(p)
+        m = v.unsqueeze(0) + v.unsqueeze(1)
+        log_mu_p_m = torch.logaddexp(log_mu_p, m)
+        log_delta_p = log1mexp(-log_mu_p_m) - m + log_mu_p_m
+        return log_delta_p
+
+    def get_delta(self):
+        deltas = [
+            torch.exp(self.get_log_delta_p(p)).fill_diagonal_(0.0)
+            for p in range(self.l)
+        ]
+        return deltas
 
 
 class GeneralProductKernel(SiteProductKernel):
@@ -873,53 +958,80 @@ class GeneralProductKernel(SiteProductKernel):
     """
 
     is_stationary = True
-
     def __init__(
         self,
-        n_alleles: int,
-        seq_length: int,
+        seq_length: Optional[int] = None,
+        alphabet_type: Optional[str] = None,
+        alphabet: Optional[List[str]] = None,
+        alphabet_list: Optional[List[List[str]]] = None,
+        log_var0: Optional[torch.Tensor] = None,
         theta0: Optional[torch.Tensor] = None,
         **kwargs: Any,
     ) -> None:
-        self.dim = int(comb(n_alleles, 2))
+        SequenceKernel.__init__(self,
+            seq_length=seq_length,
+            alphabet_type=alphabet_type,
+            alphabet=alphabet,
+            alphabet_list=alphabet_list,
+            **kwargs,
+        )
+        self.site_shapes = [(a, a) for a in self.alphas]
+        self.dims = [int(comb(a, 2)) for a in self.alphas]
         self.theta_to_L = CorrCholeskyTransform()
-        super().__init__(n_alleles, seq_length, theta0=theta0, **kwargs)
+        self._set_params(
+            log_var0=log_var0,
+            theta0=theta0,
+        )
+    
+    def _set_params(
+        self,
+        log_var0: Optional[torch.Tensor],
+        theta0: Optional[torch.Tensor],
+    ) -> None:
+        log_var = Parameter(self.get_log_var0(log_var0), requires_grad=True)
+        self.register_parameter(name="log_var", parameter=log_var)
 
-    def calc_theta0(self) -> torch.Tensor:
-        if self.theta0 is not None:
-            theta0 = self.theta0
-        else:
+        for p, theta_p in enumerate(self.get_theta0(theta0)):
+            theta_p = Parameter(theta_p, requires_grad=True)
+            self.register_parameter(name=f"theta_{p}", parameter=theta_p)
+
+    def get_theta0(self, theta0) -> torch.Tensor:
+        if theta0 is None:
             q = torch.Tensor([np.exp(-np.log(10) / self.l)])
-            C = (1 - q) * torch.eye(self.n_alleles) + q * torch.ones(
-                (self.n_alleles, self.n_alleles)
-            )
-            df = 21.0
-            Ls = [
-                cholesky(cov2corr(Wishart(torch.Tensor([df]), C).sample()[0]))
-                for _ in range(self.l)
-            ]
-            theta0 = torch.stack([self.theta_to_L._inverse(L) for L in Ls], axis=0)
+            theta0 = []
+            for a in self.alphas:
+                C = (1 - q) * torch.eye(self.a_max) + q * torch.ones((a, a))
+                theta0.append(self.cor_to_theta(C))
+        if len(theta0) != self.l:
+            raise ValueError(f'theta0 should have length {self.l} but got {len(theta0)}')
         return theta0
+    
+    def get_theta_p(self, p):
+        return getattr(self, f'theta_{p}')
+
+    def cor_to_theta(self, C):
+        return self.theta_to_L._inverse(cholesky(C))
 
     def theta_to_cor(self, theta: torch.Tensor) -> torch.Tensor:
-        seq_length = theta.shape[0]
-        Ls = [self.theta_to_L(theta[i]) for i in range(seq_length)]
-        return torch.stack([(L @ L.T) for L in Ls], axis=0)
+        L = self.theta_to_L(theta)
+        return L @ L.T
 
     def get_site_kernels(self) -> torch.Tensor:
-        return self.theta_to_cor(self.theta)
+        kernels = [self.theta_to_cor(self.get_theta_p(p)) for p in range(self.l)]
+        return kernels
 
     def get_site_log_kernels(self) -> torch.Tensor:
-        return torch.log(self.get_site_kernels())
+        return [torch.log(k) for k in self.get_site_kernels()]
 
     def is_positive(self) -> bool:
-        return torch.all(self.get_site_kernels() > 0.0)
+        k_i = torch.hstack([k.flatten() for k in self.get_site_kernels()])
+        return torch.all(k_i > 0)
 
-    def theta_to_delta(self, theta: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+    def theta_to_delta(self, theta: torch.Tensor) -> torch.Tensor:
         return 1 - self.theta_to_cor(theta)
 
     def get_delta(self) -> torch.Tensor:
-        return self.get_mutation_delta()
+        return [self.theta_to_delta(self.get_theta_p(p)) for p in range(self.l)]
 
 
 def get_kernel(

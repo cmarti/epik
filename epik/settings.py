@@ -9,3 +9,8 @@ KERNELS = ['Additive', 'Pairwise', 'VC',
            'Exponential', 'Connectedness',
            'Jenga', 'GeneralProduct', 
            'FactorAnalysis', 'MahalanobisRBF']
+ALPHABETS = {
+    "dna": list("ACGT"),
+    "rna": list("ACGU"),
+    "protein": list("RKEDQNHSTAVILMPGYFWC"),
+}

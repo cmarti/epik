@@ -91,6 +91,12 @@ def main():
         help="Tolerance for Conjugate Gradient during Evidence Maximization",
     )
     comp_group.add_argument(
+        "--preconditioner_size",
+        default=0,
+        type=int,
+        help="Size of the preconditioner to use for CG (default: 0)",
+    )
+    comp_group.add_argument(
         "--n_lanczos",
         default=20,
         type=int,
@@ -118,6 +124,14 @@ def main():
         type=float,
         help="Learning rate for optimization (0.1)",
     )
+    training_group.add_argument(
+        "--min_y_var",
+        default=0.0001,
+        type=float,
+        help="Minimum y_var to use for numerical stability (default: 1e-4)",
+    )
+    
+    
     pred_group = parser.add_argument_group("Prediction options")
     pred_group.add_argument(
         "-p", "--pred", help="File containing sequences for predicting genotype"
@@ -168,6 +182,8 @@ def main():
     n_trace_samples = parsed_args.num_trace_samples
     n_lanczos = parsed_args.n_lanczos
     cg_tol = parsed_args.cg_tol
+    preconditioner_size = parsed_args.preconditioner_size
+    min_y_var = parsed_args.min_y_var
     n_iter = parsed_args.n_iter
     learning_rate = parsed_args.learning_rate
     max_contrasts = parsed_args.max_contrasts
@@ -200,9 +216,9 @@ def main():
 
     if data.shape[1] > 1:
         y_var = data.values[:, 1]
-        y_var[y_var < 0.0001] = 0.0001
+        y_var[y_var < min_y_var] = min_y_var
     else:
-        y_var = torch.full_like(y, 0.0001)
+        y_var = torch.full_like(y, min_y_var)
 
     # Get kernel
     if log_var0_fpath is not None and exists(log_var0_fpath):
@@ -254,6 +270,7 @@ def main():
         method=method,
         device=device,
         cg_tol=cg_tol,
+        preconditioner_size=preconditioner_size,
         n_trace_samples=n_trace_samples,
         n_lanczos_iter=n_lanczos,
     )

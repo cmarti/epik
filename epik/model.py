@@ -29,6 +29,7 @@ from gpytorch.settings import (
     max_cholesky_size,
     max_root_decomposition_size,
     max_cg_iterations,
+    eval_cg_tolerance,
 )
 
 from epik.utils import (
@@ -114,7 +115,7 @@ class _Epik(object):
         method="cg",
         preconditioner_size=0,
         cg_tol=1.0,
-        max_cg_iter=5000,
+        max_cg_iter=1000,
         n_trace_samples=50,
         n_lanczos_iter=50,
         track_progress=False,
@@ -202,6 +203,17 @@ class _Epik(object):
         self.define_gp()
         self.n = X.shape[0]
 
+    def get_max_n(self, X=None):
+        if X is None:
+            n = self.n
+        else:
+            n = X.shape[0]
+
+        if self.method == "cg":
+            return n + 1
+        else:
+            return n - 1
+
     def calc_mll(
         self,
         method="cg",
@@ -253,10 +265,7 @@ class _Epik(object):
         if method not in allowed:
             raise ValueError(f"method {method} should be one of {allowed}")
 
-        if method == "cg":
-            max_n = self.n - 1
-        else:
-            max_n = self.n + 1
+        max_n = self.get_max_n()
 
         if cg_tol is None:
             cg_tol = self.cg_tol
@@ -384,6 +393,7 @@ class _Epik(object):
     def training_step(self):
         torch.cuda.empty_cache()
         mll = self.calc_mll(self.method)
+        self.mll = mll.detach().item()
 
         skip_grad = False
         if self.training_history:
@@ -391,7 +401,8 @@ class _Epik(object):
             threshold = self.training_history[-1] - 10 * sd
             
             # Only update gradient if MLL is safe
-            if mll.item() < threshold: 
+            
+            if self.mll < threshold or self.mll < self.training_history[0]: 
                 msg = f"Gradient calculation skipped due to unusually low MLL={mll.item()}"
                 sys.stderr.write(msg)
                 skip_grad = True
@@ -403,7 +414,6 @@ class _Epik(object):
         self.optimizer.step()
 
         self.params = self.gp.state_dict()
-        self.mll = mll.detach().item()
 
         params = {}
         grad = {}
@@ -602,10 +612,11 @@ class EpiK(_Epik):
         """
         self.set_evaluation_mode()
         X = self.get_tensor(X)
+        max_n = self.get_max_n()
 
-        with torch.inference_mode(), max_preconditioner_size(
-            self.preconditioner_size
-        ), max_root_decomposition_size(self.n_lanczos_iter), cg_tolerance(self.cg_tol):
+        with torch.inference_mode(), max_cholesky_size(
+            max_n), max_preconditioner_size(self.preconditioner_size), max_root_decomposition_size(
+                self.n_lanczos_iter), eval_cg_tolerance(self.cg_tol):
             if calc_covariance:
                 f = self.gp(X)
             elif calc_variance:

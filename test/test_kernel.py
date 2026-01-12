@@ -218,6 +218,12 @@ class KernelsTests(unittest.TestCase):
         delta = kernel.get_delta().detach().numpy()
         assert np.allclose(1 - delta, corr1d)
 
+        # Check site kernels
+        ks = kernel.get_site_kernels()
+        logks = kernel.get_site_log_kernels()
+        for k, logk in zip(ks, logks):
+            assert np.allclose(k.detach(), torch.exp(logk.detach()))
+
         # Check kernel calculation
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
@@ -246,6 +252,9 @@ class KernelsTests(unittest.TestCase):
         corrs = [1, corr1d, corr1d, corr1d**2]
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
+        
+        cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov2, cov)
 
     def test_connectedness_kernel(self):
         config = self.config.copy()
@@ -258,6 +267,12 @@ class KernelsTests(unittest.TestCase):
         delta = kernel.get_delta().detach()
         assert np.allclose(1 - delta, corr1d)
 
+        # Check site kernels
+        ks = kernel.get_site_kernels()
+        logks = kernel.get_site_log_kernels()
+        for k, logk in zip(ks, logks):
+            assert np.allclose(k.detach(), torch.exp(logk.detach()))
+
         # Check kernel calculation
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
@@ -269,7 +284,7 @@ class KernelsTests(unittest.TestCase):
         assert np.allclose(diag, np.diag(cov))
 
         # Check random initialization
-        kernel = GeometricKernel(**self.config)
+        kernel = ConnectednessKernel(**self.config)
         cov1 = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov1, cov2)
@@ -279,19 +294,82 @@ class KernelsTests(unittest.TestCase):
         kernel = ConnectednessKernel(**config)
         corr1d = [-1 / 3.0, 0]
 
-        # Check decay factor
         delta = kernel.get_delta().detach().numpy()
         assert np.allclose(1 - delta, corr1d)
 
         corrs = [1, corr1d[0], corr1d[1], corr1d[0] * corr1d[1]]
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
-
+        
+        cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov2, cov)
+    
     def test_jenga_kernel(self):
-        sl, a = 1, 3
-        theta0 = torch.tensor(np.log([[0.5, 0.2, 0.6, 0.2]]), dtype=torch.float32)
-        kernel = JengaKernel(n_alleles=a, seq_length=sl, theta0=theta0)
-        x = get_full_space_one_hot(sl, a)
+        config = self.config.copy()
+        config["log_mu0"] = torch.Tensor([-np.log(2), 0.0])
+        config["log_pi0"] = [torch.Tensor([0.0, 0.0]), torch.Tensor([0.0, 1.0])]
+        kernel = JengaKernel(**config)
+        corr1d = [1 / 3.0, 0]
+        corrs = [1, corr1d[0], corr1d[1],corr1d[0] * corr1d[1]]
+
+        # Check decay factor
+        delta = kernel.get_delta()#.detach()
+        k1 = 1 - delta[0].detach()[0, 1]
+        k2 = 1 - delta[1].detach()[0, 1]
+        assert np.allclose(k1, corr1d[0])
+        assert np.allclose(k2, corr1d[1])
+
+        # Check site kernels
+        ks = kernel.get_site_kernels()
+        logks = kernel.get_site_log_kernels()
+        for k, logk in zip(ks, logks):
+            assert np.allclose(k.detach(), torch.exp(logk.detach()))
+
+        # Check kernel calculation
+        cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov[0, :], corrs)
+
+        cov2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(cov, cov2)
+
+        diag = kernel.forward(self.x, self.x, diag=True).detach().numpy()
+        assert np.allclose(diag, np.diag(cov))
+
+        # Check random initialization
+        kernel = JengaKernel(**self.config)
+        cov1 = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov1, cov2)
+
+        # Check that it works for theta0 > 0
+        config["log_mu0"] = torch.Tensor([np.log(2), 0.0])
+        config["log_pi0"] = [torch.Tensor([0.0, 0.0]), torch.Tensor([0.0, 0.0])]
+        kernel = JengaKernel(**config)
+        corr1d = [-1 / 3.0, 0]
+
+        delta = kernel.get_delta()
+        k1 = 1 - delta[0].detach()[0, 1]
+        k2 = 1 - delta[1].detach()[0, 1]
+        assert np.allclose(k1, corr1d[0])
+        assert np.allclose(k2, corr1d[1])
+
+        corrs = [1, corr1d[0], corr1d[1], corr1d[0] * corr1d[1]]
+        cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov[0, :], corrs)
+        
+        cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(cov2, cov)
+
+        # With three alleles
+        alphabet = list('ACB')
+        seq_length = 1
+        log_mu = torch.log(torch.Tensor([0.5]))
+        log_pi = [torch.log(torch.Tensor([0.2, 0.6, 0.2]))]
+
+        kernel = JengaKernel(
+            alphabet=alphabet, seq_length=seq_length, log_mu0=log_mu, log_pi0=log_pi
+        )
+        x = get_full_space_one_hot(seq_length, len(alphabet))
         rho, eta = 0.5, np.array([4.0, 2 / 3, 4.0])
         allele_factors = np.sqrt(1 + rho * eta)
         a01, a02, a12 = (
@@ -313,90 +391,50 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(cov2, cov)
 
-        # With two sites
-        sl, a = 2, 2
-        theta0 = torch.tensor(
-            np.log([[0.5, 0.2, 0.8], [0.5, 0.5, 0.5]]), dtype=torch.float32
-        )
-        kernel = JengaKernel(n_alleles=a, seq_length=sl, theta0=theta0)
-        x = get_full_space_one_hot(sl, a)
-        rho = np.array([0.5, 0.5])
-        eta = np.array([[4.0, 0.25], [1.0, 1.0]])
-        cov = kernel.forward(x, x).detach().numpy()
-        expected = np.array(
-            [
-                1,
-                (1 - rho[0])
-                / np.sqrt((1 + rho[0] * eta[0, 0]) * (1 + rho[0] * eta[0, 1])),
-                (1 - rho[1])
-                / np.sqrt((1 + rho[1] * eta[1, 0]) * (1 + rho[1] * eta[1, 1])),
-                np.nan,
-            ]
-        )
-        expected[3] = expected[1] * expected[2]
-        assert np.allclose(cov[0, :], expected)
-
-        cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(cov2, cov)
-
-        # Check decay rates
-        rho = np.expand_dims(rho, 1)
-        delta = kernel.get_delta().detach().numpy()
-        expected_delta = 1 - np.sqrt((1 - rho) / (1 + eta * rho))
-        assert np.allclose(delta, expected_delta)
-
-        # Check random initialization
-        kernel = JengaKernel(n_alleles=a, seq_length=sl)
-        cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        cov2 = kernel._keops_forward(x, x).detach().numpy()
-        assert np.allclose(cov1, cov2)
-
         # Check longer sequences
-        sl, a = 6, 4
-        kernel = JengaKernel(n_alleles=a, seq_length=sl)
-        x = get_full_space_one_hot(sl, a)
+        alphabet = list("ACBD")
+        sl = 6
+        kernel = JengaKernel(alphabet=alphabet, seq_length=sl)
+        x = get_full_space_one_hot(sl, len(alphabet))
         cov1 = kernel._nonkeops_forward(x, x).detach().numpy()
         cov2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(cov2, cov1)
 
     def test_general_product_kernel(self):
-        sl, a = 2, 2
-        x = get_full_space_one_hot(sl, a)
-
-        theta0 = torch.full((sl, 1), fill_value=0.0)
-        kernel = GeneralProductKernel(a, sl, theta0=theta0)
-        K = kernel._nonkeops_forward(x, x).detach().numpy()
-        assert np.allclose(K, np.eye(a**sl))
-
-        K = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(K, np.eye(a**sl))
+        config = self.config.copy()
+        config['theta0'] = [torch.full((1,), fill_value=0.0)] * 2
+        kernel = GeneralProductKernel(**config)
+        K_exp = np.eye(4)
 
         # Check decay factors
-        delta = kernel.get_delta().detach().numpy()
-        assert np.allclose(delta, 1 - np.eye(a))
+        for delta in kernel.get_delta():
+            assert np.allclose(delta.detach().numpy(), 1 - np.eye(2))
 
-        # Check non HOC model
-        theta0 = torch.full((sl, 1), fill_value=-1.0)
-        kernel = GeneralProductKernel(a, sl, theta0=theta0)
-        K1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        assert np.any(K1 != np.eye(a**sl))
+        # Check site kernels
+        ks = kernel.get_site_kernels()
+        logks = kernel.get_site_log_kernels()
+        for k, logk in zip(ks, logks):
+            assert np.allclose(k.detach(), torch.exp(logk.detach()))
 
-        K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
-        assert np.allclose(K1, K2)
+        K = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(K, K_exp)
+
+        K = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(K, K_exp)
+
+        diag = kernel.forward(self.x, self.x, diag=True).detach().numpy()
+        assert np.allclose(diag, np.diag(K))
 
         # Random initialization
-        kernel = GeneralProductKernel(a, sl)
-        K1 = kernel._nonkeops_forward(x, x).detach().numpy()
-        K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
+        kernel = GeneralProductKernel(**config)
+        K1 = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        K2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
         assert np.allclose(K1, K2)
 
-        # With larger spaces and random values
+        # With larger spaces
         seqs = ["ACGTAGCTAA", "GGGTAGCTAA", "GGGTAGCTCC"]
         x = encode_seqs(seqs, alphabet="ACGT")
-        a, sl = 4, 10
-        ncomb = int(comb(a, 2))
-        theta0 = torch.normal(torch.zeros(size=(sl, ncomb)))
-        kernel = GeneralProductKernel(a, sl, theta0=theta0)
+        kernel = GeneralProductKernel(alphabet="ACGT", seq_length=10)
         K1 = kernel._nonkeops_forward(x, x).detach().numpy()
         K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(K1, K2)

@@ -468,7 +468,7 @@ class KrawtchoukPolynomials(object):
         size1 = self.seq_length + 1
         size2 = self.max_k + 1
         log_a_minus_1 = np.log(self.n_alleles - 1)
-        l_log_a = self.seq_length * np.log(self.n_alleles)
+        # l_log_a = self.seq_length * np.log(self.n_alleles)
         d = torch.arange(size1).reshape((size1, 1, 1))
         k = torch.arange(size2).reshape((1, size2, 1))
         q = torch.arange(size2).reshape((1, 1, size2))
@@ -477,7 +477,7 @@ class KrawtchoukPolynomials(object):
             (k - q) * log_a_minus_1
             + log_comb(d, q)
             + log_comb(self.seq_length - d, k - q)
-            - l_log_a
+            # - l_log_a
         )
         self.w_dkq_sign = (-1.0) ** q
         self.w_dk = (self.w_dkq_sign * torch.exp(self.log_w_dkq)).sum(-1)
