@@ -1,54 +1,74 @@
-import pandas as pd
-import torch
-import numpy as np
 import sys
-
 from copy import deepcopy
 from time import time
-from tqdm import tqdm
+from typing import Any, Optional, Tuple, List, Union
 
-from torch.optim import Adam
-from torch.utils.checkpoint import checkpoint
-from gpytorch.models import ApproximateGP, ExactGP
-from gpytorch.means import ZeroMean, ConstantMean
-from gpytorch.mlls import MarginalLogLikelihood, VariationalELBO
-from gpytorch.likelihoods import FixedNoiseGaussianLikelihood, _GaussianLikelihoodBase
+import numpy as np
+import pandas as pd
+import torch
 from gpytorch.distributions import MultivariateNormal
+from gpytorch.kernels import Kernel
+from gpytorch.likelihoods import FixedNoiseGaussianLikelihood, _GaussianLikelihoodBase
+from gpytorch.means import ConstantMean, ZeroMean
+from gpytorch.mlls import MarginalLogLikelihood, VariationalELBO
+from gpytorch.models import ApproximateGP, ExactGP
+from gpytorch.settings import (
+    cg_tolerance,
+    eval_cg_tolerance,
+    fast_pred_var,
+    fast_computations,
+    max_cg_iterations,
+    max_lanczos_quadrature_iterations,
+    max_preconditioner_size,
+    max_cholesky_size,
+    max_root_decomposition_size,
+    num_likelihood_samples,
+    num_trace_samples,
+    skip_posterior_variances,
+)
 from gpytorch.variational import (
     CholeskyVariationalDistribution,
     UnwhitenedVariationalStrategy,
 )
-from gpytorch.settings import (
-    num_likelihood_samples,
-    max_preconditioner_size,
-    max_lanczos_quadrature_iterations,
-    fast_pred_var,
-    skip_posterior_variances,
-    cg_tolerance,
-    num_trace_samples,
-    max_cholesky_size,
-    max_root_decomposition_size,
-    max_cg_iterations,
-    eval_cg_tolerance,
-)
+from torch.optim import Adam
+from tqdm import tqdm
 
+from epik.kernel import get_named_kernel, SiteProductKernel
 from epik.utils import (
+    get_epistatic_coeffs_contrast_matrix,
+    get_mut_effs_contrast_matrix,
     get_tensor,
     to_numpy,
+    validate_alphabet,
+    get_one_hot_encoding,
     split_training_test,
-    encode_seqs,
-    get_mut_effs_contrast_matrix,
-    get_epistatic_coeffs_contrast_matrix,
 )
 
 
 class ExactMLL(MarginalLogLikelihood):
-    def __init__(self, likelihood, model):
+    """
+    Adapted from GPyTorch's implementation to report the complete
+    rather than by point average marginal log-likelihood for
+    better interpretation of differences in their values.
+
+
+    Parameters
+    ----------
+    likelihood : likelihood function
+        Likelihood function from the family of Gaussian likelihoods
+        either with fixed or trainable error models p(y|f).
+
+    model : GPmodel
+        Gaussian process model over the function value p(f).
+
+    """
+
+    def __init__(self, likelihood, model) -> None:
         if not isinstance(likelihood, _GaussianLikelihoodBase):
             raise RuntimeError("Likelihood must be Gaussian for exact inference")
         super(ExactMLL, self).__init__(likelihood, model)
 
-    def _add_other_terms(self, res, params):
+    def _add_other_terms(self, res: torch.Tensor, params: tuple) -> torch.Tensor:
         # Add additional terms (SGPR / learned inducing points, heteroskedastic likelihood models)
         for added_loss_term in self.model.added_loss_terms():
             res = res.add(added_loss_term.loss(*params))
@@ -61,7 +81,33 @@ class ExactMLL(MarginalLogLikelihood):
 
         return res
 
-    def forward(self, function_dist, target, *params):
+    def forward(
+        self, function_dist: MultivariateNormal, y: torch.Tensor, *params: Any
+    ) -> torch.Tensor:
+        """
+        Computes the exact marginal log likelihood.
+
+        Parameters
+        ----------
+        function_dist : MultivariateNormal
+            The Gaussian random variable representing the function distribution.
+        y : torch.Tensor
+            The y tensor for which the log probability is computed.
+        *params : Any
+            Additional parameters required by the likelihood.
+
+        Returns
+        -------
+        torch.Tensor
+            The computed log probability of the y under the marginal
+            distribution, with additional terms added if applicable.
+
+        Raises
+        ------
+        RuntimeError
+            If `function_dist` is not an instance of `MultivariateNormal`.
+        """
+
         if not isinstance(function_dist, MultivariateNormal):
             raise RuntimeError(
                 "ExactMarginalLogLikelihood can only operate on Gaussian random variables"
@@ -69,36 +115,109 @@ class ExactMLL(MarginalLogLikelihood):
 
         # Get the log prob of the marginal distribution
         output = self.likelihood(function_dist, *params)
-        res = output.log_prob(target)
+        res = output.log_prob(y)
         res = self._add_other_terms(res, params)
         return res
 
 
 class GPModel(ExactGP):
-    def __init__(self, train_x, train_y, kernel, likelihood, train_mean=False,
-                 mean0=0.):
+    """
+    Gaussian process model class.
+
+    This class returns the Multivariate Gaussian distribution representing
+    the posterior probability of a function defined over a set of input points
+    x conditioned on some observations under a given kernel function. The model
+    can use either a constant mean or zero mean function.
+
+    train_x : torch.Tensor
+        The input training data (features).
+    train_y : torch.Tensor
+        The observed training data (targets).
+    kernel : gpytorch.kernels.Kernel
+        The kernel function defining the covariance structure of the GP.
+    likelihood : gpytorch.likelihoods.Likelihood
+        The likelihood function for the GP model.
+    constant_mean : float, optional, default=0.0
+        Constant mean function to use.
+    train_mean : bool, optional, default=False
+        If True, includes a trainable mean function in addition to the
+        constant_mean.
+    """
+
+    def __init__(
+        self,
+        kernel: Kernel,
+        train_x: Optional[torch.Tensor] = None,
+        train_y: Optional[torch.Tensor] = None,
+        likelihood: Optional[_GaussianLikelihoodBase] = None,
+        constant_mean: float = 0.0,
+        train_mean: bool = False,
+    ) -> None:
         super(GPModel, self).__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean() if train_mean else ZeroMean()
         self.covar_module = kernel
-        self.mean0 = mean0
+        self.constant_mean = constant_mean
 
-    def forward(self, x):
-        mean_x = self.mean0 + self.mean_module(x)
+    def forward(self, x: torch.Tensor) -> MultivariateNormal:
+        """
+        Computes the posterior distribution for the input `x`.
+
+        x : torch.Tensor
+            The input data for which the posterior distribution is computed.
+
+        Returns
+        -------
+        gpytorch.distributions.MultivariateNormal
+            The posterior distribution as a multivariate normal distribution.
+        """
+        mean_x = self.constant_mean + self.mean_module(x)
         covar_x = self.covar_module(x)
         return MultivariateNormal(mean_x, covar_x)
 
 
 class GeneralizedGPModel(ApproximateGP):
-    def __init__(self, train_x, kernel, train_mean=False):
+    """
+    Generalized Gaussian process model class.
+
+    This class represents a generalized Gaussian process model that uses
+    variational inference for approximate posterior estimation. It returns
+    the Multivariate Gaussian distribution representing the posterior
+    probability of a function defined over a set of input points `x`
+    conditioned on some observations under a given kernel function.
+
+    Parameters
+    ----------
+    train_x : torch.Tensor
+        The input training data (features).
+    kernel : gpytorch.kernels.Kernel
+        The kernel function defining the covariance structure of the GP.
+    train_mean : bool, optional, default=False
+        If True, use a constant mean function; otherwise, use a zero mean function.
+    """
+
+    def __init__(
+        self, train_x: torch.Tensor, kernel: Kernel, train_mean: bool = False
+    ) -> None:
         distribution = CholeskyVariationalDistribution(train_x.size(0))
         strategy = UnwhitenedVariationalStrategy(
             self, train_x, distribution, learn_inducing_locations=False
         )
         super(GeneralizedGPModel, self).__init__(strategy)
         self.mean_module = ConstantMean() if train_mean else ZeroMean()
-        self.covar_module = kernel
+        self.covar_module: Any = kernel
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> MultivariateNormal:
+        """
+        Computes the approximate posterior distribution for the input `x`.
+
+        x : torch.Tensor
+            The input data for which the posterior distribution is computed.
+
+        Returns
+        -------
+        gpytorch.distributions.MultivariateNormal
+            The posterior distribution as a multivariate normal distribution.
+        """
         mean_x = self.mean_module(x)
         covar_x = self.covar_module(x)
         return MultivariateNormal(mean_x, covar_x)
@@ -107,70 +226,109 @@ class GeneralizedGPModel(ApproximateGP):
 class _Epik(object):
     def __init__(
         self,
-        kernel,
-        device="cpu",
-        train_mean=False,
-        train_noise=False,
-        mean0=0.,
-        method="cg",
-        preconditioner_size=0,
-        cg_tol=1.0,
-        max_cg_iter=1000,
-        n_trace_samples=50,
-        n_lanczos_iter=50,
-        track_progress=False,
-    ):
-        self.kernel = kernel
+        kernel: Union[str, Kernel],
+        seq_length: Optional[int] = None,
+        alphabet_type: Optional[str] = None,
+        alphabet: Optional[List[str]] = None,
+        alphabet_list: Optional[List[List[str]]] = None,
+        device: str = "cpu",
+        train_mean: bool = False,
+        train_noise: bool = False,
+        constant_mean: float = 0.0,
+        kernel_kwargs: dict = {},
+    ) -> None:
+        self.alphabet_list = validate_alphabet(
+            seq_length, alphabet_type, alphabet, alphabet_list
+        )
+        self.l = len(self.alphabet_list)
+        self.kernel = self.get_kernel(kernel, kernel_kwargs)
         self.device = device
         self.train_mean = train_mean
         self.train_noise = train_noise
-        self.mean0 = mean0
+        self.constant_mean = constant_mean
 
-        self.method = method
-        self.preconditioner_size = preconditioner_size
-        self.cg_tol = cg_tol
-        self.max_cg_iter = max_cg_iter
-        self.n_trace_samples = n_trace_samples
-        self.n_lanczos_iter = n_lanczos_iter
-        self.track_progress = track_progress
-        self.fit_time = 0
-        self.training_history = []
-        self.params_history = []
-        self.grad_history = []
+    def get_kernel(
+        self,
+        kernel: Union[str, Kernel],
+        kwargs: dict,
+    ) -> Kernel:
+        """
+        Retrieve or initialize a kernel for the Gaussian process model.
 
-    def report_progress(self, pbar):
-        if self.track_progress:
-            allocated = torch.cuda.memory_allocated(device="cuda") / 1e6
-            reserved = torch.cuda.memory_reserved(device="cuda") / 1e6
-            report_dict = {
-                "MLL": f"{self.mll:.3f}",
-                "Mem(alloc/res)": f"{allocated:.2f}/{reserved:.2f}MB",
-            }
-            if hasattr(self, "scheduler"):
-                report_dict["LR"] = f"{self.optimizer.param_groups[0]['lr']:.4f}"
+        Parameters
+        ----------
+        kernel : str or Kernel
+            The kernel to use. It can be either a string representing the name
+            of a predefined kernel or an instance of a Kernel object.
+        kwargs : dict
+            Additional arguments to pass to the kernel initialization, such
+            as kernel hyperparameters.
 
-            pbar.set_postfix(report_dict)
+        Returns
+        -------
+        Kernel
+            The initialized or retrieved kernel object.
 
-    def get_tensor(self, ndarray):
+        Raises
+        ------
+        ValueError
+            If the kernel name is not recognized or the provided kernel object
+            is invalid.
+        """
+
+        if isinstance(kernel, str):
+            kernel = get_named_kernel(kernel, self.alphabet_list, kwargs=kwargs)
+        elif not isinstance(kernel, Kernel):
+            msg = "`kernel` must be either a kernel name or a pre-defined Kernel object"
+            raise ValueError(msg)
+
+        if hasattr(kernel, "alphabet_list"):
+            if self.alphabet_list != kernel.alphabet_list:
+                msg = f"The alphabet in the provided kernel {kernel.alphabet_list} "
+                msg += f"does not match the model alphabet {self.alphabet_list}"
+
+        return kernel
+
+    def encode(self, X: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        return self.get_tensor(get_one_hot_encoding(X, self.alphabet_list))
+
+    def report_fit_progress(self, pbar: Any) -> None:
+        allocated: float = torch.cuda.memory_allocated(device="cuda") / 1e6
+        reserved: float = torch.cuda.memory_reserved(device="cuda") / 1e6
+        report_dict: dict[str, str] = {
+            "MLL": f"{self.mll:.3f}",
+            "Mem(alloc/res)": f"{allocated:.2f}/{reserved:.2f}MB",
+        }
+        if hasattr(self, "scheduler"):
+            report_dict["LR"] = f"{self.optimizer.param_groups[0]['lr']:.4f}"
+
+        pbar.set_postfix(report_dict)
+
+    def get_tensor(self, ndarray: Any) -> torch.Tensor:
         return get_tensor(ndarray, device=self.device)
 
-    def set_training_mode(self):
+    def set_training_mode(self) -> None:
         self.gp.train()
         self.likelihood.train()
 
-    def set_evaluation_mode(self):
+    def set_evaluation_mode(self) -> None:
         self.gp.eval()
         self.likelihood.eval()
 
-    def set_data(self, X, y, y_var=None):
+    def set_data(
+        self,
+        X: Union[np.ndarray, torch.Tensor],
+        y: Union[np.ndarray, torch.Tensor],
+        y_var: Union[np.ndarray, torch.Tensor, None] = None,
+    ) -> None:
         """
         Set the training data for the model.
 
         Parameters
         ----------
-        X : torch.Tensor
-            A tensor of shape (n_sequences, n_features) containing the
-            one-hot encoded input sequences.
+        X : np.ndarray | torch.Tensor
+            A array or tensor of shape (n_sequences,) containing the
+            input sequences as str.
 
         y : torch.Tensor
             A tensor of shape (n_sequences,) containing the phenotypic
@@ -181,11 +339,11 @@ class _Epik(object):
             of the measurements in `y`. If `None`, it is assumed that
             there is no uncertainty in the measurements.
         """
-
-        self.X = self.get_tensor(X)
+        self.X_seqs = X
+        self.X = self.get_tensor(get_one_hot_encoding(X, self.alphabet_list))
         self.y = self.get_tensor(y)
         if y_var is None:
-            self.y_var = torch.zeros_like(self.y)
+            self.y_var: torch.Tensor = torch.zeros_like(self.y)
         else:
             self.y_var = self.get_tensor(y_var)
 
@@ -203,26 +361,24 @@ class _Epik(object):
         self.define_gp()
         self.n = X.shape[0]
 
-    def get_max_n(self, X=None):
-        if X is None:
-            n = self.n
+    def get_fast_comp(self, method) -> bool:
+        if method == "cg":
+            return True
+        elif method == "cholesky":
+            return False
         else:
-            n = X.shape[0]
-
-        if self.method == "cg":
-            return n + 1
-        else:
-            return n - 1
+            msg = "Invalid method provided. Must be either cholesky or cg"
+            raise ValueError(msg)
 
     def calc_mll(
         self,
-        method="cg",
-        cg_tol=None,
-        n_lanczos_iter=None,
-        preconditioner_size=None,
-        n_trace_samples=None,
-        max_cg_iter=None,
-    ):
+        method: str = "cg",
+        cg_tol: float = 0.1,
+        max_cg_iter: int = 1000,
+        n_lanczos_iter: int = 50,
+        n_trace_samples: int = 50,
+        preconditioner_size: int = 0,
+    ) -> torch.Tensor:
         """
         Calculate the marginal log likelihood (MLL) for the Gaussian process model.
 
@@ -235,24 +391,21 @@ class _Epik(object):
         ----------
         method : str, optional
             The method to use for MLL computation. Must be one of ["cg", "cholesky"].
-            Default is "cg".
         cg_tol : float, optional
-            The tolerance for the conjugate gradient method. If not provided, the
-            default value from the object (`self.cg_tol`) is used.
+            The tolerance for the conjugate gradient method.
+        max_cg_iter : int, optional
+            The maximum number of conjugate gradient iterations.
         n_lanczos_iter : int, optional
-            The maximum number of Lanczos iterations. If not provided, the default
-            value from the object (`self.max_n_lanczos_iterations`) is used.
-        preconditioner_size : int, optional
-            The size of the preconditioner. If not provided, the default value from
-            the object (`self.preconditioner_size`) is used.
+            The number of Lanczos iterations for stochastic trace estimation.
         n_trace_samples : int, optional
-            The number of trace samples to use. If not provided, the default value
-            from the object (`self.n_trace_samples`) is used.
+            The number of trace samples to use for stochastic trace estimation.
+        preconditioner_size : int, optional
+            The size of the preconditioner used to accelerate convergence.
 
         Returns
         -------
-        float
-            The computed marginal log likelihood.
+        torch.Tensor
+            The computed marginal log likelihood as a tensor.
 
         Notes
         -----
@@ -261,42 +414,36 @@ class _Epik(object):
         `cg_tolerance`, `num_trace_samples`, `max_lanczos_quadrature_iterations`,
         and `max_cholesky_size` context managers are used to manage these settings.
         """
-        allowed = ["cg", "cholesky"]
+        allowed: list[str] = ["cg", "cholesky"]
         if method not in allowed:
             raise ValueError(f"method {method} should be one of {allowed}")
-
-        max_n = self.get_max_n()
-
-        if cg_tol is None:
-            cg_tol = self.cg_tol
-        if max_cg_iter is None:
-            max_cg_iter = self.max_cg_iter
-        
-        if preconditioner_size is None:
-            preconditioner_size = self.preconditioner_size
-
-        if n_lanczos_iter is None:
-            n_lanczos_iter = self.n_lanczos_iter
-        if n_trace_samples is None:
-            n_trace_samples = self.n_trace_samples
+        fast = self.get_fast_comp(method)
 
         with max_preconditioner_size(preconditioner_size), cg_tolerance(
             cg_tol
         ), num_trace_samples(n_trace_samples), max_lanczos_quadrature_iterations(
             n_lanczos_iter
-        ), max_cholesky_size(max_n), max_cg_iterations(max_cg_iter):
+        ), fast_computations(log_prob=fast), max_cg_iterations(
+            max_cg_iter
+        ), max_cholesky_size(1):
             return self.mll_layer(self.gp(self.X), self.y)
 
     def diagnose_mll(
         self,
-        min_n_lanczos=20,
-        max_n_lanczos=1000,
-        min_cg_tol=0.001,
-        max_cg_tol=10,
-        min_n_trace_samples=10,
-        max_n_trace_samples=200,
-        add_cholesky=False,
-    ):
+        cg_tol: float = 1.0,
+        max_cg_iter: int = 1000,
+        n_lanczos_iter: int = 50,
+        preconditioner_size: int = 0,
+        n_trace_samples: int = 50,
+        min_n_lanczos: int = 20,
+        max_n_lanczos: int = 1000,
+        min_cg_tol: float = 0.001,
+        max_cg_tol: float = 10,
+        min_n_trace_samples: int = 10,
+        max_n_trace_samples: int = 200,
+        add_cholesky: bool = False,
+        track_progress: bool = True,
+    ) -> pd.DataFrame:
         """
         Diagnose the marginal log likelihood (MLL) by varying the number of
         Lanczos iterations, CG tolerance, and the number of trace samples,
@@ -318,6 +465,8 @@ class _Epik(object):
             Maximum number of trace samples to test.
         add_cholesky : bool
             Whether to compute MLL with Cholesky decomposition as well.
+        track_progress : bool
+            Whether to track progress.
 
         Returns
         -------
@@ -327,92 +476,86 @@ class _Epik(object):
             number of samples for stochastic trace estimation (`n_trace_samples`)
             with the corresponding MLL values (`mll`).
         """
-        max_value = max(self.n_lanczos_iter + 50, max_n_lanczos)
+        max_value = max(n_lanczos_iter + 50, max_n_lanczos)
         records = []
-        ns = np.linspace(min_n_lanczos, max_value, 50)
+        ns = np.linspace(min_n_lanczos, max_value, 50).astype(int)
         cg_tols = np.geomspace(min_cg_tol, max_cg_tol, 50)
-        ns_trace_samples = np.linspace(min_n_trace_samples, max_n_trace_samples, 50)
+        ns_trace_samples = np.linspace(
+            min_n_trace_samples, max_n_trace_samples, 50
+        ).astype(int)
 
-        if self.track_progress:
+        if track_progress:
             ns = tqdm(ns)
             cg_tols = tqdm(cg_tols)
             ns_trace_samples = tqdm(ns_trace_samples)
 
+        kwargs = {
+            "method": "cg",
+            "cg_tol": cg_tol,
+            "max_cg_iter": max_cg_iter,
+            "n_lanczos_iter": n_lanczos_iter,
+            "n_trace_samples": n_trace_samples,
+            "preconditioner_size": preconditioner_size,
+        }
+        params = {
+            "n_lanczos_iter": ns,
+            "cg_tol": cg_tols,
+            "n_trace_samples": ns_trace_samples,
+        }
         with torch.inference_mode():
-            for n in ns:
-                mll = self.calc_mll(method="cg", n_lanczos_iter=int(n)).item()
-                records.append(
-                    {
-                        "param": "n_lanczos",
-                        "n_lanczos": n,
-                        "cg_tol": self.cg_tol,
-                        "n_trace_samples": self.n_trace_samples,
-                        "mll": mll,
-                    }
-                )
+            for param, values in params.items():
+                for value in values:
+                    record = kwargs.copy()
+                    record[param] = value
+                    record["mll"] = self.calc_mll(**record).item()
+                    record["param"] = param
+                    records.append(record)
 
-            for cg_tol in cg_tols:
-                mll = self.calc_mll(method="cg", cg_tol=cg_tol).item()
-                records.append(
-                    {
-                        "param": "cg_tol",
-                        "n_lanczos": self.n_lanczos_iter,
-                        "cg_tol": cg_tol,
-                        "n_trace_samples": self.n_trace_samples,
-                        "mll": mll,
-                    }
-                )
-
-            for n_trace_samples in ns_trace_samples:
-                mll = self.calc_mll(
-                    method="cg", n_trace_samples=int(n_trace_samples)
-                ).item()
-                records.append(
-                    {
-                        "param": "n_trace_samples",
-                        "n_lanczos": self.n_lanczos_iter,
-                        "cg_tol": self.cg_tol,
-                        "n_trace_samples": n_trace_samples,
-                        "mll": mll,
-                    }
-                )
             if add_cholesky:
-                mll = self.calc_mll(method="cholesky").item()
-                records.append(
-                    {
-                        "param": "cholesky",
-                        "n_lanczos": None,
-                        "cg_tol": None,
-                        "n_trace_samples": None,
-                        "mll": mll,
-                    }
-                )
+                record = kwargs.copy()
+                record["mll"] = self.calc_mll(**record).item()
+                record["method"] = "cholesky"
+                records.append(record)
 
         return pd.DataFrame(records)
 
-    def training_step(self):
+    def training_step(
+        self,
+        mll_method: str = "cg",
+        cg_tol: float = 1.0,
+        max_cg_iter: int = 1000,
+        n_lanczos_iter: int = 50,
+        n_trace_samples: int = 50,
+        preconditioner_size: int = 0,
+    ) -> None:
         torch.cuda.empty_cache()
-        mll = self.calc_mll(self.method)
-        self.mll = mll.detach().item()
+        mll = self.calc_mll(
+            method=mll_method,
+            cg_tol=cg_tol,
+            max_cg_iter=max_cg_iter,
+            n_lanczos_iter=n_lanczos_iter,
+            n_trace_samples=n_trace_samples,
+            preconditioner_size=preconditioner_size,
+        )
+        self.mll: float = mll.detach().item()
 
         skip_grad = False
-        if self.training_history:
+        if len(self.training_history) > 20:
             sd = np.std(self.training_history[-10:])
             threshold = self.training_history[-1] - 10 * sd
-            
+
             # Only update gradient if MLL is safe
-            
-            if self.mll < threshold or self.mll < self.training_history[0]: 
-                msg = f"Gradient calculation skipped due to unusually low MLL={mll.item()}"
+            if self.mll < threshold:
+                print(self.mll, threshold, self.training_history[0])
+                msg: str = f"Gradient calculation skipped due to unusually low MLL={mll.item()}"
                 sys.stderr.write(msg)
                 skip_grad = True
-        
+
         if not skip_grad:
             self.optimizer.zero_grad()
             mll.backward()
 
         self.optimizer.step()
-
         self.params = self.gp.state_dict()
 
         params = {}
@@ -422,6 +565,7 @@ class _Epik(object):
             if param.grad is not None:
                 params[new_name] = param.detach().to(device="cpu").numpy()
                 grad[new_name] = param.grad.detach().to(device="cpu").numpy()
+
         self.params_history.append(params)
         self.grad_history.append(grad)
         self.training_history.append(self.mll)
@@ -430,31 +574,55 @@ class _Epik(object):
             self.max_mll = self.mll
             self.max_params = deepcopy(self.params)
 
-    def fit(self, n_iter=100, learning_rate=0.1):
+    def fit(
+        self,
+        n_iter: int = 100,
+        learning_rate: float = 0.1,
+        mll_method: str = "cg",
+        cg_tol: float = 1.0,
+        max_cg_iter: int = 1000,
+        n_lanczos_iter: int = 50,
+        n_trace_samples: int = 50,
+        preconditioner_size: int = 0,
+        track_progress: bool = False,
+    ) -> None:
         """
-        Optimize model hyperparameters by maximizing the marginal likelihood.
+        Optimize model hyperparameters by maximizing the marginal log-likelihood.
 
         Parameters
         ----------
         n_iter : int, optional (default=100)
             Number of iterations for the optimization process.
-
         learning_rate : float, optional (default=0.1)
             Learning rate for the optimizer.
+        mll_method : str, optional (default="cg")
+            The method to use for MLL computation. Must be one of ["cg", "cholesky"].
+        cg_tol : float, optional (default=1.0)
+            The tolerance for the conjugate gradient method.
+        max_cg_iter : int, optional (default=1000)
+            The maximum number of conjugate gradient iterations.
+        n_lanczos_iter : int, optional (default=50)
+            The maximum number of Lanczos iterations.
+        preconditioner_size : int, optional (default=0)
+            The size of the preconditioner.
+        n_trace_samples : int, optional (default=50)
+            The number of trace samples to use.
 
         Raises
         ------
-        ValueError
-            If the specified optimizer is not recognized.
+        RuntimeError
+            If an out-of-memory error occurs during training and cannot be resolved.
         """
+        self.training_history: list[float] = []
+        self.params_history: list[dict[str, Any]] = []
+        self.grad_history: list[dict[str, Any]] = []
         self.set_training_mode()
-        self.optimizer = Adam(self.gp.parameters(), lr=learning_rate,
-                              maximize=True)
+        self.optimizer = Adam(self.gp.parameters(), lr=learning_rate, maximize=True)
 
-        t0 = time()
+        t0: float = time()
         pbar = range(n_iter)
-        if n_iter > 1 and self.track_progress:
-            pbar = tqdm(pbar, desc="Optimizing hyperparameters")
+        if n_iter > 1 and track_progress:
+            pbar: tqdm = tqdm(pbar, desc="Optimizing hyperparameters")
 
         for _ in pbar:
             try:
@@ -463,23 +631,30 @@ class _Epik(object):
                 if "out of memory" in str(error):
                     torch.cuda.empty_cache()
                     self.kernel.use_keops = True
-                    self.training_step()
+                    self.training_step(
+                        mll_method=mll_method,
+                        cg_tol=cg_tol,
+                        max_cg_iter=max_cg_iter,
+                        n_lanczos_iter=n_lanczos_iter,
+                        n_trace_samples=n_trace_samples,
+                        preconditioner_size=preconditioner_size,
+                    )
                 else:
                     raise RuntimeError(error)
 
-            if n_iter > 1:
-                self.report_progress(pbar)
+            if n_iter > 1 and track_progress:
+                self.report_fit_progress(pbar)
 
-        self.fit_time = time() - t0
+        self.fit_time: float = time() - t0
 
     @property
-    def history(self):
+    def history(self) -> pd.DataFrame:
         return pd.DataFrame({"mll": self.training_history})
 
-    def get_params(self):
+    def get_params(self) -> dict:
         return self.gp.state_dict()
 
-    def save(self, fpath):
+    def save(self, fpath: str) -> None:
         """
         Save the model parameters to a file for future use.
 
@@ -490,10 +665,10 @@ class _Epik(object):
         """
         torch.save(self.gp.state_dict(), fpath)
 
-    def set_params(self, params):
+    def set_params(self, params: dict) -> None:
         self.gp.load_state_dict(params)
 
-    def load(self, fpath, **kwargs):
+    def load(self, fpath: str, **kwargs: Any) -> None:
         """
         Load model parameters from a file.
 
@@ -525,7 +700,7 @@ class EpiK(_Epik):
         The device on which computations will be performed. Options are
         "cpu" or "cuda". Default is "cpu".
 
-    mean0 : float, optional
+    constant_mean : float, optional
         Value of the prior mean to use for the Gaussian process model.
         Default is 0. If `train_mean=True`, then this value initializes
         the mean function to learn.
@@ -564,64 +739,130 @@ class EpiK(_Epik):
 
     """
 
-    def define_likelihood(self):
+    def define_likelihood(self) -> None:
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=self.y_var, learn_additional_noise=self.train_noise
         )
-
         if self.device == "cuda":
             self.likelihood = self.likelihood.cuda()
 
-    def get_gp(self, likelihood, x=None, y=None):
-        gp = GPModel(x, y, self.kernel, likelihood,
-                     train_mean=self.train_mean, mean0=self.mean0)
+    def get_gp(
+        self,
+        likelihood: _GaussianLikelihoodBase,
+        x: Optional[torch.Tensor] = None,
+        y: Optional[torch.Tensor] = None,
+    ) -> GPModel:
+        gp = GPModel(
+            self.kernel,
+            x,
+            y,
+            likelihood,
+            train_mean=self.train_mean,
+            constant_mean=self.constant_mean,
+        )
 
         if self.device == "cuda":
             gp = gp.cuda()
 
         return gp
 
-    def define_gp(self):
-        self.gp = self.get_gp(self.likelihood, self.X, self.y)
-        self.mll_layer = ExactMLL(self.likelihood, self.gp)
+    def define_gp(self) -> None:
+        self.gp: GPModel = self.get_gp(self.likelihood, self.X, self.y)
+        self.mll_layer: ExactMLL = ExactMLL(self.likelihood, self.gp)
 
-    def get_posterior(self, X, calc_variance=False, calc_covariance=False):
+    def get_posterior(
+        self,
+        X: Union[np.ndarray, torch.Tensor],
+        calc_variance: bool = False,
+        calc_covariance: bool = False,
+        method: str = "cg",
+        cg_tol: float = 0.1,
+        max_cg_iter: int = 1000,
+        preconditioner_size: int = 0,
+        n_trace_samples: int = 50,
+        root_decomposition_size: int = 50,
+    ) -> MultivariateNormal:
         """
         Obtain the posterior distribution of the Gaussian process model
         for the given input sequences.
 
+        This method computes the posterior distribution of the Gaussian process
+        model for a set of input sequences. Depending on the specified options,
+        it can compute the posterior mean, variance, or covariance matrix.
+
         Parameters
         ----------
-        X : torch.Tensor of shape (n_sequences, n_features)
-            A tensor containing the one-hot encoded input sequences
-            for which the posterior distribution is to be computed.
+        X : np.array or torch.Tensor of shape (n_sequences,)
+            A vector or Tensor containing the sequences to predict.
 
         calc_variance : bool, optional (default=False)
             If True, computes the posterior variance in addition to the
-            posterior mean.
+            posterior mean. This is useful for uncertainty quantification
+            in predictions.
 
         calc_covariance : bool, optional (default=False)
             If True, computes the posterior covariance matrix. This option
-            overrides `calc_variance` if both are set to True.
+            provides the full covariance structure of the posterior distribution
+            and overrides `calc_variance` if both are set to True.
+
+        method : str, optional (default="cg")
+            The method to use for posterior computation. Options are:
+            - "cg": Conjugate gradient method for efficient computation.
+            - "cholesky": Cholesky decomposition for exact computation.
+
+        cg_tol : float, optional (default=0.1)
+            The tolerance for the conjugate gradient method. Lower values
+            result in higher precision but may increase computation time.
+
+        max_cg_iter : int (default=1000)
+            Maximum number of CG iterations to run.
+
+        preconditioner_size : int, optional (default=0)
+            The size of the preconditioner used to accelerate convergence
+            in the conjugate gradient method. A value of 0 disables the
+            preconditioner.
+
+        n_trace_samples : int, optional (default=50)
+            The number of samples used to estimate the trace of a matrix
+            during computations. Increasing this value improves the accuracy
+            of the trace estimation but increases computational cost.
+
+        root_decomposition_size : int, optional (default=50)
+            The size of the root decomposition used for approximating
+            covariance matrices. Larger values improve accuracy but increase
+            memory usage.
 
         Returns
         -------
         f : gpytorch.distributions.MultivariateNormal
             The posterior distribution of the Gaussian process model
-            evaluated at the input sequences.
+            evaluated at the input sequences. The distribution includes
+            the posterior mean and, optionally, the variance or covariance
+            matrix depending on the specified options.
+
+        Notes
+        -----
+        - When `calc_covariance` is True, the full covariance matrix is computed,
+          which may be computationally expensive for large datasets.
+        - When `calc_variance` is True, only the diagonal elements of the covariance
+          matrix (variances) are computed, which is more efficient.
+        - If neither `calc_variance` nor `calc_covariance` is True, only the posterior
+          mean is computed.
         """
         self.set_evaluation_mode()
-        X = self.get_tensor(X)
-        max_n = self.get_max_n()
+        X = self.encode(X)
+        fast = self.get_fast_comp(method=method)
 
-        with torch.inference_mode(), max_cholesky_size(
-            max_n), max_preconditioner_size(self.preconditioner_size), max_root_decomposition_size(
-                self.n_lanczos_iter), eval_cg_tolerance(self.cg_tol):
+        with torch.inference_mode(), fast_computations(fast), max_preconditioner_size(
+            preconditioner_size
+        ), max_root_decomposition_size(root_decomposition_size), eval_cg_tolerance(
+            cg_tol
+        ), max_cg_iterations(max_cg_iter):
             if calc_covariance:
                 f = self.gp(X)
             elif calc_variance:
-                if self.method == 'cg':
-                    with fast_pred_var(num_probe_vectors=self.n_trace_samples):
+                if method == "cg":
+                    with fast_pred_var(num_probe_vectors=n_trace_samples):
                         f = self.gp(X)
                 else:
                     with fast_pred_var(False):
@@ -631,86 +872,130 @@ class EpiK(_Epik):
                     f = self.gp(X)
         return f
 
-    def pred_to_df(self, res, calc_variance=False, labels=None):
-        if calc_variance:
-            m, x = res
-            if len(x.shape) == 1:
-                var = x
-            else:
-                var = x.diag()
-            sd = to_numpy(torch.sqrt(var))
-            m = to_numpy(m)
-            result = pd.DataFrame(
-                {
-                    "coef": m,
-                    "stderr": sd,
-                    "lower_ci": m - 2 * sd,
-                    "upper_ci": m + 2 * sd,
-                },
-                index=labels,
-            )
-        else:
-            result = pd.DataFrame({"coef": to_numpy(res)}, index=labels)
-        return result
+    def get_pred_dataframe(
+        self,
+        means: torch.Tensor,
+        variances: Optional[torch.Tensor] = None,
+        covariance: Optional[torch.Tensor] = None,
+        labels: Optional[Any] = None,
+    ) -> pd.DataFrame:
+        if variances is not None and covariance is not None:
+            msg = "Provide only variances or covariance"
+            raise ValueError(msg)
+        elif variances is None and covariance is not None:
+            variances = covariance.diag()
 
-    def predict(self, X, calc_variance=False, labels=None):
+        results = pd.DataFrame({"coef": to_numpy(means)}, index=labels)
+        if variances is not None:
+            results["stdev"] = to_numpy(torch.sqrt(variances))
+            results["lower_ci"] = results["coef"] - 2 * results["stdev"]
+            results["upper_ci"] = results["coef"] + 2 * results["stdev"]
+
+        return results
+
+    def predict(
+        self,
+        X: Union[np.ndarray, torch.Tensor],
+        calc_variance: bool = False,
+        method: str = "cg",
+        cg_tol: float = 1e-4,
+        max_cg_iter: int = 1000,
+        preconditioner_size: int = 0,
+        n_trace_samples: int = 50,
+        root_decomposition_size: int = 50,
+    ) -> pd.DataFrame:
         """
-        Function to make phenotypic predictions under the
-        Gaussian process model
+        Make phenotypic predictions using the Gaussian process model.
 
         Parameters
         ----------
-        X : torch.Tensor of shape (n_sequences, n_features)
-            Tensor containing the one-hot encoding of the
-            sequences to make predictions
+        X : np.ndarray or torch.Tensor
+            A vector or tensor of shape (n_sequences,) containing the sequences
+            for which predictions are to be made.
 
-        calc_variance : bool (False)
-            Option to compute the posterior variance in addition
-            to the posterior mean reported by default
+        calc_variance : bool, optional (default=False)
+            If True, computes the posterior variance in addition to the posterior
+            mean. This is useful for uncertainty quantification in predictions.
 
-        labels : array-like of shape (n_sequences,) or None
-            Sequence labels to use as rownames in the output
-            pd.DataFrame
+        method : str, optional (default="cg")
+            The method to use for posterior computation. Options are:
+            - "cg": Conjugate gradient method for efficient computation.
+            - "cholesky": Cholesky decomposition for exact computation.
+
+        cg_tol : float, optional (default=1e-4)
+            The tolerance for the conjugate gradient method. Lower values result
+            in higher precision but may increase computation time.
+
+        max_cg_iter : int (default=1000)
+            Maximum number of CG iterations to run.
+
+        preconditioner_size : int, optional (default=0)
+            The size of the preconditioner used to accelerate convergence in the
+            conjugate gradient method. A value of 0 disables the preconditioner.
+
+        n_trace_samples : int, optional (default=50)
+            The number of samples used to estimate the trace of a matrix during
+            computations. Increasing this value improves the accuracy of the trace
+            estimation but increases computational cost.
+
+        root_decomposition_size : int, optional (default=50)
+            The size of the root decomposition used for approximating covariance
+            matrices. Larger values improve accuracy but increase memory usage.
 
         Returns
         -------
-        output : pd.DataFrame of shape (n_sequences, 1 or 4)
-            DataFrame containing phenotypic predictions at the
-            desired sequences. If `calc_variance=True`, posterior
-            standard deviations and 95% credible interval
-            bounds are added
-
+        pd.DataFrame
+            A DataFrame containing phenotypic predictions for the input sequences.
+            If `calc_variance=True`, the DataFrame includes posterior standard
+            deviations and 95% credible interval bounds.
         """
-        t0 = time()
-        X = self.get_tensor(X)
-        f = self.get_posterior(X, calc_variance=calc_variance)
+        labels = X
+        f = self.get_posterior(
+            X,
+            calc_variance=calc_variance,
+            method=method,
+            cg_tol=cg_tol,
+            max_cg_iter=max_cg_iter,
+            preconditioner_size=preconditioner_size,
+            n_trace_samples=n_trace_samples,
+            root_decomposition_size=root_decomposition_size,
+        )
+        fast = self.get_fast_comp(method)
+        variances = None
+        with torch.inference_mode(), fast_pred_var(
+            fast, num_probe_vectors=n_trace_samples
+        ), max_root_decomposition_size(root_decomposition_size), fast_computations(
+            fast
+        ), cg_tolerance(cg_tol), eval_cg_tolerance(cg_tol), max_preconditioner_size(
+            preconditioner_size
+        ):
+            means = f.mean
+            if calc_variance:
+                variances = f.variance
 
-        if self.method == 'cg':
-            with fast_pred_var(num_probe_vectors=self.n_trace_samples), max_root_decomposition_size(self.n_lanczos_iter):
-                res = (f.mean, f.variance) if calc_variance else f.mean
-        else:
-            with fast_pred_var(False):
-                res = (f.mean, f.variance) if calc_variance else f.mean
-
-        df = self.pred_to_df(res, calc_variance=calc_variance, labels=labels)
-        self.pred_time = time() - t0
+        df = self.get_pred_dataframe(means=means, variances=variances, labels=labels)
         return df
 
-    def make_contrasts(self, contrast_matrix, X, calc_variance=False):
+    def make_contrasts(
+        self,
+        contrast_matrix: pd.DataFrame,
+        calc_variance: bool = False,
+        method: str = "cg",
+        cg_tol: float = 1e-4,
+        max_cg_iter: int = 1000,
+        preconditioner_size: int = 0,
+    ) -> pd.DataFrame:
         """
         Compute phenotypic contrasts across sets of genotypes
         using the Gaussian process model.
 
         Parameters
         ----------
-        contrast_matrix : torch.Tensor of shape (n_contrasts, n_sequences)
-            A tensor representing the linear combinations of sequences
-            encoded by `X` to compute the posterior distribution of
-            the contrasts.
-
-        X : torch.Tensor of shape (n_sequences, n_features)
-            A tensor containing the one-hot encoded sequences for
-            which predictions are to be made.
+        contrast_matrix : pd.DataFrame of shape (n_contrasts, n_sequences)
+            A DataFrame where each row represents a linear combination
+            of sequences encoded by `X`. The columns correspond to the
+            sequences, and the values represent the coefficients for
+            the linear combination.
 
         calc_variance : bool, optional (default=False)
             If True, computes the posterior (co)-variance in addition
@@ -718,48 +1003,53 @@ class EpiK(_Epik):
 
         Returns
         -------
-        output : torch.Tensor or tuple of torch.Tensor
-            If `calc_variance=False`, returns a tensor containing the
-            phenotypic predictions for the desired sequences.
-            If `calc_variance=True`, returns a tuple where the first
-            element is the phenotypic predictions and the second element
-            is the covariance matrix of the posterior contrasts.
+        pd.DataFrame
+            A DataFrame containing the phenotypic contrasts for the
+            desired sequences. If `calc_variance=True`, the DataFrame
+            includes posterior standard deviations and 95% credible
+            interval bounds.
         """
-        t0 = time()
-        B = self.get_tensor(contrast_matrix)
-        f = self.get_posterior(X, calc_covariance=calc_variance)
+        X = contrast_matrix.columns.values
+        contrasts = contrast_matrix.index.values
+        B = self.get_tensor(contrast_matrix.values)
+        fast = self.get_fast_comp(method=method)
+        f = self.get_posterior(
+            X,
+            calc_covariance=calc_variance,
+            method=method,
+            cg_tol=cg_tol,
+            max_cg_iter=max_cg_iter,
+            preconditioner_size=preconditioner_size,
+        )
 
-        res = B @ f.mean
-        if calc_variance:
-            res = res, (B @ f.covariance_matrix @ B.T)
+        with torch.inference_mode(), fast_computations(fast), cg_tolerance(
+            cg_tol
+        ), eval_cg_tolerance(cg_tol), max_preconditioner_size(preconditioner_size):
+            means = B @ f.mean
+            variances = None
+            if calc_variance:
+                variances = (B @ f.lazy_covariance_matrix @ B.T).diag()
 
-        self.contrast_time = time() - t0
-        return res
-
-    def predict_contrasts(
-        self, contrast_matrix, alleles, calc_variance=False, max_size=100
-    ):
-        n = contrast_matrix.shape[0]
-        n_chunks = int(n / max_size) + 1
-        results = []
-        chunks = range(n_chunks)
-        if self.track_progress:
-            chunks = tqdm(chunks, total=n_chunks)
-        for i in chunks:
-            df = contrast_matrix.iloc[i * max_size : (i + 1) * max_size, :]
-            seqs, labels = df.columns, df.index
-            X = encode_seqs(seqs, alphabet=alleles)
-            C = torch.Tensor(df.values)
-            res = self.make_contrasts(C, X, calc_variance=calc_variance)
-            result = self.pred_to_df(res, calc_variance=calc_variance, labels=labels)
-            results.append(result)
-        results = pd.concat(results)
+        results = self.get_pred_dataframe(means, variances, labels=contrasts)
         return results
 
-    def predict_mut_effects(self, seq0, alleles, calc_variance=False, max_size=100):
+    def predict_mut_effects(
+        self,
+        seq0: str,
+        calc_variance: bool = False,
+        method: str = "cg",
+        cg_tol: float = 1e-4,
+        max_cg_iter: int = 1000,
+        preconditioner_size: int = 0,
+    ) -> pd.DataFrame:
         """
         Predict the effects of single mutations on the phenotype
         using the Gaussian process model.
+
+        This method computes the phenotypic effects of single mutations
+        relative to a reference sequence. It uses the Gaussian process
+        model to predict the effects and optionally computes the posterior
+        variance for uncertainty quantification.
 
         Parameters
         ----------
@@ -767,16 +1057,26 @@ class EpiK(_Epik):
             The reference sequence for which single mutation effects
             are to be predicted.
 
-        alleles : list of str
-            A list of possible alleles for each position in the sequence.
-
         calc_variance : bool, optional (default=False)
             If True, computes the posterior variance in addition to the
             posterior mean.
 
-        max_size : int, optional (default=100)
-            The maximum number of contrasts to process in a single batch.
-            Larger values may increase memory usage.
+        method : str, optional (default="cg")
+            The method to use for posterior computation. Options are:
+            - "cg": Conjugate gradient method for efficient computation.
+            - "cholesky": Cholesky decomposition for exact computation.
+
+        cg_tol : float, optional (default=1e-4)
+            The tolerance for the conjugate gradient method. Lower values
+            result in higher precision but may increase computation time.
+
+        max_cg_iter : int, optional (default=1000)
+            Maximum number of CG iterations to run.
+
+        preconditioner_size : int, optional (default=0)
+            The size of the preconditioner used to accelerate convergence
+            in the conjugate gradient method. A value of 0 disables the
+            preconditioner.
 
         Returns
         -------
@@ -785,14 +1085,26 @@ class EpiK(_Epik):
             on the phenotype. If `calc_variance=True`, the DataFrame includes
             posterior standard deviations and 95% credible interval bounds.
         """
-        contrast_matrix = get_mut_effs_contrast_matrix(seq0, alleles)
-        return self.predict_contrasts(
-            contrast_matrix, alleles, calc_variance=calc_variance, max_size=max_size
+        contrast_matrix = get_mut_effs_contrast_matrix(seq0, self.alphabet_list)
+        results = self.make_contrasts(
+            contrast_matrix,
+            calc_variance=calc_variance,
+            method=method,
+            cg_tol=cg_tol,
+            max_cg_iter=max_cg_iter,
+            preconditioner_size=preconditioner_size,
         )
+        return results
 
     def predict_epistatic_coeffs(
-        self, seq0, alleles, calc_variance=False, max_size=100
-    ):
+        self,
+        seq0: str,
+        calc_variance: bool = False,
+        method: str = "cg",
+        cg_tol: float = 1e-4,
+        max_cg_iter: int = 1000,
+        preconditioner_size: int = 0,
+    ) -> pd.DataFrame:
         """
         Compute epistatic coefficients across sets of genotypes
         using the Gaussian process model.
@@ -803,72 +1115,106 @@ class EpiK(_Epik):
             The reference sequence for which epistatic coefficients
             are to be predicted.
 
-        alleles : list of str
-            A list of possible alleles for each position in the sequence.
-
         calc_variance : bool, optional (default=False)
-            If True, computes the posterior (co)-variance in addition
-            to the posterior mean.
+            If True, computes the posterior variance in addition to the
+            posterior mean.
 
-        max_size : int, optional (default=100)
-            The maximum number of contrasts to process in a single batch.
-            Larger values may increase memory usage.
+        method : str, optional (default="cg")
+            The method to use for posterior computation. Options are:
+            - "cg": Conjugate gradient method for efficient computation.
+            - "cholesky": Cholesky decomposition for exact computation.
 
-        Returns
-        -------
-        pd.DataFrame
-            A DataFrame containing the predicted epistatic coefficients
-            for the desired sequences. If `calc_variance=True`, the DataFrame
-            includes posterior standard deviations and 95% credible interval
-            bounds.
+        cg_tol : float, optional (default=1e-4)
+            The tolerance for the conjugate gradient method. Lower values
+            result in higher precision but may increase computation time.
+
+        max_cg_iter : int, optional (default=1000)
+            Maximum number of CG iterations to run.
+
+        preconditioner_size : int, optional (default=0)
+            The size of the preconditioner used to accelerate convergence
+            in the conjugate gradient method. A value of 0 disables the
+            preconditioner.
         """
-        contrast_matrix = get_epistatic_coeffs_contrast_matrix(seq0, alleles)
-        return self.predict_contrasts(
-            contrast_matrix, alleles, calc_variance=calc_variance, max_size=max_size
+        contrast_matrix = get_epistatic_coeffs_contrast_matrix(seq0, self.alphabet_list)
+        results = self.make_contrasts(
+            contrast_matrix,
+            calc_variance=calc_variance,
+            method=method,
+            cg_tol=cg_tol,
+            max_cg_iter=max_cg_iter,
+            preconditioner_size=preconditioner_size,
         )
+        return results
 
-    def get_prior(self, X, sigma2):
+    def get_prior(
+        self, X: Union[np.ndarray, torch.Tensor], sigma2: float
+    ) -> MultivariateNormal:
+        X = self.encode(X)
         likelihood = FixedNoiseGaussianLikelihood(noise=sigma2 * torch.ones(X.shape[0]))
-        gp = GPModel(None, None, self.kernel, likelihood, train_mean=self.train_mean)
+        gp = GPModel(self.kernel, None, None, likelihood, train_mean=self.train_mean)
         prior = gp.forward(X)
         return prior
 
-    def simulate(self, X, n=1, sigma2=1e-4):
+    def simulate(
+        self,
+        X: Union[np.ndarray, torch.Tensor],
+        n: int = 1,
+        sigma2: float = 1e-4,
+        method: str = "cholesky",
+        root_decomposition_size: int = 50,
+    ) -> torch.Tensor:
         """
         Sample random sequence-function relationships from the prior
-        evaluated at the input sequences
+        evaluated at the input sequences.
 
         Parameters
         ----------
-        X : torch.Tensor of shape (n_sequence, n_features)
-            Tensor containing the one-hot encoding of the
-            sequences to make predictions
-        n : int (1)
-            Number of sequence-function relationships to
-            sample from the prior
-        sigma2 : float (1e-4)
-            Additional random noise to add to the
-            simulated landscapes
+        X : np.ndarray | torch.Tensor
+            Array or tensor of shape (n_sequences,) containing input sequences
+            (or an already-encoded tensor accepted by self.encode).
+
+        n : int, optional (default=1)
+            Number of independent functions (landscapes) to sample from the prior.
+
+        sigma2 : float, optional (default=1e-4)
+            Observation noise variance to include in the prior (per-input variance).
+
+        method : str, optional (default="cholesky")
+            The method to use for sampling. Options are:
+            - "lanczos": Use low rank Lanczos tridiagonalization approximation.
+            - "cholesky": Cholesky decomposition for exact computation.
+
+        root_decomposition_size : int, optional (default=50)
+            Size of root decomposition used by approximate methods; larger values
+            increase accuracy at higher memory cost.
 
         Returns
         -------
-        y : torch.Tensor of shape (n_sequences, n)
-            Tensor containing the simulated landscapes
-            evaluated in the input sequences
+        torch.Tensor
+            Samples from the prior with shape (n, n_sequences), where each row
+            is one sampled function evaluated at the input sequences.
         """
-        if self.method == "cg":
-            max_n = X.shape[0] - 1
-        else:
-            max_n = X.shape[0] + 1
+        method = "cg" if method == "lanczos" else method
+        fast = self.get_fast_comp(method)
 
-        with max_cholesky_size(max_n), max_root_decomposition_size(self.n_lanczos_iter):
+        with fast_computations(
+            covar_root_decomposition=fast
+        ), max_root_decomposition_size(root_decomposition_size):
             prior = self.get_prior(X, sigma2=sigma2)
             v = torch.zeros(n)
             y = prior.sample(v.size())
 
         return y
 
-    def simulate_dataset(self, X, sigma=0, ptrain=0.8):
+    def simulate_dataset(
+        self,
+        X: Union[np.ndarray, torch.Tensor],
+        sigma: float = 0,
+        ptrain: float = 0.8,
+        method: str = "cholesky",
+        root_decomposition_size: int = 50,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Simulate a dataset by sampling random sequence-function relationships
         from the prior and splitting the data into training and test sets.
@@ -902,37 +1248,146 @@ class EpiK(_Epik):
             - train_y_var : torch.Tensor
             Variance of the training set target values.
         """
-        y_true = self.simulate(X, n=1).flatten()
-        y_true = y_true / y_true.std()
-
-        splits = split_training_test(X, y_true, y_var=None, ptrain=ptrain)
-        train_x, train_y, test_x, test_y, train_y_var = splits
+        f = self.simulate(
+            X, n=1, method=method, root_decomposition_size=root_decomposition_size
+        ).flatten()
+        splits = split_training_test(X, f, y_var=None, ptrain=ptrain)
+        train_x, train_f, test_x, test_f, train_y_var = splits
         if sigma > 0:
-            train_y = torch.normal(train_y, sigma)
+            train_y = torch.normal(mean=train_f, std=sigma)
             train_y_var = torch.full_like(train_y, sigma**2)
 
-        return (train_x, train_y, test_x, test_y, train_y_var)
+        return (train_x, train_y, test_x, test_f, train_y_var)
+    
+    def calc_kron_dot_map(self, x1: torch.Tensor, matrices: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Compute the posterior mean for the Kronecker factorizable projection of the MAP.
+
+        Parameters
+        ----------
+        x1 : torch.Tensor
+            A tensor of shape (output_size,) containing one-hot encoded elements 
+            for which to compute the maximum a posteriori (MAP).
+
+        matrices : list of torch.Tensor
+            A list of Kronecker factors (matrices) to be used in the matrix-matrix 
+            multiplication.
+
+        Returns
+        -------
+        torch.Tensor
+            A tensor of shape (output_size,) representing the posterior mean 
+            for the Kronecker factorizable projection of the MAP.
+
+        """
+        if not isinstance(self.kernel, SiteProductKernel):
+            msg = 'calc_kron_dot_map can only be used for GPs with site factorizable kernels'
+            raise ValueError(msg)
+        
+        if len(matrices) != self.l:
+            msg = f"Number of matrices must be equal to sequence length {self.l}"
+            raise ValueError(msg)
+    
+        output_sizes = [m.shape[0] for m in matrices]
+        output_size = sum(output_sizes)
+        if x1.shape[1] != output_size:
+            msg = f"x1 has {x1.shape[0]} columns but expected {output_size}"
+            raise ValueError(msg)
+        
+        vs = np.cumsum(output_sizes).astype(int)
+        starts1 = np.append([0], vs[:-1])
+        ends1 = vs
+        x2 = self.X
+        
+        # Compute (P @ K)_{x1, x2} using Kronecker factorization
+        site_kernels = self.kernel.get_site_kernels()
+        PK = 1.0
+        for p, (m, k) in enumerate(zip(matrices, site_kernels)):
+            if m.shape[1] != k.shape[0]:
+                msg = f"Incompatible size of matrices at position {p}: "
+                msg += f"{m.shape[1], k.shape[0]}"
+                raise ValueError(msg)
+            s1, e1 = starts1[p], ends1[p]
+            s2, e2 = self.kernel.starts[p], self.kernel.ends[p]
+            x1p = x1[:, s1:e1].contiguous()
+            x2pT = x2[:, s2:e2].T.contiguous()
+            PK *= x1p @ m @ k.detach() @ x2pT
+
+        post_mean = PK @ self.gp.prediction_strategy.mean_cache
+        return post_mean
+    
+    def calc_kron_quad_map(self, matrices: List[torch.Tensor]) -> float:
+        """
+        Compute the quadratic form of a Kronecker factorizable matrix A with
+        the maximum a posteriori (MAP) estimate for the sequence-function map.
+
+        This method calculates the quadratic form given by:
+        .. math::
+        f^T (\bigotimes_p^\ell A_p) f
+
+        where :math:`\bigotimes` represents the Kronecker product.
+
+        Parameters
+        ----------
+        matrices : list of torch.Tensor
+            A list of Kronecker factors (matrices) representing the matrix A.
+
+        Returns
+        -------
+        float
+            The value of the quadratic form :math:`f^T A f`.
+
+        Raises
+        ------
+        ValueError
+            If the kernel is not a `SiteProductKernel` or if the dimensions
+            of the provided matrices are incompatible with the kernel.
+        """
+        if not isinstance(self.kernel, SiteProductKernel):
+            msg = "calc_kron_dot_map can only be used for GPs with site factorizable kernels"
+            raise ValueError(msg)
+        
+        if len(matrices) != self.l:
+            msg = f"Number of matrices must be equal to sequence length {self.l}"
+            raise ValueError(msg)
+
+        # Compute (K @ P @ K)_xx using Kronecker factorization
+        site_kernels = self.kernel.get_site_kernels()
+        KPK = 1.0
+        for p, (m, k) in enumerate(zip(matrices, site_kernels)):
+            if m.shape[1] != k.shape[0] or m.shape[0] != k.shape[0]:
+                msg = f"Incompatible size of matrices at position {p}: "
+                msg += f"{m.shape, k.shape}"
+                raise ValueError(msg)
+            x_p = self.kernel.select_site(self.X, p).contiguous()
+            k_p = k.detach()
+            kmk = k_p @ m @ k_p
+            KPK *= x_p @ kmk @ x_p.T
+
+        alpha = self.gp.prediction_strategy.mean_cache
+        quad = torch.dot(alpha, KPK @ alpha).item()
+        return quad
 
 
 class GeneralizedEpiK(_Epik):
-    def __init__(self, kernel, likelihood, **kwargs):
+    def __init__(self, kernel: Any, likelihood: Any, **kwargs: Any) -> None:
         super(self).__init__(kernel, **kwargs)
-        self.likelihood_function = likelihood
+        self.likelihood_function: Any = likelihood
 
-    def get_likelihood(self, y_var, train_noise):
+    def get_likelihood(self, y_var: Any, train_noise: bool) -> Any:
         likelihood = self.likelihood_function(y_var, train_noise)
 
         if self.device is not None:
             likelihood = likelihood.cuda()
         return likelihood
 
-    def define_negative_loss(self):
+    def define_negative_loss(self) -> None:
         self.calc_negative_loss = VariationalELBO(
             self.likelihood, self.gp, self.y.numel()
         )
 
-    def define_model(self):
-        self.gp = GeneralizedGPModel(
+    def define_model(self) -> None:
+        self.gp: GeneralizedGPModel = GeneralizedGPModel(
             self.X,
             self.kernel,
             train_mean=self.train_mean,
@@ -940,9 +1395,11 @@ class GeneralizedEpiK(_Epik):
             n_devices=self.n_devices,
         )
         if self.device is not None:
-            self.gp = self.gp.cuda()
+            self.gp: GeneralizedGPModel = self.gp.cuda()
 
-    def predict(self, X, nsamples=100):
+    def predict(
+        self, X: Any, nsamples: int = 100
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         y_var = self.likelihood.second_noise * torch.ones(X.shape[0])
         likelihood = self.get_likelihood(y_var, train_noise=False)
 

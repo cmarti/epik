@@ -4,6 +4,7 @@ import unittest
 import numpy as np
 import torch
 
+from tempfile import NamedTemporaryFile
 from torch.nn import Parameter
 from scipy.special import comb
 
@@ -17,6 +18,7 @@ from epik.kernel import (
     VarianceComponentKernel,
     MahalanobisRBFKernel,
     FactorAnalysisKernel,
+    ConnectednessFactorAnalysisKernel,
     SiteKernelAligner,
 )
 from epik.utils import encode_seqs, get_full_space_one_hot
@@ -28,12 +30,16 @@ class KernelsTests(unittest.TestCase):
             AdditiveKernel,
             PairwiseKernel,
             VarianceComponentKernel,
-            #    GeometricKernel,
-            #    ConnectednessKernel, JengaKernel, GeneralProductKernel,
+            GeometricKernel,
+            ConnectednessKernel, 
+            JengaKernel, 
+            GeneralProductKernel,
+            MahalanobisRBFKernel,
+            FactorAnalysisKernel,
         ]
 
-        self.alphabet = list('AB')
-        self.config = {'alphabet': self.alphabet, 'seq_length': 2}
+        self.alphabet = list("AB")
+        self.config = {"alphabet": self.alphabet, "seq_length": 2}
         self.alpha = 2
         self.l = 2
         self.n = 4
@@ -51,7 +57,7 @@ class KernelsTests(unittest.TestCase):
         for kernel in self.kernels:
             for kwargs in configs:
                 kernel(**kwargs)
-
+    
     def test_kernel_erroneous_configurations(self):
         configs = [
             {"alphabet_type": "dna", "alphabet": list("AC")},
@@ -67,7 +73,15 @@ class KernelsTests(unittest.TestCase):
                 except ValueError:
                     pass
     
-    def test_select_site(self): 
+    def test_load_save(self):
+        for kernel in self.kernels:
+            kernel = kernel(**self.config)
+            
+            with NamedTemporaryFile('w') as fhand:
+                kernel.save(fhand.name)
+                kernel.load(fhand.name)
+
+    def test_select_site(self):
         kernel = GeometricKernel(**self.config)
         assert np.all(kernel.starts == [0, 2])
         assert np.all(kernel.ends == [2, 4])
@@ -76,6 +90,15 @@ class KernelsTests(unittest.TestCase):
         x1 = kernel.select_site(self.x, site=1)
         assert np.allclose(x0, self.x[:, :2])
         assert np.allclose(x1, self.x[:, 2:])
+    
+    def test_select_allele(self):
+        kernel = GeometricKernel(**self.config)
+        assert kernel.alleles_idx == {"A": [0, 2], "B": [1, 3]}
+        
+        x_A = kernel.select_allele(self.x, allele='A')
+        x_B = kernel.select_allele(self.x, allele="B")
+        assert np.allclose(x_A, self.x[:, [0, 2]])
+        assert np.allclose(x_B, self.x[:, [1, 3]])
 
     def test_additive_kernel(self):
         Identity = torch.eye(self.n)
@@ -95,7 +118,7 @@ class KernelsTests(unittest.TestCase):
             assert np.allclose(k, cov, atol=0.01)
             assert diag.shape == (self.n,)
             assert np.allclose(diag, s2, atol=0.01)
-        
+
         # Test in longer sequences
         sl = 16
         n = sl + 1
@@ -123,7 +146,7 @@ class KernelsTests(unittest.TestCase):
         for log_lambda, cov, s2 in zip(log_lambdas, covs, s2s):
             log_lambda = torch.tensor(log_lambda).to(dtype=torch.float32)
             kernel.log_lambdas = Parameter(log_lambda)
-            
+
             # With GPyTorch
             k = kernel._nonkeops_forward(self.x, self.x).detach().numpy()[0]
             diag = kernel._nonkeops_forward(self.x, self.x, diag=True).detach().numpy()
@@ -175,7 +198,7 @@ class KernelsTests(unittest.TestCase):
             assert np.allclose(k, cov, atol=0.01)
 
     def test_truncated_vc_kernel(self):
-        alphabet = list('ACGT')
+        alphabet = list("ACGT")
         sl, n = 2, 100
         seqs = ["".join(c) for c in np.random.choice(alphabet, size=(n, sl))]
         x = encode_seqs(seqs, alphabet=alphabet)
@@ -209,7 +232,7 @@ class KernelsTests(unittest.TestCase):
 
     def test_geometric_kernel(self):
         config = self.config.copy()
-        config.update({"theta0": torch.Tensor(-np.log([2]))})
+        config.update({"log_mu0": torch.Tensor(-np.log([2]))})
         kernel = GeometricKernel(**config)
         corr1d = 1 / 3.0
         corrs = [1, corr1d, corr1d, corr1d**2]
@@ -240,8 +263,8 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov1, cov2)
 
-        # Check that it works for theta0 > 0
-        config["theta0"] = torch.Tensor(np.log([2]))
+        # Check that it works for log_mu0 > 0
+        config["log_mu0"] = torch.Tensor(np.log([2]))
         kernel = GeometricKernel(**config)
         corr1d = -1 / 3.0
 
@@ -252,16 +275,16 @@ class KernelsTests(unittest.TestCase):
         corrs = [1, corr1d, corr1d, corr1d**2]
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
-        
+
         cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov2, cov)
 
     def test_connectedness_kernel(self):
         config = self.config.copy()
-        config.update({"theta0": torch.Tensor([-np.log(2), 0.])})
+        config.update({"log_mu0": torch.Tensor([-np.log(2), 0.0])})
         kernel = ConnectednessKernel(**config)
         corr1d = [1 / 3.0, 0]
-        corrs = [1, corr1d[0], corr1d[1],corr1d[0] * corr1d[1]]
+        corrs = [1, corr1d[0], corr1d[1], corr1d[0] * corr1d[1]]
 
         # Check decay factor
         delta = kernel.get_delta().detach()
@@ -289,8 +312,8 @@ class KernelsTests(unittest.TestCase):
         cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov1, cov2)
 
-        # Check that it works for theta0 > 0
-        config["theta0"] = torch.Tensor(np.log([2, 1]))
+        # Check that it works for log_mu0 > 0
+        config["log_mu0"] = torch.Tensor(np.log([2, 1]))
         kernel = ConnectednessKernel(**config)
         corr1d = [-1 / 3.0, 0]
 
@@ -300,20 +323,20 @@ class KernelsTests(unittest.TestCase):
         corrs = [1, corr1d[0], corr1d[1], corr1d[0] * corr1d[1]]
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
-        
+
         cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov2, cov)
-    
+
     def test_jenga_kernel(self):
         config = self.config.copy()
         config["log_mu0"] = torch.Tensor([-np.log(2), 0.0])
         config["log_pi0"] = [torch.Tensor([0.0, 0.0]), torch.Tensor([0.0, 1.0])]
         kernel = JengaKernel(**config)
         corr1d = [1 / 3.0, 0]
-        corrs = [1, corr1d[0], corr1d[1],corr1d[0] * corr1d[1]]
+        corrs = [1, corr1d[0], corr1d[1], corr1d[0] * corr1d[1]]
 
         # Check decay factor
-        delta = kernel.get_delta()#.detach()
+        delta = kernel.get_delta()  # .detach()
         k1 = 1 - delta[0].detach()[0, 1]
         k2 = 1 - delta[1].detach()[0, 1]
         assert np.allclose(k1, corr1d[0])
@@ -356,12 +379,12 @@ class KernelsTests(unittest.TestCase):
         corrs = [1, corr1d[0], corr1d[1], corr1d[0] * corr1d[1]]
         cov = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov[0, :], corrs)
-        
+
         cov2 = kernel._keops_forward(self.x, self.x).detach().numpy()
         assert np.allclose(cov2, cov)
 
         # With three alleles
-        alphabet = list('ACB')
+        alphabet = list("ACB")
         seq_length = 1
         log_mu = torch.log(torch.Tensor([0.5]))
         log_pi = [torch.log(torch.Tensor([0.2, 0.6, 0.2]))]
@@ -402,7 +425,7 @@ class KernelsTests(unittest.TestCase):
 
     def test_general_product_kernel(self):
         config = self.config.copy()
-        config['theta0'] = [torch.full((1,), fill_value=0.0)] * 2
+        config["theta0"] = [torch.full((1,), fill_value=0.0)] * 2
         kernel = GeneralProductKernel(**config)
         K_exp = np.eye(4)
 
@@ -434,24 +457,47 @@ class KernelsTests(unittest.TestCase):
         # With larger spaces
         seqs = ["ACGTAGCTAA", "GGGTAGCTAA", "GGGTAGCTCC"]
         x = encode_seqs(seqs, alphabet="ACGT")
-        kernel = GeneralProductKernel(alphabet="ACGT", seq_length=10)
+        kernel = GeneralProductKernel(alphabet=list("ACGT"), seq_length=10)
         K1 = kernel._nonkeops_forward(x, x).detach().numpy()
         K2 = kernel._keops_forward(x, x).to_dense().detach().numpy()
         assert np.allclose(K1, K2)
         assert np.allclose(np.diag(K1), 1.0)
 
-    def test_linear_embedding_kernel(self):
-        sl, a = 4, 4
-        x = get_full_space_one_hot(sl, a)
-
-        kernel = MahalanobisRBFKernel(a, sl)
-        K = kernel.forward(x, x).detach().numpy()
+    def test_mahalanobis_rbf_kernel(self):
+        config = self.config.copy()
+        config["M0"] = torch.diag(1 * torch.ones(self.n))
+        kernel = MahalanobisRBFKernel(**config)
+        K = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(K[0, :], [1, 0.1353353, 0.1353353, 0.01831564], atol=1e-3)
         assert np.allclose(np.diag(K), 1.0, atol=1e-3)
         assert np.allclose(K, K.T, atol=1e-4)
 
+        K2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(K, K2, atol=1e-4)
+
+        config["M0"] = torch.diag(0.5 * torch.ones(self.n))
+        kernel = MahalanobisRBFKernel(**config)
+        K = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(K[0, :], [1, 0.36787945, 0.36787945, 0.1353353], atol=1e-3)
+        assert np.allclose(np.diag(K), 1.0, atol=1e-3)
+        assert np.allclose(K, K.T, atol=1e-4)
+
+        K2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(K, K2, atol=1e-4)
+
+        # Check longer sequences
+        alphabet = list("ACBD")
+        sl = 6
+        kernel = MahalanobisRBFKernel(alphabet=alphabet, seq_length=sl)
+        x = get_full_space_one_hot(sl, len(alphabet))
+        K = kernel._nonkeops_forward(x, x).detach()
+        cov1 = K.numpy()
+        cov2 = kernel._keops_forward(x, x).detach().to_dense().numpy()
+        assert np.allclose(cov2, cov1)
+
         # Ensure PSD
         for _ in range(10):
-            v = np.random.normal(size=a**sl)
+            v = np.random.normal(size=K.shape[1])
             assert np.dot(v, K @ v) >= 0.0
 
         K = kernel.forward(x, x, diag=True).detach().numpy()
@@ -462,8 +508,96 @@ class KernelsTests(unittest.TestCase):
         K = kernel.forward(x1, x2).detach().numpy()
         diag = kernel.forward(x1, x2, diag=True).detach().numpy()
         assert np.allclose(diag, np.diag(K))
+    
+    def test_FA_kernel(self):
+        # Initialize to exponential kernel
+        config = self.config.copy()
+        config['ndim'] = 3
+        config["A0"] = torch.zeros((4, 3))
+        config['log_diag0'] = torch.zeros(4)
+        kernel = FactorAnalysisKernel(**config)
+        K = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(K[0, :], [1, 0.1353353, 0.1353353, 0.01831564], atol=1e-3)
+        assert np.allclose(np.diag(K), 1.0, atol=1e-3)
+        assert np.allclose(K, K.T, atol=1e-4)
 
-        corr1ds = kernel.get_M_corr1ds()
+        K2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(K, K2, atol=1e-4)
+        
+        # Initialize with other values
+        config['ndim'] = 1
+        config["A0"] = torch.Tensor([[-1], [1], [0.], [0]])
+        config['log_diag0'] = -16 * torch.ones(4)
+        kernel = FactorAnalysisKernel(**config)
+        K = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        assert np.allclose(K[0, :], [1, 0.13524187, 1, 0.13524187], atol=1e-3)
+        assert np.allclose(np.diag(K), 1.0, atol=1e-3)
+        assert np.allclose(K, K.T, atol=1e-4)
+
+        K2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(K, K2, atol=1e-4)
+    
+    def test_connectedness_FA_kernel(self):
+        config = self.config.copy()
+        config["C0"] = torch.Tensor([[1, 0.],
+                                     [0., 1]])
+        
+        # Test equivalence to Connectedness model
+        kernel = ConnectednessFactorAnalysisKernel(**config)
+        K = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        print(K)
+        assert np.allclose(K[0, :], [1, 0.1353353, 0.1353353, 0.01831564], atol=1e-3)
+        assert np.allclose(np.diag(K), 1.0, atol=1e-3)
+        assert np.allclose(K, K.T, atol=1e-4)
+
+        K2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(K, K2, atol=1e-4)
+        
+        C = kernel.get_C().detach().numpy()
+        assert(np.allclose(C, config['C0']))
+
+        # Test with non-zero off diagonal terms
+        config["C0"] = torch.Tensor([[1, 0.2],
+                                     [0.2, 1]])
+        kernel = ConnectednessFactorAnalysisKernel(**config)
+        K = kernel._nonkeops_forward(self.x, self.x).detach().numpy()
+        print(K)
+        
+        x = np.array(self.x)
+        x1 = x[[1]]
+        x2 = x[[2]]
+        print(x)
+        M = np.array([[1, 0, 0.2, 0],
+                      [0, 1, 0, 0.2],
+                      [0.2, 0, 1, 0],
+                      [0, 0.2, 0, 1]])
+        k = np.exp(x @ M @ x.T)
+        print(x1)
+        print(x1 @ M @ x1.T)
+        print(x2)
+        print(x2 @ M @ x2.T)
+        print(x1.T @ x1)
+        print(x2.T @ x2)
+        print(x.T @ M @ x)
+        
+        
+        print(k)
+        print([k[0, 0] / k[0, 1], k[0, 2] / k[0, 3]])
+        exit()
+        exp_K = np.zeros((4, 4))
+        for i in range(4):
+            for j in range(4):
+                x1 = np.array(self.x[i])
+                x2 = np.array(self.x[j])
+                d = x2-x1
+                exp_K[i, j] = np.exp(-d.T @ M @ d)
+                print(i, j, d, d.T @ M @ d)
+                print((M @ d) * d)
+        print(exp_K)
+        assert(np.allclose(K, exp_K))
+        
+        K2 = kernel._keops_forward(self.x, self.x).to_dense().detach().numpy()
+        assert np.allclose(K, K2, atol=1e-4)
 
     def test_factor_analysis_kernel(self):
         sl, a = 4, 4

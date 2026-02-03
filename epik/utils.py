@@ -1,3 +1,4 @@
+from typing import Any, Generator, List, Optional, Tuple, Union
 import sys
 import time
 from collections import defaultdict
@@ -8,12 +9,30 @@ import pandas as pd
 import torch
 from linear_operator.operators import LinearOperator, MatmulLinearOperator
 from scipy.special import logsumexp
+from epik.settings import ALPHABETS
 
 
 def get_random_sequences(n, seq_length, alphabet):
     alleles = np.random.choice(alphabet, size=(n, seq_length), replace=True)
-    seqs = np.array([''.join(s) for s in alleles])
-    return(seqs)
+    seqs = np.array(["".join(s) for s in alleles])
+    return seqs
+
+
+def get_simulated_mutagenesis(wt_sequence, alphabet, n_seqs, avg_n_mut):
+    seq_length = len(wt_sequence)
+    n_alleles = len(alphabet)
+    wt_alleles = [alphabet.index(c) for c in wt_sequence]
+    mut_prob = avg_n_mut / seq_length
+    ps = np.full((seq_length, n_alleles), mut_prob / (n_alleles - 1))
+    for i, c in enumerate(wt_alleles):
+        ps[i, c] = 1 - mut_prob
+
+    seqs = set()
+    while len(seqs) < n_seqs:
+        alleles = [np.random.choice(alphabet, p=ps[i]) for i in range(seq_length)]
+        seqs.add("".join(alleles))
+    seqs = np.array(list(seqs))
+    return seqs
 
 
 def get_one_hot_subseq_key(alphabet, max_l=1):
@@ -110,7 +129,7 @@ def encode_seqs(seqs, alphabet, encoding_type="one_hot", max_n=500):
 def seq_to_one_hot(X, alleles=None, alleles_list=None):
     if alleles_list is not None and alleles is not None:
         raise ValueError("Provide only one of `alleles` or `alleles_list`")
-    
+
     m = np.array([[a for a in x] for x in X])
     onehot = []
     for i in range(m.shape[1]):
@@ -166,7 +185,7 @@ def to_numpy(v):
     u = v.detach()
     if u.is_cuda:
         u = u.cpu()
-    return(u.numpy())
+    return u.numpy()
 
 
 def get_gpu_memory(device=None):
@@ -266,7 +285,7 @@ def split_training_test(X, y, y_var=None, ptrain=0.8, dtype=None):
 
     ps = np.random.uniform(size=X.shape[0])
     train = ps <= ptrain
-    train_x, train_y = X[train, :], y[train]
+    train_x, train_y = X[train], y[train]
 
     if y_var is None:
         train_y_var = None
@@ -274,7 +293,7 @@ def split_training_test(X, y, y_var=None, ptrain=0.8, dtype=None):
         train_y_var = y_var[train]
 
     test = ps > ptrain
-    test_x, test_y = X[test, :], y[test]
+    test_x, test_y = X[test], y[test]
 
     output = [train_x, train_y, test_x, test_y, train_y_var]
     if dtype is not None:
@@ -388,39 +407,102 @@ def get_mutant_seq(seq, sites, alleles):
     return "".join(mut)
 
 
-def get_epistatic_coeffs_contrast_matrix(seq0, alleles):
-    positions = np.arange(len(seq0))
-    contrasts = {}
-    for s1, s2 in combinations(positions, 2):
-        c1, c2 = seq0[s1], seq0[s2]
-        alleles1 = [a for a in alleles if a != c1]
-        alleles2 = [a for a in alleles if a != c2]
+def get_epistatic_coeffs_contrast_matrix(seq: str, alphabet_list: List[List[str]]):
+    """
+    Generate a contrast matrix for epistatic coefficients around a
+    reference sequence.
 
-        for a1 in alleles1:
-            for a2 in alleles2:
-                seqs = [
-                    seq0,
-                    get_mutant_seq(seq0, sites=[s1], alleles=[a1]),
-                    get_mutant_seq(seq0, sites=[s2], alleles=[a2]),
-                    get_mutant_seq(seq0, sites=[s1, s2], alleles=[a1, a2]),
-                ]
-                label = "{}{}{}_{}{}{}".format(c1, s1, a1, c2, s2, a2)
-                values = [1, -1, -1, 1]
-                contrasts[label] = dict(zip(seqs, values))
+    Parameters
+    ----------
+    seq : str
+        The reference sequence for which the contrast matrix is generated.
+    alphabet_list : List[List[str]]
+        A list of lists where each inner list represents the alphabet of
+        possible alleles for the corresponding position in the sequence.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame representing the contrast matrix. Rows correspond to
+        mutations, and columns correspond to sequences. The values indicate
+        the contrast coefficients for each sequence.
+    """
+
+    # Check input
+    if len(seq) != len(alphabet_list):
+        msg = f"Ensure seq lenght {len(seq)} matches the size of the "
+        msg += f"alphabet_list ({len(alphabet_list)})"
+        raise ValueError(msg)
+
+    for p, (c, alphabet) in enumerate(zip(seq, alphabet_list)):
+        if c not in alphabet:
+            msg = f"Unexpected allele {c} found at position {p} "
+            msg += f"with alphabet {alphabet}"
+            raise ValueError(msg)
+
+    # Prepare contrasts
+    contrasts = {}
+    pos_alphabets = list(enumerate(alphabet_list))
+    for (s1, alphabet1), (s2, alphabet2) in combinations(pos_alphabets, 2):
+        c1, c2 = seq[s1], seq[s2]
+        alleles1 = [a for a in alphabet1 if a != c1]
+        alleles2 = [a for a in alphabet2 if a != c2]
+
+        for a1, a2 in product(alleles1, alleles2):
+            seqs = [
+                seq,
+                get_mutant_seq(seq, sites=[s1], alleles=[a1]),
+                get_mutant_seq(seq, sites=[s2], alleles=[a2]),
+                get_mutant_seq(seq, sites=[s1, s2], alleles=[a1, a2]),
+            ]
+            label = "{}{}{}_{}{}{}".format(c1, s1, a1, c2, s2, a2)
+            values = [1, -1, -1, 1]
+            contrasts[label] = dict(zip(seqs, values))
     contrasts_matrix = pd.DataFrame(contrasts).fillna(0).T
     return contrasts_matrix
 
 
-def get_mut_effs_contrast_matrix(seq0, alleles):
-    positions = np.arange(len(seq0))
+def get_mut_effs_contrast_matrix(
+    seq: str, alphabet_list: List[List[str]]
+) -> pd.DataFrame:
+    """
+    Generate a contrast matrix for mutational effects around a
+    reference sequence.
+
+    Parameters
+    ----------
+    seq : str
+        The reference sequence for which the contrast matrix is generated.
+    alphabet_list : List[List[str]]
+        A list of lists where each inner list represents the alphabet of
+        possible alleles for the corresponding position in the sequence.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame representing the contrast matrix. Rows correspond to
+        mutations, and columns correspond to sequences. The values indicate
+        the contrast coefficients for each sequence.
+    """
+
+    if len(seq) != len(alphabet_list):
+        msg = f"Ensure seq lenght {len(seq)} matches the size of the "
+        msg += f"alphabet_list ({len(alphabet_list)})"
+        raise ValueError(msg)
+
     contrasts = {}
-    for s in positions:
-        c = seq0[s]
-        for a in [a for a in alleles if a != c]:
-            seqs = [seq0, get_mutant_seq(seq0, sites=[s], alleles=[a])]
+    for s, (c, alphabet) in enumerate(zip(seq, alphabet_list)):
+        if c not in alphabet:
+            msg = f"Unexpected allele {c} found at position {s} "
+            msg += f"with alphabet {alphabet}"
+            raise ValueError(msg)
+
+        for a in [a for a in alphabet_list[s] if a != c]:
+            seqs = [seq, get_mutant_seq(seq, sites=[s], alleles=[a])]
             label = "{}{}{}".format(c, s, a)
             values = [-1, 1]
             contrasts[label] = dict(zip(seqs, values))
+
     contrasts_matrix = pd.DataFrame(contrasts).fillna(0).T
     return contrasts_matrix
 
@@ -511,41 +593,34 @@ class KrawtchoukPolynomials(object):
             lambdas = torch.linalg.solve(A, b)
         return lambdas
 
+
 class WkAligner(torch.nn.Module):
     def __init__(self, n_alleles, seq_length, max_k=None):
         super().__init__()
         self.n_alleles = n_alleles
         self.seq_length = seq_length
         self.ws = KrawtchoukPolynomials(n_alleles, seq_length, max_k)
-        
+
     def set_data(self, cov, ns=None):
         self.cov = cov
         self.ns = ns
         if self.ns is None:
             self.ns = torch.ones_like(cov)
-        
 
         b = self.cov[1] / (self.cov[0] - self.cov[1])
-        beta0 = np.log(self.cov[0]) + self.seq_length * (np.log(1 + self.n_alleles * b) - np.log(1 + b))
+        beta0 = np.log(self.cov[0]) + self.seq_length * (
+            np.log(1 + self.n_alleles * b) - np.log(1 + b)
+        )
         beta1 = np.log(1 + self.n_alleles * b)
         k = torch.arange(self.ws.max_k + 1).to(dtype=torch.float)
         log_lambdas0 = beta0 - beta1 * k
-        # log_lambdas0 =  - beta * k
-        # log_lambdas0 = torch.zeros_like(k)
-        # log_lambdas0[0] = 0.
-        # print(log_lambdas0)
-        # input()
-        # log_lambdas0 = -torch.arange(self.ws.max_k + 1).to(dtype=torch.float)
-        # print(log_lambdas0)
         self.log_lambdas = torch.nn.Parameter(log_lambdas0)
 
     def predict(self, log_lambdas):
-        return(self.ws.get_w_d(log_lambdas))
+        return self.ws.get_w_d(log_lambdas)
 
     def calc_loss(self, log_lambdas):
         w_d = self.predict(log_lambdas)
-        # print(w_d)
-        print(w_d[:5].detach().numpy(), self.cov[:5].numpy())
         rmse = torch.sum(torch.square(self.cov - w_d) * self.ns) / self.ns.sum()
         return rmse
 
@@ -554,7 +629,6 @@ class WkAligner(torch.nn.Module):
 
         for i in range(n_iter):
             optimizer.zero_grad()
-            # print(self.log_lambdas)
             loss = self.calc_loss(self.log_lambdas)
             loss.backward()
             optimizer.step()
@@ -606,8 +680,169 @@ def inner_product(x1, x2, metric=None, diag=False):
             return x1 @ metric @ x2.T
 
 
+def diff_inner_prod(
+    v1: torch.Tensor, v2: torch.Tensor, diag: bool = False
+) -> torch.Tensor:
+    """
+    Computes the inner product difference matrix
+    for two tensors v1 and v2. If `diag=True`, it calculates
+    diag((v1 - v2)^T (v1 - v2)).
+
+    This computation is done as v1^2 + v2^2 - 2 v1 v2 for
+    tensorized computation.
+
+    Parameters
+    ----------
+    v1 : torch.Tensor
+        A 2D tensor of shape (N, M), where N is the number of rows
+        and M is the number of columns.
+    v2 : torch.Tensor
+        A 2D tensor of shape (N, M), where N is the number of rows
+        and M is the number of columns.
+    diag : bool
+        If True, computes only the diagonal elements of the difference matrix.
+
+    Returns
+    -------
+    torch.Tensor
+        A tensor containing the inner product difference matrix or its diagonal.
+    """
+    if diag:
+        min_size = min(v1.shape[0], v2.shape[0])
+        z1 = torch.sum(torch.square(v1[:min_size, :]), axis=1)
+        z2 = torch.sum(torch.square(v2[:min_size, :]), axis=1)
+        z = (v1[:min_size, :] * v2[:min_size, :]).sum(axis=1)
+        res = z1 + z2 - 2 * z
+    else:
+        z1 = torch.sum(torch.square(v1), axis=1).unsqueeze(1)
+        z2 = torch.sum(torch.square(v2), axis=1).unsqueeze(0)
+        res = z1 + z2 - 2 * v1 @ v2.T
+    return res
+
+
 def cov2corr(cov):
     v = 1 / torch.sqrt(torch.diag(cov))
     corr = v.unsqueeze(0) * cov * v.unsqueeze(1)
-    return(corr)
+    return corr
 
+
+def validate_alphabet(
+    seq_length: Optional[int] = None,
+    alphabet_type: Optional[str] = None,
+    alphabet: Optional[List[str]] = None,
+    alphabet_list: Optional[List[List[str]]] = None,
+) -> List[List]:
+    """
+    Validate and normalize alphabet inputs for sequence sites.
+    This function centralizes validation logic for specifying alphabets used to
+    describe per-site character sets for sequences. It accepts either a global
+    alphabet (or an alphabet type name that maps to a predefined alphabet) together
+    with a sequence length, or a fully-specified per-site alphabet_list. It
+    returns a list of per-site alphabets suitable for downstream processing.
+
+    seq_length : Optional[int]
+        The number of sites/sequences positions. Required when `alphabet_list` is
+        not provided so that a single `alphabet` can be expanded to every site.
+
+    alphabet_type : Optional[str]
+        Key name for a predefined alphabet in the module-level ALPHABETS mapping
+        (e.g. 'dna', 'rna', 'protein'). If provided, the corresponding alphabet is
+        used. When `alphabet_type` is given, `alphabet` must be None.
+
+    alphabet : Optional[List[str]]
+        A list of characters specifying the alphabet to apply to all sites. When
+        provided with `seq_length`, the result is `[alphabet] * seq_length`. Must
+        be None if `alphabet_type` or `alphabet_list` is provided.
+    alphabet_list : Optional[List[List[str]]]
+
+        An explicit per-site list of alphabets. When provided, its length must
+        already match the intended sequence length and neither `seq_length` nor
+        `alphabet`/`alphabet_type` should be specified.
+
+    Returns
+    -------
+    List[List[str]]
+        A normalized per-site list of alphabets (one list of allowed characters
+        per site). If a single `alphabet` (or `alphabet_type`) and `seq_length`
+        are given, the returned list repeats that alphabet for each site.
+
+    """
+
+    if alphabet_type is not None:
+        if alphabet_type not in ALPHABETS:
+            msg = f"`alphabet_type` must be one of {list(ALPHABETS.keys())}"
+            raise ValueError(msg)
+        if alphabet is not None:
+            msg = (
+                "When `alphabet_type` is provided, `alphabet` should not be specified."
+            )
+            raise ValueError(msg)
+        alphabet = ALPHABETS[alphabet_type]
+
+    if alphabet_list is None:
+        if seq_length is None or alphabet is None:
+            msg = "When `alphabet_list` is not provided, both `seq_length` and"
+            msg += " `alphabet` or `alphabet_type` must be specified."
+            raise ValueError(msg)
+        alphabet_list = [alphabet] * seq_length
+    else:
+        msg = "When `alphabet_list` is provided, neither `seq_length` nor `alphabet`"
+        msg += " or `alphabet_type` should be specified."
+        assert seq_length is None and alphabet is None, msg
+
+    if any(len(site_alphabet) <= 1 for site_alphabet in alphabet_list):
+        raise ValueError("All sites must have at least two alleles")
+
+    return alphabet_list
+
+
+def get_one_hot_encoding(
+    seqs: Union[np.ndarray, torch.Tensor], alphabet_list: List[List]
+) -> torch.Tensor:
+    """
+    One-hot encode a list of sequences using per-position alphabets.
+
+    Parameters
+    ----------
+    seqs : np.ndarray | torch.Tensor
+        Iterable of sequences (strings or sequence-like of alleles). All sequences
+        must have the same length.
+    alphabet_list : List[List]
+        Sequence of alphabets for each position. The length of alphabet_list must
+        equal the sequence length. The order of alleles in each alphabet determines
+        the order of one-hot columns for that position.
+
+    Returns
+    -------
+    torch.Tensor
+        Float tensor of shape (n_sequences, total_features) where
+        total_features = sum(len(alphabet) for alphabet in alphabet_list).
+        Columns are ordered by increasing position and, within each position,
+        by the order of alleles in the corresponding alphabet. Entries are 1.0
+        when the sequence has that allele at that position and 0.0 otherwise.
+
+    Raises
+    ------
+    ValueError
+        If `seqs` is empty or if sequence lengths are inconsistent with
+        `alphabet_list`.
+    """
+    if seqs.shape[0] == 0:
+        raise ValueError("seqs is empty")
+
+    alleles = np.array([[c for c in s] for s in seqs])
+    X = []
+    for p, alphabet in enumerate(alphabet_list):
+        alleles_p = alleles[:, p]
+
+        unique_alleles = np.unique(alleles[:, p])
+        if np.any(~np.isin(unique_alleles, alphabet)):
+            msg = f"Unexpected alleles found at position {p}: {unique_alleles}"
+            msg += f". Make sure they are chose from alphabet {alphabet}"
+            raise ValueError(msg)
+
+        for allele in alphabet:
+            X.append(alleles_p == allele)
+
+    X = torch.Tensor(np.vstack(X).T.astype(float))
+    return X

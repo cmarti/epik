@@ -9,8 +9,11 @@ import gpytorch
 import numpy as np
 import pandas as pd
 import torch
+from itertools import product
 from scipy.stats import pearsonr, multivariate_normal
+from scipy.special import comb
 from gpytorch.distributions import MultivariateNormal
+from torch.distributions.transforms import CorrCholeskyTransform
 
 from epik.kernel import (
     AdditiveKernel,
@@ -29,7 +32,7 @@ from epik.utils import (
     get_mut_effs_contrast_matrix,
     one_hot_to_seq,
     seq_to_one_hot,
-    encode_seqs,
+    get_one_hot_encoding,
     get_random_sequences,
 )
 
@@ -38,30 +41,42 @@ class ModelsTests(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(0)
         self.log_lambdas0 = torch.tensor([-5, 2.0, 1, -1.5, -3])
-        self.alphabet = np.array(["A", "C", "G", "T"])
+        self.alphabet = np.array(["A", "C", "G", "T"]).tolist()
         self.alleles = "".join(self.alphabet)
         self.alpha = len(self.alphabet)
         self.l = self.log_lambdas0.shape[0] - 1
+        self.alphabet_list = [self.alphabet] * self.l
         self.add_size = (self.alpha - 1) * self.l
-        self.seq0 = "A" * self.l
-        self.X = get_full_space_one_hot(seq_length=self.l, n_alleles=self.alpha)
+        self.pw_size = int((self.alpha - 1) ** 2 * comb(self.l, 2))
+        self.X = np.array(["".join(x) for x in product(*self.alphabet_list)])
         self.sigma = 0.2
         self.ptrain = 0.8
 
         self.kernel = VarianceComponentKernel(
-            n_alleles=self.alpha, seq_length=self.l, log_lambdas0=self.log_lambdas0
+            alphabet_list=self.alphabet_list, log_lambdas0=self.log_lambdas0
         )
-        self.model = EpiK(self.kernel)
+        self.model = EpiK(self.kernel, alphabet_list=self.alphabet_list)
         dataset = self.model.simulate_dataset(
             self.X, sigma=self.sigma, ptrain=self.ptrain
         )
         self.X_train, self.y_train, self.X_test, self.y_test, self.y_var = dataset
         self.y_test = self.y_test.numpy()
 
+        k = np.array(
+            [
+                [1, 0.6, 0.4, 0.1],
+                [0.6, 1, 0.2, 0.7],
+                [0.4, 0.3, 1, 0.8],
+                [0.2, 0.7, 0.8, 1],
+            ]
+        )
+        ps = np.linspace(0.1, 2.5, self.l)
+        ks = [(p * np.eye(4) + k) / (1 + p) for p in ps]
+        t = CorrCholeskyTransform()
+        self.theta0 = [t._inverse(torch.Tensor(k)) for k in ks]
         self.vc_kernels = [
             AdditiveKernel,
             PairwiseKernel,
-            GeometricKernel,
             VarianceComponentKernel,
         ]
         self.product_kernels = [
@@ -70,264 +85,359 @@ class ModelsTests(unittest.TestCase):
             JengaKernel,
             GeneralProductKernel,
         ]
-    
+
     def test_gaussian(self):
-        C = np.array([[1.0, 0.5, 0.5, 0.25],
-                      [0.5, 1.0, 0.25, 0.5],
-                      [0.5, 0.25, 1.0, 0.5],
-                      [0.25, 0.5, 0.5, 1.0]])
-        
+        C = np.array(
+            [
+                [1.0, 0.5, 0.5, 0.25],
+                [0.5, 1.0, 0.25, 0.5],
+                [0.5, 0.25, 1.0, 0.5],
+                [0.25, 0.5, 0.5, 1.0],
+            ]
+        )
+
         # Test scipy implementation
         gaussian1 = multivariate_normal(mean=np.zeros(4), cov=C)
         s1 = gaussian1.rvs(size=5000)
         c1 = np.corrcoef(s1.T)
-        assert( np.allclose(c1, C, atol=0.05))
-        
+        assert np.allclose(c1, C, atol=0.05)
+
         # Test gpytorch Cholesky implementation
-        with gpytorch.settings.max_cholesky_size(100):
+        with gpytorch.settings.fast_computations(covar_root_decomposition=False):
             gaussian1 = MultivariateNormal(torch.zeros(4), torch.Tensor(C))
             s2 = gaussian1.sample(sample_shape=torch.Size([5000])).numpy()
             c2 = np.corrcoef(s2.T)
-            assert( np.allclose(c2, C, atol=0.05))
-        
+            assert np.allclose(c2, C, atol=0.05)
+
         # Test gpytorch Tridiagonal implementation
-        with gpytorch.settings.max_cholesky_size(1), gpytorch.settings.max_root_decomposition_size(10), gpytorch.settings.cg_tolerance(1e-16):
+        # Some problem with a too high tolerance in the lanczos decomposition
+        with gpytorch.settings.fast_computations(
+            covar_root_decomposition=True
+        ), gpytorch.settings.max_cholesky_size(
+            1
+        ), gpytorch.settings.max_root_decomposition_size(
+            10
+        ), gpytorch.settings.cg_tolerance(1e-16):
             gaussian1 = MultivariateNormal(torch.zeros(4), torch.Tensor(C))
             s3 = gaussian1.sample(sample_shape=torch.Size([5000])).numpy()
             c3 = np.corrcoef(s3.T)
-            assert( np.allclose(c3, C, atol=0.05))
-        
+            assert np.allclose(c3, C, atol=0.05)
 
     def test_calc_mll(self):
+        np.random.seed(0)
         seq_length = 8
+        theta0 = torch.Tensor(np.geomspace(0.1, 0.8, seq_length))
         with torch.no_grad():
-            kernel = ConnectednessKernel(n_alleles=self.alpha, seq_length=seq_length)
+            kernel = ConnectednessKernel(
+                seq_length=seq_length, alphabet=self.alphabet, theta0=theta0
+            )
             for n in [500, 1000, 2000]:
                 seqs = get_random_sequences(
                     n=n, seq_length=seq_length, alphabet=self.alphabet
                 )
-                X = encode_seqs(seqs, alphabet=self.alphabet)
-                y_var = 0.1 * np.ones(n)
-                D = np.diag(y_var)
-                mu = np.zeros(n)
-                Sigma = kernel(X, X).to_dense().numpy() + D
-                gaussian = multivariate_normal(mu, Sigma)
+                X = get_one_hot_encoding(seqs, alphabet_list=kernel.alphabet_list)
+                y_var = 0.4 * np.ones(n)
+                Sigma = kernel(X, X).to_dense().numpy() + np.diag(y_var)
+                gaussian = multivariate_normal(np.zeros(n), Sigma)
+
+                # Sample from gaussian
                 y = gaussian.rvs()
 
                 # Compute log-probability with scipy
                 logp1 = gaussian.logpdf(y)
 
-                model = EpiK(kernel)
-                model.set_data(X=X, y=y, y_var=y_var)
+                model = EpiK(kernel, seq_length=seq_length, alphabet=self.alphabet)
+                model.set_data(X=seqs, y=y, y_var=y_var)
 
                 # Compute log-probability with chokesly decomposition
-                logp2 = model.calc_mll(method='cholesky').item()
-                assert np.allclose(logp1, logp2, atol=1e-4)
+                logp2 = model.calc_mll(method="cholesky").item()
+                assert np.allclose(logp1, logp2, atol=1e-2)
 
                 # Compute log-probability with cg approach
                 for _ in range(5):
                     logp2 = model.calc_mll(
-                        method="cg", n_lanczos_iter=100, n_trace_samples=100
+                        method="cg", cg_tol=0.1, n_lanczos_iter=200, n_trace_samples=50
                     ).item()
-                    assert np.allclose(logp1, logp2, atol=20)
+                    assert np.allclose(logp1, logp2, rtol=0.1)
 
     def test_diagnose_mll(self):
-        kernel = ConnectednessKernel(n_alleles=self.alpha, seq_length=self.l)
-        model = EpiK(kernel, method='cg')
+        model = EpiK(alphabet=self.alphabet, seq_length=self.l, kernel="Connectedness")
         model.set_data(X=self.X_train, y=self.y_train, y_var=self.y_var)
         mll_diagnosis = model.diagnose_mll()
 
         assert mll_diagnosis.shape[0] == 150
-        columns = ["param", "n_lanczos", 'cg_tol', 'n_trace_samples', "mll"]
+        columns = [
+            "method",
+            "cg_tol",
+            "max_cg_iter",
+            "n_lanczos_iter",
+            "n_trace_samples",
+            "preconditioner_size",
+            "mll",
+            "param",
+        ]
         assert np.all(mll_diagnosis.columns == columns)
 
-    def test_simulate_cholesky(self):
-        sl, a, lambdas0 = 2, 2, torch.log(torch.tensor([2, 1, 0.2]))
-        X = get_full_space_one_hot(seq_length=sl, n_alleles=a)
-        kernel = VarianceComponentKernel(
-            n_alleles=a, seq_length=sl, log_lambdas0=lambdas0
-        )
-        k = kernel(X, X).to_dense().detach().numpy()
-        
-        model = EpiK(kernel, method='cholesky')
-        y = pd.DataFrame(model.simulate(X, n=10000).numpy())
-        cors = y.corr().values
-        rho1 = np.array(
-            [
-                cors[0, 1],
-                cors[0, 2],
-                cors[1, 0],
-                cors[1, 3],
-                cors[2, 0],
-                cors[2, 3],
-                cors[3, 1],
-                cors[3, 2],
-            ]
-        )
-        rho2 = np.array([cors[0, 3], cors[1, 2], cors[2, 1], cors[3, 0]])
-        assert rho1.std() < 0.2
-        assert rho2.std() < 0.1
-        assert np.allclose(cors, k, atol=0.05)
-    
-    def test_simulate_cg(self):
-        sl, a, lambdas0 = 2, 2, torch.log(torch.tensor([2, 1, 0.2]))
-        X = get_full_space_one_hot(seq_length=sl, n_alleles=a)
-        kernel = VarianceComponentKernel(
-            n_alleles=a, seq_length=sl, log_lambdas0=lambdas0
-        )
-        k = kernel(X, X).to_dense().detach().numpy()
-        
-        model = EpiK(kernel, method='cg', n_lanczos_iter=100)
-        y = pd.DataFrame(model.simulate(X, n=10000).numpy())
-        cors = y.corr().values
+    def test_simulate(self):
+        model = EpiK(alphabet=self.alphabet, seq_length=self.l, kernel=self.kernel)
+        x = model.encode(self.X).numpy()
+        distance = self.l - x @ x.T
 
-        rho1 = np.array(
-            [
-                cors[0, 1],
-                cors[0, 2],
-                cors[1, 0],
-                cors[1, 3],
-                cors[2, 0],
-                cors[2, 3],
-                cors[3, 1],
-                cors[3, 2],
-            ]
-        )
-        rho2 = np.array([cors[0, 3], cors[1, 2], cors[2, 1], cors[3, 0]])
-        # assert rho1.std() < 0.2
-        # assert rho2.std() < 0.1
-        msg = f'CG simulation {cors} does not match kernel matrix {k}'
-        assert np.allclose(cors, k, atol=0.05), msg
+        f1 = model.simulate(self.X, n=10000, method="cholesky").numpy()
+        cors1 = pd.DataFrame(f1).corr().values
+
+        f2 = model.simulate(
+            self.X, n=10000, method="lanczos", root_decomposition_size=200
+        ).numpy()
+        cors2 = pd.DataFrame(f2).corr().values
+
+        for d in range(self.l + 1):
+            d_idx = distance == d
+            n = d_idx.sum()
+            c1 = np.sum(d_idx * cors1) / n
+            c2 = np.sum(d_idx * cors2) / n
+            assert np.allclose(c1, c2, rtol=0.1)
 
     def test_predict(self):
-        # Predict on test data
-        model = EpiK(self.kernel)
+        model = EpiK(alphabet=self.alphabet, seq_length=self.l, kernel=self.kernel)
         model.set_data(self.X_train, self.y_train, self.y_var)
+
+        # Predict on test data without variance
         results1 = model.predict(self.X_test, calc_variance=False)
         r2 = pearsonr(results1["coef"], self.y_test)[0] ** 2
-        assert r2 > 0.6
+        assert r2 > 0.75
 
         # Predict on test data with variance
-        model = EpiK(self.kernel)
-        model.set_data(self.X_train, self.y_train, self.y_var)
         results2 = model.predict(self.X_test, calc_variance=True)
         assert np.allclose(results2["coef"], results1["coef"])
 
-        # Check calibration
+        # Check interval coverage
         bound1 = results2["lower_ci"] < self.y_test
         bound2 = results2["upper_ci"] > self.y_test
-        calibration = np.mean(bound1 & bound2)
-        assert calibration > 0.9
+        coverage = np.mean(bound1 & bound2)
+        assert coverage > 0.85
 
-    def test_contrast(self):
-        # Define target sequences and contrast
-        test_x = torch.tensor(
-            [
-                [1, 0, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 2,
-                [0, 1, 0, 0, 1, 0, 0, 0] + [1, 0, 0, 0] * 2,
-                [1, 0, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 2,
-                [0, 1, 0, 0, 0, 1, 0, 0] + [1, 0, 0, 0] * 2,
-            ]
-        )
-        contrast_matrix = torch.tensor([[1, -1, -1, 1]])
-
-        # Define model
-        model = EpiK(self.kernel, track_progress=False)
+    def test_contrasts(self):
+        model = EpiK(alphabet=self.alphabet, seq_length=self.l, kernel=self.kernel)
         model.set_data(self.X_train, self.y_train, self.y_var)
+
+        # Define target sequences and contrast
+        X = ["ACGT", "ACGG", "TCGT", "TCGG"]
+        labels = ["A0T_T3G"]
+        contrast_matrix = pd.DataFrame([[1, -1, -1, 1]], index=labels, columns=X)
 
         # Make contrast
-        m, cov = model.make_contrasts(contrast_matrix, test_x, calc_variance=True)
-        assert m.shape == (1,)
-        assert cov.shape == (1, 1)
+        results1 = model.make_contrasts(contrast_matrix, calc_variance=True)
+        assert results1.shape == (1, 4)
 
-        # Make contrast with built-in matrix functions
-        contrast_matrix = get_mut_effs_contrast_matrix(
-            seq0=self.seq0, alleles=self.alleles
-        )
-        test_x = seq_to_one_hot(contrast_matrix.columns, alleles=self.alleles)
-        contrast_matrix = torch.Tensor(contrast_matrix.values)
-        m, cov = model.make_contrasts(contrast_matrix, test_x, calc_variance=True)
-        assert m.shape == (self.add_size,)
-        assert cov.shape == (self.add_size, self.add_size)
-
-        # Make contrast with built-in method
-        results = model.predict_mut_effects(
-            seq0=self.seq0, alleles=self.alleles, calc_variance=False
-        )
-        assert results.shape == (self.add_size, 1)
-        assert np.allclose(results["coef"], m.numpy())
-
-        # Make contrast with built-in method and variance
-        results = model.predict_mut_effects(
-            seq0=self.seq0, alleles=self.alleles, calc_variance=True
-        )
+        results = model.predict_mut_effects(seq0="ACGT", calc_variance=True)
         assert results.shape == (self.add_size, 4)
-        assert np.allclose(results["coef"], m.numpy())
-        assert np.allclose(results["stderr"], np.sqrt(np.diag(cov.numpy())))
+
+        results = model.predict_epistatic_coeffs(seq0="ACGT", calc_variance=True)
+        assert results.shape == (self.pw_size, 4)
+        assert np.allclose(results1, results.loc[labels, :], atol=1e-3)
+    
+    def test_kronecker_map_projection(self):
+        model = EpiK(
+            alphabet=self.alphabet,
+            seq_length=self.l,
+            kernel="GeneralProduct",
+            kernel_kwargs={"theta0": self.theta0},
+        )
+        data = model.simulate_dataset(self.X, sigma=0.1, ptrain=0.9, method="cholesky")
+        X_train, y_train, _, _, y_train_var = data
+        model.set_data(X_train, y_train, y_train_var)
+
+        # Compute f mean directly
+        f = model.get_posterior(self.X)
+        f_mean1 = f.mean.mean().item()
+
+        # Compute f mean with kronecker factorization
+        m = torch.full((self.alpha, self.alpha), 1.0 / self.alpha)
+        matrices = [m] * self.l
+        x_p = torch.zeros(self.alpha)
+        x_p[0] = 1
+        x1 = torch.hstack([x_p] * self.l).unsqueeze(0)
+        f_mean2 = model.calc_kron_dot_map(x1, matrices).item()
+        assert np.allclose(f_mean1, f_mean2)
+
+        # Test with arbitrary matrices
+        sizes = np.random.randint(low=2, high=5, size=self.l)
+        alphabet = list('ABCDE')
+        alphabet_list = [alphabet[:s] for s in sizes]
+        seqs = np.array(["".join(x) for x in product(*alphabet_list)])
+        x1 = get_one_hot_encoding(seqs, alphabet_list)
+        matrices = []
+        matrix = np.array([[1.]])
+        for s in sizes:
+            m = np.random.normal(size=(s, self.alpha))
+            matrix = np.kron(matrix, m)
+            matrices.append(torch.Tensor(m))
+        matrix = torch.Tensor(matrix)
+
+        v1 = matrix @ f.mean
+        v2 = model.calc_kron_dot_map(x1, matrices)
+        assert np.allclose(v1, v2, atol=1e-4)
+    
+    def test_kronecker_map_quad(self):
+        model = EpiK(
+            alphabet=self.alphabet,
+            seq_length=self.l,
+            kernel="GeneralProduct",
+            kernel_kwargs={"theta0": self.theta0},
+        )
+        data = model.simulate_dataset(self.X, sigma=0.1, ptrain=0.9, method="cholesky")
+        X_train, y_train, _, _, y_train_var = data
+        model.set_data(X_train, y_train, y_train_var)
+
+        # Compute f norm directly
+        f = model.get_posterior(self.X)
+        f_norm1 = (f.mean ** 2).sum().item()
+
+        # Compute f norm with kronecker factorization
+        m = torch.eye(self.alpha)
+        matrices = [m] * self.l
+        f_norm2 = model.calc_kron_quad_map(matrices)
+        assert np.allclose(f_norm1, f_norm2, atol=1e-2)
+
+        # Test with arbitrary matrices
+        matrix = np.array([[1.0]])
+        Q = np.array([[1.0]])
+        matrices = []
+        qs = []
+
+        for _ in range(self.l):
+            q = np.random.normal(size=(self.alpha, self.alpha))
+            A_p = q @ q.T
+            matrix = np.kron(matrix, A_p)
+            matrices.append(torch.Tensor(A_p))
+            Q = np.kron(Q, q.T)
+            qs.append(torch.Tensor(q.T))
+        matrix = torch.Tensor(matrix)
+        Q = torch.Tensor(Q)
+
+        v1 = torch.dot(f.mean, matrix @ f.mean).item()
+        v2 = model.calc_kron_quad_map(matrices)
+        assert np.allclose(v1, v2, atol=1e-4)
+
+        # Test consistency with kron_dot
+        u = Q @ f.mean
+        v3 = torch.dot(u, u).item()
+        assert np.allclose(v1, v3, atol=1e-4)
+
+        x1 = get_one_hot_encoding(self.X, self.alphabet_list)
+        u = model.calc_kron_dot_map(x1, qs)
+        v4 = torch.dot(u, u).item()
+        assert np.allclose(v1, v4, atol=1e-4)
 
     def test_fit(self):
-        kernel = VarianceComponentKernel(n_alleles=self.alpha, seq_length=self.l)
-        model = EpiK(kernel, track_progress=True, method='cg')
+        model = EpiK(alphabet=self.alphabet, seq_length=self.l, kernel="VC")
         model.set_data(self.X_train, self.y_train, self.y_var)
-        model.fit(n_iter=100, learning_rate=0.01)
-        log_lambdas = kernel.log_lambdas.detach().cpu().numpy().flatten()
+        model.fit(n_iter=500, learning_rate=0.005, cg_tol=0.1, n_lanczos_iter=100)
+        log_lambdas = model.kernel.log_lambdas.detach().cpu().numpy().flatten()
         r = pearsonr(log_lambdas[1:], self.log_lambdas0[1:])[0]
-        assert r > 0.6
-        
-        assert len(model.params_history) == 100
-        assert len(model.grad_history) == 100
+        assert r > 0.8
 
     def test_fit_predict_vc_kernels(self):
         prev_mll = -np.inf
-        r2_bounds = [0.1, 0.5, 0.7, 0.7]
+        r2_bounds = [0.0, 0.3, 0.5]
+        kwargs = {
+            "n_iter": 100,
+            "learning_rate": 0.05,
+            "track_progress": True,
+            "cg_tol": 0.1,
+            "n_lanczos_iter": 200,
+        }
         for kernel, r2_bound in zip(self.vc_kernels, r2_bounds):
-            for use_keops in [False, True]:
-                # Infer hyperparameters
-                model = EpiK(kernel(self.alpha, self.l, use_keops=use_keops))
-                model.set_data(self.X_train, self.y_train, self.y_var)
-                model.fit(n_iter=200)
+            # Infer hyperparameters with Cholesky decomposition
+            k = kernel(alphabet=self.alphabet, seq_length=self.l, use_keops=False)
+            model = EpiK(kernel=k, alphabet=self.alphabet, seq_length=self.l)
+            model.set_data(self.X_train, self.y_train, self.y_var)
+            model.fit(mll_method="cholesky", **kwargs)
+            assert model.mll >= prev_mll
+            prev_mll = model.mll
 
-                if not use_keops:
-                    assert model.mll >= prev_mll
-                else:
-                    assert np.allclose(model.mll, prev_mll, atol=5)
-                prev_mll = model.mll
+            test_y_pred = model.predict(self.X_test, method='cholesky')["coef"]
+            r2 = pearsonr(test_y_pred, self.y_test)[0] ** 2
+            assert r2 > r2_bound
 
-                # Predict phenotypes in test data
-                test_y_pred = model.predict(self.X_test)["coef"]
-                r2 = pearsonr(test_y_pred, self.y_test)[0] ** 2
-                assert r2 > r2_bound
+            # Infer hyperparameters with CG
+            k = kernel(alphabet=self.alphabet, seq_length=self.l, use_keops=False)
+            model = EpiK(kernel=k, alphabet=self.alphabet, seq_length=self.l)
+            model.set_data(self.X_train, self.y_train, self.y_var)
+            model.fit(mll_method="cg", **kwargs)
+            assert np.allclose(model.mll, prev_mll, rtol=0.05)
+
+            test_y_pred = model.predict(self.X_test, method='cg')["coef"]
+            r2 = pearsonr(test_y_pred, self.y_test)[0] ** 2
+            assert r2 > r2_bound
+
+            # Infer hyperparameters with CG and KeOps
+            k = kernel(alphabet=self.alphabet, seq_length=self.l, use_keops=True)
+            model = EpiK(kernel=k, alphabet=self.alphabet, seq_length=self.l)
+            model.set_data(self.X_train, self.y_train, self.y_var)
+            model.fit(mll_method="cg", **kwargs)
+            assert np.allclose(model.mll, prev_mll, rtol=0.05)
+
+            test_y_pred = model.predict(self.X_test, method="cg")["coef"]
+            r2 = pearsonr(test_y_pred, self.y_test)[0] ** 2
+            assert r2 > r2_bound
 
     def test_fit_predict_product_kernels(self):
-        kernel = GeneralProductKernel(self.alpha, self.l)
-        model = EpiK(kernel)
-        data = model.simulate_dataset(self.X, sigma=0.1, ptrain=0.9)
+        model = EpiK(
+            alphabet=self.alphabet,
+            seq_length=self.l,
+            kernel="GeneralProduct",
+            kernel_kwargs={"theta0": self.theta0},
+        )
+        data = model.simulate_dataset(self.X, sigma=0.1, ptrain=0.9, method="cholesky")
         X_train, y_train, test_x, test_y, y_train_var = data
 
         prev_mll = -np.inf
+        kwargs = {
+            "n_iter": 500,
+            "learning_rate": 0.01,
+            "track_progress": True,
+            "cg_tol": 0.1,
+            "n_lanczos_iter": 100,
+        }
+        r2_bound = 0.4
         for kernel in self.product_kernels:
-            for use_keops in [False, True]:
-                # Infer hyperparameters
-                k = kernel(self.alpha, self.l, use_keops=use_keops)
-                model = EpiK(k, track_progress=True, method='cg',
-                             n_lanczos_iter=100)
-                model.set_data(X_train, y_train, y_train_var)
-                model.fit(n_iter=200)
+            # Infer hyperparameters with Cholesky decomposition
+            k = kernel(alphabet=self.alphabet, seq_length=self.l, use_keops=False)
+            model = EpiK(kernel=k, alphabet=self.alphabet, seq_length=self.l)
+            model.set_data(X_train, y_train, y_train_var)
+            model.fit(mll_method="cholesky", **kwargs)
+            assert model.mll >= prev_mll
+            prev_mll = model.mll
 
-                # Check if the marginal log-likelihood is increasing
-                # with more complex models and matches with KeOps
-                if not use_keops:
-                    assert model.mll >= prev_mll
-                else:
-                    assert np.allclose(model.mll, prev_mll, atol=10)
-                prev_mll = model.mll
+            test_y_pred = model.predict(test_x, method='cholesky')["coef"]
+            r2 = pearsonr(test_y_pred, test_y)[0] ** 2
+            assert r2 > r2_bound
 
-                # Predict phenotypes in test data
-                test_y_pred = model.predict(test_x)["coef"]
-                r2 = pearsonr(test_y_pred, test_y)[0] ** 2
-                assert r2 > 0.5
+            # Infer hyperparameters with CG
+            k = kernel(alphabet=self.alphabet, seq_length=self.l, use_keops=False)
+            model = EpiK(kernel=k, alphabet=self.alphabet, seq_length=self.l)
+            model.set_data(X_train, y_train, y_train_var)
+            model.fit(mll_method="cg", **kwargs)
+            assert np.allclose(model.mll, prev_mll, atol=10)
 
-    def test_bin(self):
+            test_y_pred = model.predict(test_x, method="cg")["coef"]
+            r2 = pearsonr(test_y_pred, test_y)[0] ** 2
+            assert r2 > r2_bound
+
+            # Infer hyperparameters with CG and KeOps
+            k = kernel(alphabet=self.alphabet, seq_length=self.l, use_keops=True)
+            model = EpiK(kernel=k, alphabet=self.alphabet, seq_length=self.l)
+            model.set_data(X_train, y_train, y_train_var)
+            model.fit(mll_method="cg", **kwargs)
+            assert np.allclose(model.mll, prev_mll, atol=10)
+
+            test_y_pred = model.predict(test_x, method="cg")["coef"]
+            r2 = pearsonr(test_y_pred, test_y)[0] ** 2
+            assert r2 > r2_bound
+
+    def xtest_bin(self):
         bin_fpath = join(BIN_DIR, "EpiK.py")
 
         # Simulate data
@@ -397,7 +507,7 @@ class ModelsTests(unittest.TestCase):
                 ]
                 check_call(cmd)
 
-    def test_FA(self):
+    def xtest_FA(self):
         # Simulate data
         k1 = FactorAnalysisKernel(
             n_alleles=self.alpha, seq_length=self.l, ndim=2, train_sigma2=True

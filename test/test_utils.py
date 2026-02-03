@@ -147,14 +147,15 @@ class UtilsTests(unittest.TestCase):
 
     def test_get_get_contrast_matrices(self):
         seq0 = "ACGT"
+        alphabet_list = [list("ACGT")] * 4
 
-        contrast_matrix = get_mut_effs_contrast_matrix(seq0, alleles=seq0)
+        contrast_matrix = get_mut_effs_contrast_matrix(seq0, alphabet_list)
         n_contrasts, n_seqs = 12, 13
         assert contrast_matrix.shape == (n_contrasts, n_seqs)
         assert np.allclose(contrast_matrix.sum(1), 0)
         assert np.allclose((contrast_matrix != 0).sum(1), 2)
 
-        contrast_matrix = get_epistatic_coeffs_contrast_matrix(seq0, alleles=seq0)
+        contrast_matrix = get_epistatic_coeffs_contrast_matrix(seq0, alphabet_list)
         n_contrasts = 3**2 * comb(4, 2)
         n_seqs = 1 + 3 * 4 + n_contrasts
         assert contrast_matrix.shape == (n_contrasts, n_seqs)

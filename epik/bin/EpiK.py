@@ -253,7 +253,7 @@ def main():
         theta0=theta0,
         log_var0=log_var0,
         log_lambdas0=log_lambdas0,
-        ndim=ndim,
+        ndim=ndim
     )
 
     # Define device
