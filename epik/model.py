@@ -240,6 +240,9 @@ class _Epik(object):
         self.alphabet_list = validate_alphabet(
             seq_length, alphabet_type, alphabet, alphabet_list
         )
+        self.extended_alphabet_list = [
+            ["*"] + alphabet for alphabet in self.alphabet_list
+        ]
         self.l = len(self.alphabet_list)
         self.kernel = self.get_kernel(kernel, kernel_kwargs)
         self.device = device
@@ -293,8 +296,8 @@ class _Epik(object):
         return self.get_tensor(get_one_hot_encoding(X, self.alphabet_list))
 
     def report_fit_progress(self, pbar: Any) -> None:
-        allocated: float = torch.cuda.memory_allocated(device="cuda") / 1e6
-        reserved: float = torch.cuda.memory_reserved(device="cuda") / 1e6
+        allocated: float = torch.cuda.memory_allocated(device=self.device) / 1e6
+        reserved: float = torch.cuda.memory_reserved(device=self.device) / 1e6
         report_dict: dict[str, str] = {
             "MLL": f"{self.mll:.3f}",
             "Mem(alloc/res)": f"{allocated:.2f}/{reserved:.2f}MB",
@@ -563,8 +566,8 @@ class _Epik(object):
         for name, param in self.mll_layer.named_parameters():
             new_name = name.split(".")[-1]
             if param.grad is not None:
-                params[new_name] = param.detach().to(device="cpu").numpy()
-                grad[new_name] = param.grad.detach().to(device="cpu").numpy()
+                params[new_name] = param.detach().cpu().numpy()
+                grad[new_name] = param.grad.detach().cpu().numpy()
 
         self.params_history.append(params)
         self.grad_history.append(grad)
@@ -626,7 +629,14 @@ class _Epik(object):
 
         for _ in pbar:
             try:
-                self.training_step()
+                self.training_step(
+                    mll_method=mll_method,
+                    cg_tol=cg_tol,
+                    max_cg_iter=max_cg_iter,
+                    n_lanczos_iter=n_lanczos_iter,
+                    n_trace_samples=n_trace_samples,
+                    preconditioner_size=preconditioner_size,
+                )
             except RuntimeError as error:
                 if "out of memory" in str(error):
                     torch.cuda.empty_cache()
@@ -743,8 +753,8 @@ class EpiK(_Epik):
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=self.y_var, learn_additional_noise=self.train_noise
         )
-        if self.device == "cuda":
-            self.likelihood = self.likelihood.cuda()
+        if self.device != "cpu":
+            self.likelihood = self.likelihood.to(device=self.device)
 
     def get_gp(
         self,
@@ -1258,50 +1268,53 @@ class EpiK(_Epik):
             train_y_var = torch.full_like(train_y, sigma**2)
 
         return (train_x, train_y, test_x, test_f, train_y_var)
-    
-    def calc_kron_dot_map(self, x1: torch.Tensor, matrices: List[torch.Tensor]) -> torch.Tensor:
+
+    def calc_kron_dot_map(
+        self, x1: torch.Tensor, matrices: List[torch.Tensor]
+    ) -> torch.Tensor:
         """
         Compute the posterior mean for the Kronecker factorizable projection of the MAP.
 
         Parameters
         ----------
         x1 : torch.Tensor
-            A tensor of shape (output_size,) containing one-hot encoded elements 
+            A tensor of shape (output_size,) containing one-hot encoded elements
             for which to compute the maximum a posteriori (MAP).
 
         matrices : list of torch.Tensor
-            A list of Kronecker factors (matrices) to be used in the matrix-matrix 
+            A list of Kronecker factors (matrices) to be used in the matrix-matrix
             multiplication.
 
         Returns
         -------
         torch.Tensor
-            A tensor of shape (output_size,) representing the posterior mean 
+            A tensor of shape (output_size,) representing the posterior mean
             for the Kronecker factorizable projection of the MAP.
 
         """
         if not isinstance(self.kernel, SiteProductKernel):
-            msg = 'calc_kron_dot_map can only be used for GPs with site factorizable kernels'
+            msg = "calc_kron_dot_map can only be used for GPs with site factorizable kernels"
             raise ValueError(msg)
-        
+
         if len(matrices) != self.l:
             msg = f"Number of matrices must be equal to sequence length {self.l}"
             raise ValueError(msg)
-    
+
         output_sizes = [m.shape[0] for m in matrices]
         output_size = sum(output_sizes)
         if x1.shape[1] != output_size:
             msg = f"x1 has {x1.shape[0]} columns but expected {output_size}"
             raise ValueError(msg)
-        
+
         vs = np.cumsum(output_sizes).astype(int)
         starts1 = np.append([0], vs[:-1])
         ends1 = vs
         x2 = self.X
-        
+
         # Compute (P @ K)_{x1, x2} using Kronecker factorization
         site_kernels = self.kernel.get_site_kernels()
         PK = 1.0
+        print([m.shape[1] for m in matrices])
         for p, (m, k) in enumerate(zip(matrices, site_kernels)):
             if m.shape[1] != k.shape[0]:
                 msg = f"Incompatible size of matrices at position {p}: "
@@ -1315,7 +1328,87 @@ class EpiK(_Epik):
 
         post_mean = PK @ self.gp.prediction_strategy.mean_cache
         return post_mean
-    
+
+    def calc_gauge_fixed_theta(
+        self, X: torch.Tensor, pi_lc: List[torch.Tensor]
+    ) -> torch.Tensor:
+        """
+        Compute the gauge-fixed theta parameter vector for the MAP estimate.
+
+        This method calculates the gauge-fixed additive theta vector for the
+        maximum a posteriori (MAP) estimate using the provided gauge-fixed
+        additive theta vectors for each site in the sequence.
+
+        Parameters
+        ----------
+        X : torch.Tensor
+            A tensor containing the subsequences for which to compute the
+            gauge-fixed parameter value.
+
+        pi_lc : list of torch.Tensor
+            A list of tensors representing the gauge-fixed additive theta vectors
+            for each site in the sequence.
+
+        Returns
+        -------
+        torch.Tensor
+            A tensor representing the gauge-fixed additive theta vector for the
+            MAP estimate.
+        """
+        if not isinstance(self.kernel, SiteProductKernel):
+            msg = "calc_gauge_fixed_add_theta can only be used for GPs with site factorizable kernels"
+            raise ValueError(msg)
+
+        if len(pi_lc) != self.l:
+            msg = f"Number of pi_lc tensors must be equal to sequence length {self.l}"
+            raise ValueError(msg)
+
+        P0s = [pi_p.unsqueeze(0) for pi_p in pi_lc]
+        Ps = [torch.vstack([P0_p, torch.eye(P0_p.shape[1]) - P0_p]) for P0_p in P0s]
+        x = self.get_tensor(get_one_hot_encoding(X, self.extended_alphabet_list))
+        theta = self.calc_kron_dot_map(x, Ps)
+        return theta
+
+    def calc_gauge_fixed_add_theta(self, pi_lc: List[torch.Tensor]) -> pd.DataFrame:
+        """
+        Compute the gauge-fixed additive theta vector for the MAP estimate.
+
+        This method calculates the gauge-fixed additive theta vector for the
+        maximum a posteriori (MAP) estimate using the provided gauge-fixed
+        additive theta vectors for each site in the sequence.
+
+        Parameters
+        ----------
+        pi_lc : list of torch.Tensor
+            A list of tensors representing the gauge-fixed additive theta vectors
+            for each site in the sequence.
+
+        Returns
+        -------
+        torch.Tensor
+            A tensor representing the gauge-fixed additive theta vector for the
+            MAP estimate, computed for all possible single-site mutations.
+        """
+        X = []
+        names = []
+        for p, alphabet_p in enumerate(self.alphabet_list):
+            for a in alphabet_p:
+                seq = ["*"] * self.l
+                seq[p] = a
+                X.append("".join(seq))
+                names.append(f"{p}{a}")
+        X = np.array(X)
+        theta = self.calc_gauge_fixed_theta(X, pi_lc)
+        theta = pd.DataFrame(
+            {
+                "theta": theta,
+                "position": [int(n[0]) for n in names],
+                "allele": [n[1] for n in names],
+            },
+            index=names,
+        )
+        return theta
+
     def calc_kron_quad_map(self, matrices: List[torch.Tensor]) -> float:
         """
         Compute the quadratic form of a Kronecker factorizable matrix A with
@@ -1346,7 +1439,7 @@ class EpiK(_Epik):
         if not isinstance(self.kernel, SiteProductKernel):
             msg = "calc_kron_dot_map can only be used for GPs with site factorizable kernels"
             raise ValueError(msg)
-        
+
         if len(matrices) != self.l:
             msg = f"Number of matrices must be equal to sequence length {self.l}"
             raise ValueError(msg)

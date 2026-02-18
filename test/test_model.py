@@ -14,6 +14,7 @@ from scipy.stats import pearsonr, multivariate_normal
 from scipy.special import comb
 from gpytorch.distributions import MultivariateNormal
 from torch.distributions.transforms import CorrCholeskyTransform
+from torch.distributions import Dirichlet
 
 from epik.kernel import (
     AdditiveKernel,
@@ -278,6 +279,42 @@ class ModelsTests(unittest.TestCase):
         v1 = matrix @ f.mean
         v2 = model.calc_kron_dot_map(x1, matrices)
         assert np.allclose(v1, v2, atol=1e-4)
+    
+    def test_calc_gauge_fixed_add_theta(self):
+        model = EpiK(
+            alphabet=self.alphabet,
+            seq_length=self.l,
+            kernel="GeneralProduct",
+            kernel_kwargs={"theta0": self.theta0},
+        )
+        data = model.simulate_dataset(self.X, sigma=0.1, ptrain=0.9, method="cholesky")
+        X_train, y_train, _, _, y_train_var = data
+        model.set_data(X_train, y_train, y_train_var)
+
+        dist = Dirichlet(torch.ones(self.alpha))
+        pi_lc = [dist.sample() for _ in range(self.l)]
+        P0s = [pi_p.unsqueeze(0) for pi_p in pi_lc]
+        P1s = [torch.eye(P0_p.shape[1]) - P0_p for P0_p in P0s]
+        P = []
+        for pos in range(self.l):
+            matrices = [
+                P1_p if p == pos else P0_p
+                for p, (P0_p, P1_p) in enumerate(zip(P0s, P1s))
+            ]
+            matrix = np.array([[1.0]])
+            for m in matrices:
+                matrix = np.kron(matrix, m)
+            P.append(torch.Tensor(matrix))
+        P = torch.vstack(P)
+
+        # Compute theta directly from MAP
+        f = model.get_posterior(self.X).mean
+        theta1 = P @ f
+
+        # Compute f mean with kronecker factorization
+        theta2 = model.calc_gauge_fixed_add_theta(pi_lc)
+        print(theta2)
+        assert np.allclose(theta1, theta2["theta"], atol=1e-4)
     
     def test_kronecker_map_quad(self):
         model = EpiK(
