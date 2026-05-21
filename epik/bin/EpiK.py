@@ -289,7 +289,15 @@ def main():
     if n_iter > 0:
         log.write("Train hyperparameters by maximizing the evidence")
         log.write("\tLearning rate set to {}".format(learning_rate))
-        model.fit(n_iter=n_iter, learning_rate=learning_rate)
+        model.fit(
+            n_iter=n_iter,
+            learning_rate=learning_rate,
+            mll_method=method,
+            cg_tol=cg_tol,
+            n_lanczos_iter=n_lanczos,
+            n_trace_samples=n_trace_samples,
+            preconditioner_size=preconditioner_size,
+        )
 
         fpath = "{}.model_params.pth".format(out_fpath)
         log.write("Storing model parameters at {}".format(fpath))

@@ -313,7 +313,6 @@ class ModelsTests(unittest.TestCase):
 
         # Compute f mean with kronecker factorization
         theta2 = model.calc_gauge_fixed_add_theta(pi_lc)
-        print(theta2)
         assert np.allclose(theta1, theta2["theta"], atol=1e-4)
     
     def test_kronecker_map_quad(self):

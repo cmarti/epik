@@ -1,0 +1,1014 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tutorial &mdash; Epistatic Kernels for GPU-accelerated Gaussian process regression 0.1.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=2389946f"></script>
+      <script src="../_static/doctools.js?v=888ff710"></script>
+      <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+      <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+      <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+      <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="API Reference" href="../api.html" />
+    <link rel="prev" title="Installation" href="../installation.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="../index.html" class="icon icon-home">
+            Epistatic Kernels for GPU-accelerated Gaussian process regression
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Table of Contents</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Tutorial</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#Import-required-libraries-and-functions">Import required libraries and functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Load-SMN1-data">Load SMN1 data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Prepare-data-for-model-fitting">Prepare data for model fitting</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Fit-Connectedness-model-regression">Fit Connectedness model regression</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Make-predictions-on-test-sequences">Make predictions on test sequences</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Compare-different-models">Compare different models</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#Interpreting-Jenga-model-parameters">Interpreting Jenga model parameters</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">API Reference</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">Epistatic Kernels for GPU-accelerated Gaussian process regression</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Tutorial</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/usage/tutorial.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  
+<style>
+/* CSS for nbsphinx extension */
+
+/* remove conflicting styling from Sphinx themes */
+div.nbinput.container div.prompt *,
+div.nboutput.container div.prompt *,
+div.nbinput.container div.input_area pre,
+div.nboutput.container div.output_area pre,
+div.nbinput.container div.input_area .highlight,
+div.nboutput.container div.output_area .highlight {
+    border: none;
+    padding: 0;
+    margin: 0;
+    box-shadow: none;
+}
+
+div.nbinput.container > div[class*=highlight],
+div.nboutput.container > div[class*=highlight] {
+    margin: 0;
+}
+
+div.nbinput.container div.prompt *,
+div.nboutput.container div.prompt * {
+    background: none;
+}
+
+div.nboutput.container div.output_area .highlight,
+div.nboutput.container div.output_area pre {
+    background: unset;
+}
+
+div.nboutput.container div.output_area div.highlight {
+    color: unset;  /* override Pygments text color */
+}
+
+/* avoid gaps between output lines */
+div.nboutput.container div[class*=highlight] pre {
+    line-height: normal;
+}
+
+/* input/output containers */
+div.nbinput.container,
+div.nboutput.container {
+    display: -webkit-flex;
+    display: flex;
+    align-items: flex-start;
+    margin: 0;
+    width: 100%;
+}
+@media (max-width: 540px) {
+    div.nbinput.container,
+    div.nboutput.container {
+        flex-direction: column;
+    }
+}
+
+/* input container */
+div.nbinput.container {
+    padding-top: 5px;
+}
+
+/* last container */
+div.nblast.container {
+    padding-bottom: 5px;
+}
+
+/* input prompt */
+div.nbinput.container div.prompt pre {
+    color: #307FC1;
+}
+
+/* output prompt */
+div.nboutput.container div.prompt pre {
+    color: #BF5B3D;
+}
+
+/* all prompts */
+div.nbinput.container div.prompt,
+div.nboutput.container div.prompt {
+    width: 4.5ex;
+    padding-top: 5px;
+    position: relative;
+    user-select: none;
+}
+
+div.nbinput.container div.prompt > div,
+div.nboutput.container div.prompt > div {
+    position: absolute;
+    right: 0;
+    margin-right: 0.3ex;
+}
+
+@media (max-width: 540px) {
+    div.nbinput.container div.prompt,
+    div.nboutput.container div.prompt {
+        width: unset;
+        text-align: left;
+        padding: 0.4em;
+    }
+    div.nboutput.container div.prompt.empty {
+        padding: 0;
+    }
+
+    div.nbinput.container div.prompt > div,
+    div.nboutput.container div.prompt > div {
+        position: unset;
+    }
+}
+
+/* disable scrollbars on prompts */
+div.nbinput.container div.prompt pre,
+div.nboutput.container div.prompt pre {
+    overflow: hidden;
+}
+
+/* input/output area */
+div.nbinput.container div.input_area,
+div.nboutput.container div.output_area {
+    -webkit-flex: 1;
+    flex: 1;
+    overflow: auto;
+}
+@media (max-width: 540px) {
+    div.nbinput.container div.input_area,
+    div.nboutput.container div.output_area {
+        width: 100%;
+    }
+}
+
+/* input area */
+div.nbinput.container div.input_area {
+    border: 1px solid #e0e0e0;
+    border-radius: 2px;
+    /*background: #f5f5f5;*/
+}
+
+/* override MathJax center alignment in output cells */
+div.nboutput.container div[class*=MathJax] {
+    text-align: left !important;
+}
+
+/* override sphinx.ext.imgmath center alignment in output cells */
+div.nboutput.container div.math p {
+    text-align: left;
+}
+
+/* standard error */
+div.nboutput.container div.output_area.stderr {
+    background: #fdd;
+}
+
+/* ANSI colors */
+.ansi-black-fg { color: #3E424D; }
+.ansi-black-bg { background-color: #3E424D; }
+.ansi-black-intense-fg { color: #282C36; }
+.ansi-black-intense-bg { background-color: #282C36; }
+.ansi-red-fg { color: #E75C58; }
+.ansi-red-bg { background-color: #E75C58; }
+.ansi-red-intense-fg { color: #B22B31; }
+.ansi-red-intense-bg { background-color: #B22B31; }
+.ansi-green-fg { color: #00A250; }
+.ansi-green-bg { background-color: #00A250; }
+.ansi-green-intense-fg { color: #007427; }
+.ansi-green-intense-bg { background-color: #007427; }
+.ansi-yellow-fg { color: #DDB62B; }
+.ansi-yellow-bg { background-color: #DDB62B; }
+.ansi-yellow-intense-fg { color: #B27D12; }
+.ansi-yellow-intense-bg { background-color: #B27D12; }
+.ansi-blue-fg { color: #208FFB; }
+.ansi-blue-bg { background-color: #208FFB; }
+.ansi-blue-intense-fg { color: #0065CA; }
+.ansi-blue-intense-bg { background-color: #0065CA; }
+.ansi-magenta-fg { color: #D160C4; }
+.ansi-magenta-bg { background-color: #D160C4; }
+.ansi-magenta-intense-fg { color: #A03196; }
+.ansi-magenta-intense-bg { background-color: #A03196; }
+.ansi-cyan-fg { color: #60C6C8; }
+.ansi-cyan-bg { background-color: #60C6C8; }
+.ansi-cyan-intense-fg { color: #258F8F; }
+.ansi-cyan-intense-bg { background-color: #258F8F; }
+.ansi-white-fg { color: #C5C1B4; }
+.ansi-white-bg { background-color: #C5C1B4; }
+.ansi-white-intense-fg { color: #A1A6B2; }
+.ansi-white-intense-bg { background-color: #A1A6B2; }
+
+.ansi-default-inverse-fg { color: #FFFFFF; }
+.ansi-default-inverse-bg { background-color: #000000; }
+
+.ansi-bold { font-weight: bold; }
+.ansi-underline { text-decoration: underline; }
+
+
+div.nbinput.container div.input_area div[class*=highlight] > pre,
+div.nboutput.container div.output_area div[class*=highlight] > pre,
+div.nboutput.container div.output_area div[class*=highlight].math,
+div.nboutput.container div.output_area.rendered_html,
+div.nboutput.container div.output_area > div.output_javascript,
+div.nboutput.container div.output_area:not(.rendered_html) > img{
+    padding: 5px;
+    margin: 0;
+}
+
+/* fix copybtn overflow problem in chromium (needed for 'sphinx_copybutton') */
+div.nbinput.container div.input_area > div[class^='highlight'],
+div.nboutput.container div.output_area > div[class^='highlight']{
+    overflow-y: hidden;
+}
+
+/* hide copybtn icon on prompts (needed for 'sphinx_copybutton') */
+.prompt .copybtn {
+    display: none;
+}
+
+/* Some additional styling taken form the Jupyter notebook CSS */
+div.rendered_html table {
+  border: none;
+  border-collapse: collapse;
+  border-spacing: 0;
+  color: black;
+  font-size: 12px;
+  table-layout: fixed;
+}
+div.rendered_html thead {
+  border-bottom: 1px solid black;
+  vertical-align: bottom;
+}
+div.rendered_html tr,
+div.rendered_html th,
+div.rendered_html td {
+  text-align: right;
+  vertical-align: middle;
+  padding: 0.5em 0.5em;
+  line-height: normal;
+  white-space: normal;
+  max-width: none;
+  border: none;
+}
+div.rendered_html th {
+  font-weight: bold;
+}
+div.rendered_html tbody tr:nth-child(odd) {
+  background: #f5f5f5;
+}
+div.rendered_html tbody tr:hover {
+  background: rgba(66, 165, 245, 0.2);
+}
+
+/* CSS overrides for sphinx_rtd_theme */
+
+/* 24px margin */
+.nbinput.nblast.container,
+.nboutput.nblast.container {
+    margin-bottom: 19px;  /* padding has already 5px */
+}
+
+/* ... except between code cells! */
+.nblast.container + .nbinput.container {
+    margin-top: -19px;
+}
+
+.admonition > p:before {
+    margin-right: 4px;  /* make room for the exclamation icon */
+}
+
+/* Fix math alignment, see https://github.com/rtfd/sphinx_rtd_theme/pull/686 */
+.math {
+    text-align: unset;
+}
+</style>
+<section id="Tutorial">
+<h1>Tutorial<a class="headerlink" href="#Tutorial" title="Permalink to this heading"></a></h1>
+<p>In this section, the user can find a tutorial on how to use <code class="docutils literal notranslate"><span class="pre">EpiK</span></code> for inference of sequence-function relationships on a small dataset, how to interpret the inferred hyperparameters of the different kernels, and how to use <code class="docutils literal notranslate"><span class="pre">EpiK</span></code> to make calibrated phenotypic predictions in unobserved sequences.</p>
+<section id="Import-required-libraries-and-functions">
+<h2>Import required libraries and functions<a class="headerlink" href="#Import-required-libraries-and-functions" title="Permalink to this heading"></a></h2>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[1]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">seaborn</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">sns</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.stats</span><span class="w"> </span><span class="kn">import</span> <span class="n">pearsonr</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">epik.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">encode_seqs</span><span class="p">,</span> <span class="n">split_training_test</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">epik.model</span><span class="w"> </span><span class="kn">import</span> <span class="n">EpiK</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">epik.kernel</span><span class="w"> </span><span class="kn">import</span> <span class="n">ConnectednessKernel</span><span class="p">,</span> <span class="n">GeometricKernel</span><span class="p">,</span> <span class="n">JengaKernel</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+[KeOps] Warning : Cuda libraries were not detected on the system or could not be loaded ; using cpu only mode
+</pre></div></div>
+</div>
+</section>
+<section id="Load-SMN1-data">
+<h2>Load SMN1 data<a class="headerlink" href="#Load-SMN1-data" title="Permalink to this heading"></a></h2>
+<p>We will use a previously published dataset, in which the activity of nearly every possible GU/GC 5´splice site sequence was measured in parallel in a single experiment (<a class="reference external" href="https://pubmed.ncbi.nlm.nih.gov/30174293/">Wong et al. 2018</a>). The measured phenotype <code class="docutils literal notranslate"><span class="pre">y</span></code> is the percent spliced in, this is, the percentage of times exon 7 is included in the mature mRNA. The assay was performed in different biological replicates, providing a measure of uncertainty of our estimates given by <code class="docutils literal notranslate"><span class="pre">y_var</span></code>, as
+previously analyzed (<a class="reference external" href="https://pubmed.ncbi.nlm.nih.gov/36129941/">Zhou et al. 2022</a>)</p>
+<p>We start by loading the data from the pre-processed CSV file</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">data</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="s1">&#39;../data/smn1.csv&#39;</span><span class="p">,</span> <span class="n">index_col</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">data</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
+</pre></div>
+</div>
+<div class="output_area rendered_html docutils container">
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>y</th>
+      <th>y_var</th>
+    </tr>
+    <tr>
+      <th>seq</th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>AAACAAAA</th>
+      <td>0.223881</td>
+      <td>0.001738</td>
+    </tr>
+    <tr>
+      <th>AAACAAAC</th>
+      <td>0.514961</td>
+      <td>0.009195</td>
+    </tr>
+    <tr>
+      <th>AAACAAAG</th>
+      <td>0.208009</td>
+      <td>0.001500</td>
+    </tr>
+    <tr>
+      <th>AAACAAAU</th>
+      <td>0.235378</td>
+      <td>0.002109</td>
+    </tr>
+    <tr>
+      <th>AAACAACA</th>
+      <td>0.357162</td>
+      <td>0.004423</td>
+    </tr>
+    <tr>
+      <th>...</th>
+      <td>...</td>
+      <td>...</td>
+    </tr>
+    <tr>
+      <th>UUUUUUGU</th>
+      <td>0.199017</td>
+      <td>0.001373</td>
+    </tr>
+    <tr>
+      <th>UUUUUUUA</th>
+      <td>0.074571</td>
+      <td>0.000536</td>
+    </tr>
+    <tr>
+      <th>UUUUUUUC</th>
+      <td>0.193181</td>
+      <td>0.001294</td>
+    </tr>
+    <tr>
+      <th>UUUUUUUG</th>
+      <td>0.121894</td>
+      <td>0.000536</td>
+    </tr>
+    <tr>
+      <th>UUUUUUUU</th>
+      <td>0.152185</td>
+      <td>0.000803</td>
+    </tr>
+  </tbody>
+</table>
+<p>30732 rows × 2 columns</p>
+</div></div>
+</div>
+</section>
+<section id="Prepare-data-for-model-fitting">
+<h2>Prepare data for model fitting<a class="headerlink" href="#Prepare-data-for-model-fitting" title="Permalink to this heading"></a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">EpiK</span></code> models assume that sequences are provided in a one-hot encoding <code class="docutils literal notranslate"><span class="pre">X</span></code>, so we provide the utility function <code class="docutils literal notranslate"><span class="pre">encode_seqs</span></code> to generate this encoding from the raw sequences</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[3]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">X</span> <span class="o">=</span> <span class="n">encode_seqs</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="n">index</span><span class="o">.</span><span class="n">values</span><span class="p">,</span> <span class="n">alphabet</span><span class="o">=</span><span class="s1">&#39;ACGU&#39;</span><span class="p">)</span>
+<span class="n">y</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;y&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+<span class="n">y_var</span> <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="s1">&#39;y_var&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span>
+</pre></div>
+</div>
+</div>
+<p>We next split the data into training and test subsets with <code class="docutils literal notranslate"><span class="pre">split_training_test</span></code>. To keep this tutorial as simple and fast to run as possible, we will use only a small subset of the dataset for both training and testing.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">splits</span> <span class="o">=</span> <span class="n">split_training_test</span><span class="p">(</span><span class="n">X</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">y_var</span><span class="p">,</span> <span class="n">ptrain</span><span class="o">=</span><span class="mf">0.075</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">train_x</span><span class="p">,</span> <span class="n">train_y</span><span class="p">,</span> <span class="n">test_x</span><span class="p">,</span> <span class="n">test_y</span><span class="p">,</span> <span class="n">train_y_var</span> <span class="o">=</span> <span class="n">splits</span>
+
+<span class="c1"># Subsample test data</span>
+<span class="n">idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">size</span><span class="o">=</span><span class="n">test_y</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">&lt;</span> <span class="mf">0.05</span>
+<span class="n">test_x</span><span class="p">,</span> <span class="n">test_y</span> <span class="o">=</span> <span class="n">test_x</span><span class="p">[</span><span class="n">idx</span><span class="p">,</span> <span class="p">:],</span> <span class="n">test_y</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Fit-Connectedness-model-regression">
+<h2>Fit Connectedness model regression<a class="headerlink" href="#Fit-Connectedness-model-regression" title="Permalink to this heading"></a></h2>
+<p>To define an <code class="docutils literal notranslate"><span class="pre">EpiK</span></code> model, we first need to specify the kernel function that we want to use for Gaussian process regression. In this case, we will use the <code class="docutils literal notranslate"><span class="pre">ConnectednessKernel</span></code>, in which the predictability of mutational effects decreases depending on the sites at which two sequences differ.</p>
+<p>As the number of parameters is equal to sequence length, this kernel provides a good compromise in datasets with relatively few measurements, such as this one. For every kernel class, we need to specify the configuration of sequence space, consisting of the number of alleles <code class="docutils literal notranslate"><span class="pre">n_alleles</span></code> and sequence length <code class="docutils literal notranslate"><span class="pre">seq_length</span></code>.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">kernel</span> <span class="o">=</span> <span class="n">ConnectednessKernel</span><span class="p">(</span><span class="n">n_alleles</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">seq_length</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">EpiK</span><span class="p">(</span><span class="n">kernel</span><span class="p">,</span> <span class="n">track_progress</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">model</span><span class="o">.</span><span class="n">set_data</span><span class="p">(</span><span class="n">train_x</span><span class="p">,</span> <span class="n">train_y</span><span class="p">,</span> <span class="n">train_y_var</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<p>After defining the <code class="docutils literal notranslate"><span class="pre">EpiK</span></code> model, we load the training data in the model and optimize the kernel hyperparameters by maximizing the marginal likelihood using the Adam optimizer for a number of predefined iterations. The argument <code class="docutils literal notranslate"><span class="pre">track_progress=True</span></code> allows us to follow the progress of the optimization and track how the loss function decreases</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">model</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">n_iter</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">learning_rate</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+Optimizing hyperparameters: 100%|██████████| 100/100 [00:14&lt;00:00,  6.91it/s, MLL=-8918.879, Mem(alloc/res)=0.00/0.00MB]
+</pre></div></div>
+</div>
+</section>
+<section id="Make-predictions-on-test-sequences">
+<h2>Make predictions on test sequences<a class="headerlink" href="#Make-predictions-on-test-sequences" title="Permalink to this heading"></a></h2>
+<p>Once we have optimized the hyperparameters of the kernel function, we can make predictions by computing the posterior distribution over the sequence-function relationship evaluated at sequences of interest. This allows us to obtain point estimates <code class="docutils literal notranslate"><span class="pre">test_y_pred</span></code> that maximize this posterior probability. However, we can additionally compute the posterior variance <code class="docutils literal notranslate"><span class="pre">test_y_var</span></code> quantifying the uncertainty of the predictions by setting <code class="docutils literal notranslate"><span class="pre">calc_variance=True</span></code>.</p>
+<p>Lets now make predictions in the held-out test sequences.</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[7]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">pred</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">test_x</span><span class="p">,</span> <span class="n">calc_variance</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">pred</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[7]:
+</pre></div>
+</div>
+<div class="output_area rendered_html docutils container">
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>coef</th>
+      <th>stderr</th>
+      <th>lower_ci</th>
+      <th>upper_ci</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2.116530</td>
+      <td>12.501842</td>
+      <td>-22.887154</td>
+      <td>27.120216</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>1.571670</td>
+      <td>12.174002</td>
+      <td>-22.776333</td>
+      <td>25.919674</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>-0.843107</td>
+      <td>12.838286</td>
+      <td>-26.519680</td>
+      <td>24.833466</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>3.053030</td>
+      <td>12.459997</td>
+      <td>-21.866964</td>
+      <td>27.973024</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>-2.211174</td>
+      <td>12.297050</td>
+      <td>-26.805273</td>
+      <td>22.382925</td>
+    </tr>
+    <tr>
+      <th>...</th>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+    </tr>
+    <tr>
+      <th>1492</th>
+      <td>0.437592</td>
+      <td>12.282001</td>
+      <td>-24.126410</td>
+      <td>25.001593</td>
+    </tr>
+    <tr>
+      <th>1493</th>
+      <td>-2.043804</td>
+      <td>12.466360</td>
+      <td>-26.976524</td>
+      <td>22.888916</td>
+    </tr>
+    <tr>
+      <th>1494</th>
+      <td>-3.416660</td>
+      <td>12.331523</td>
+      <td>-28.079706</td>
+      <td>21.246386</td>
+    </tr>
+    <tr>
+      <th>1495</th>
+      <td>-0.705414</td>
+      <td>12.133599</td>
+      <td>-24.972612</td>
+      <td>23.561785</td>
+    </tr>
+    <tr>
+      <th>1496</th>
+      <td>1.321175</td>
+      <td>12.068440</td>
+      <td>-22.815706</td>
+      <td>25.458055</td>
+    </tr>
+  </tbody>
+</table>
+<p>1497 rows × 4 columns</p>
+</div></div>
+</div>
+<p>Once we have the predictions, we can compare them with the measurements for these held-out sequences. We can evaluate the accuracy of the point estimates by computing the <span class="math notranslate nohighlight">\(R^2\)</span> and uncertainty calibration by calculating the percentage of times the measurement is within the 95% posterior predictive interval.</p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[8]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">r2</span> <span class="o">=</span> <span class="n">pearsonr</span><span class="p">(</span><span class="n">pred</span><span class="p">[</span><span class="s1">&#39;coef&#39;</span><span class="p">],</span> <span class="n">test_y</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">**</span> <span class="mi">2</span>
+<span class="n">sd</span> <span class="o">=</span> <span class="n">pred</span><span class="p">[</span><span class="s1">&#39;stderr&#39;</span><span class="p">]</span>
+<span class="n">obs</span> <span class="o">=</span> <span class="n">test_y</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+<span class="n">calibration</span> <span class="o">=</span> <span class="p">((</span><span class="n">obs</span> <span class="o">&gt;</span> <span class="n">pred</span><span class="p">[</span><span class="s1">&#39;coef&#39;</span><span class="p">]</span> <span class="o">-</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">sd</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">obs</span> <span class="o">&lt;</span> <span class="n">pred</span><span class="p">[</span><span class="s1">&#39;coef&#39;</span><span class="p">]</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">sd</span><span class="p">))</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[9]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mf">3.5</span><span class="p">))</span>
+<span class="n">lims</span> <span class="o">=</span> <span class="p">(</span><span class="o">-</span><span class="mi">20</span><span class="p">,</span> <span class="mi">200</span><span class="p">)</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">pred</span><span class="p">[</span><span class="s1">&#39;coef&#39;</span><span class="p">],</span> <span class="n">obs</span><span class="p">,</span> <span class="n">s</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">c</span><span class="o">=</span><span class="s1">&#39;black&#39;</span><span class="p">,</span> <span class="n">lw</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">lims</span><span class="p">,</span> <span class="n">lims</span><span class="p">,</span> <span class="n">lw</span><span class="o">=</span><span class="mf">0.75</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s1">&#39;--&#39;</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="n">alpha</span><span class="o">=</span><span class="mf">0.2</span><span class="p">)</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">text</span><span class="p">(</span><span class="mf">0.05</span><span class="p">,</span> <span class="mf">0.98</span><span class="p">,</span> <span class="s1">&#39;$R^2$=&#39;</span> <span class="o">+</span> <span class="s1">&#39;</span><span class="si">{:.2f}</span><span class="se">\n</span><span class="s1">Calibration = </span><span class="si">{:.2f}</span><span class="s1">&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">r2</span><span class="p">,</span> <span class="n">calibration</span><span class="p">),</span>
+          <span class="n">transform</span><span class="o">=</span><span class="n">axes</span><span class="o">.</span><span class="n">transAxes</span><span class="p">,</span> <span class="n">ha</span><span class="o">=</span><span class="s1">&#39;left&#39;</span><span class="p">,</span> <span class="n">va</span><span class="o">=</span><span class="s1">&#39;top&#39;</span><span class="p">)</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlabel</span><span class="o">=</span><span class="s1">&#39;Predicted PSI (%)&#39;</span><span class="p">,</span> <span class="n">xlim</span><span class="o">=</span><span class="n">lims</span><span class="p">,</span>
+         <span class="n">ylabel</span><span class="o">=</span><span class="s1">&#39;Measured PSI (%)&#39;</span><span class="p">,</span> <span class="n">ylim</span><span class="o">=</span><span class="n">lims</span><span class="p">,</span> <span class="n">aspect</span><span class="o">=</span><span class="s1">&#39;equal&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[9]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+[Text(0.5, 0, &#39;Predicted PSI (%)&#39;),
+ (-20.0, 200.0),
+ Text(0, 0.5, &#39;Measured PSI (%)&#39;),
+ (-20.0, 200.0),
+ None]
+</pre></div></div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<img alt="../_images/usage_tutorial_17_1.png" src="../_images/usage_tutorial_17_1.png" />
+</div>
+</div>
+<p>This scatterplot demonstrates the relatively good performance of the model in predicting the phenotype of held-out sequences in terms of <span class="math notranslate nohighlight">\(R^2\)</span>. Importantly, the model provides well-calibrated uncertainties, as the posterior distribution includes the actual measurements the expected number of times. This offers an estimate of how confident we can be about predictions for specific sequences with unknown phenotypes, aiding in decision-making.</p>
+</section>
+<section id="Compare-different-models">
+<h2>Compare different models<a class="headerlink" href="#Compare-different-models" title="Permalink to this heading"></a></h2>
+<p>When analyzing a new dataset, we often want to fit different models and compare them. This is easy to do by just providing a different kernel to the <code class="docutils literal notranslate"><span class="pre">EpiK</span></code> model. Here, we fit models with kernels of increasing complexity and compute the <span class="math notranslate nohighlight">\(R^2\)</span> of the predictions in held out data to track model performance.</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">kernels</span> <span class="o">=</span> <span class="p">[</span><span class="n">GeometricKernel</span><span class="p">,</span> <span class="n">ConnectednessKernel</span><span class="p">,</span> <span class="n">JengaKernel</span><span class="p">]</span>
+<span class="n">labels</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;Exponential&#39;</span><span class="p">,</span> <span class="s1">&#39;Connectedness&#39;</span><span class="p">,</span> <span class="s1">&#39;Jenga&#39;</span><span class="p">]</span>
+<span class="n">r2s</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">kernel_type</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">labels</span><span class="p">,</span> <span class="n">kernels</span><span class="p">):</span>
+    <span class="n">kernel</span> <span class="o">=</span> <span class="n">kernel_type</span><span class="p">(</span><span class="n">n_alleles</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">seq_length</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+    <span class="n">model</span> <span class="o">=</span> <span class="n">EpiK</span><span class="p">(</span><span class="n">kernel</span><span class="p">,</span> <span class="n">track_progress</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">max_n_lanczos_iterations</span><span class="o">=</span><span class="mi">200</span><span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">set_data</span><span class="p">(</span><span class="n">train_x</span><span class="p">,</span> <span class="n">train_y</span><span class="p">,</span> <span class="n">train_y_var</span><span class="p">)</span>
+    <span class="n">model</span><span class="o">.</span><span class="n">fit</span><span class="p">(</span><span class="n">n_iter</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">learning_rate</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+    <span class="n">test_y_pred</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">test_x</span><span class="p">,</span> <span class="n">calc_variance</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s1">&#39;coef&#39;</span><span class="p">]</span>
+    <span class="n">r2s</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">pearsonr</span><span class="p">(</span><span class="n">test_y_pred</span><span class="p">,</span> <span class="n">test_y</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;kernel&#39;</span><span class="p">:</span> <span class="n">labels</span><span class="p">,</span> <span class="s1">&#39;r2&#39;</span><span class="p">:</span> <span class="n">r2s</span><span class="p">})</span>
+<span class="n">results</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+Optimizing hyperparameters: 100%|██████████| 100/100 [00:39&lt;00:00,  2.53it/s, MLL=-9160.443, Mem(alloc/res)=0.00/0.00MB]
+Optimizing hyperparameters: 100%|██████████| 100/100 [00:44&lt;00:00,  2.26it/s, MLL=-8903.045, Mem(alloc/res)=0.00/0.00MB]
+Optimizing hyperparameters: 100%|██████████| 100/100 [00:46&lt;00:00,  2.16it/s, MLL=-8276.521, Mem(alloc/res)=0.00/0.00MB]
+</pre></div></div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
+</pre></div>
+</div>
+<div class="output_area rendered_html docutils container">
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>kernel</th>
+      <th>r2</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>Exponential</td>
+      <td>0.559659</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>Connectedness</td>
+      <td>0.577626</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>Jenga</td>
+      <td>0.653812</td>
+    </tr>
+  </tbody>
+</table>
+</div></div>
+</div>
+<p>Thus, this analysis shows that mutations at different sites affect the predictability of other mutations in a different manner, given the improved performance of the <code class="docutils literal notranslate"><span class="pre">ConnectednessKernel</span></code> over the <code class="docutils literal notranslate"><span class="pre">GeometricKernel</span></code>. However, the <code class="docutils literal notranslate"><span class="pre">JengaKernel</span></code> provides even better predictive power, suggesting that the decay in predictability of mutational effects also depends on the specific alleles that are mutated at each site.</p>
+</section>
+<section id="Interpreting-Jenga-model-parameters">
+<h2>Interpreting Jenga model parameters<a class="headerlink" href="#Interpreting-Jenga-model-parameters" title="Permalink to this heading"></a></h2>
+<p>Once we have settled with the Jenga model, we aim use the inferred hyperparameters of the kernel function to gain some insigths about the sequence-function relationship we are studying. We can extract the allele and site specific decay rates with the <code class="docutils literal notranslate"><span class="pre">get_decay_rates</span></code> method as follows</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">alleles</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;A&#39;</span><span class="p">,</span> <span class="s1">&#39;C&#39;</span><span class="p">,</span> <span class="s1">&#39;G&#39;</span><span class="p">,</span> <span class="s1">&#39;U&#39;</span><span class="p">]</span>
+<span class="n">positions</span> <span class="o">=</span> <span class="p">[</span><span class="s1">&#39;-3&#39;</span><span class="p">,</span> <span class="s1">&#39;-2&#39;</span><span class="p">,</span> <span class="s1">&#39;-1&#39;</span><span class="p">,</span> <span class="s1">&#39;+2&#39;</span><span class="p">,</span> <span class="s1">&#39;+3&#39;</span><span class="p">,</span> <span class="s1">&#39;+4&#39;</span><span class="p">,</span> <span class="s1">&#39;+5&#39;</span><span class="p">,</span> <span class="s1">&#39;+6&#39;</span><span class="p">]</span>
+<span class="n">delta</span> <span class="o">=</span> <span class="n">kernel</span><span class="o">.</span><span class="n">get_delta</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+<span class="n">delta</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">delta</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">positions</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">alleles</span><span class="p">)</span>
+<span class="n">delta</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s1">&#39;+2&#39;</span><span class="p">,</span> <span class="p">[</span><span class="s1">&#39;A&#39;</span><span class="p">,</span> <span class="s1">&#39;G&#39;</span><span class="p">]]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span>
+<span class="n">delta</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:
+</pre></div>
+</div>
+<div class="output_area rendered_html docutils container">
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>A</th>
+      <th>C</th>
+      <th>G</th>
+      <th>U</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>-3</th>
+      <td>0.020853</td>
+      <td>0.025342</td>
+      <td>0.438904</td>
+      <td>0.170491</td>
+    </tr>
+    <tr>
+      <th>-2</th>
+      <td>0.288113</td>
+      <td>0.039503</td>
+      <td>0.612494</td>
+      <td>0.129223</td>
+    </tr>
+    <tr>
+      <th>-1</th>
+      <td>0.076758</td>
+      <td>0.081544</td>
+      <td>0.820145</td>
+      <td>0.430954</td>
+    </tr>
+    <tr>
+      <th>+2</th>
+      <td>NaN</td>
+      <td>0.141537</td>
+      <td>NaN</td>
+      <td>0.713322</td>
+    </tr>
+    <tr>
+      <th>+3</th>
+      <td>0.774562</td>
+      <td>0.136644</td>
+      <td>0.406120</td>
+      <td>0.128953</td>
+    </tr>
+    <tr>
+      <th>+4</th>
+      <td>0.284240</td>
+      <td>0.052869</td>
+      <td>0.256599</td>
+      <td>0.123743</td>
+    </tr>
+    <tr>
+      <th>+5</th>
+      <td>0.016301</td>
+      <td>0.034593</td>
+      <td>0.713966</td>
+      <td>0.014079</td>
+    </tr>
+    <tr>
+      <th>+6</th>
+      <td>0.013091</td>
+      <td>0.012482</td>
+      <td>0.041129</td>
+      <td>0.073866</td>
+    </tr>
+  </tbody>
+</table>
+</div></div>
+</div>
+<p>We can visualize these values in a heatmap</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[13]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mf">4.5</span><span class="p">,</span> <span class="mf">2.</span><span class="p">))</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">set_facecolor</span><span class="p">(</span><span class="s1">&#39;lightgrey&#39;</span><span class="p">)</span>
+<span class="n">sns</span><span class="o">.</span><span class="n">heatmap</span><span class="p">(</span><span class="n">delta</span><span class="o">.</span><span class="n">T</span> <span class="o">*</span> <span class="mi">100</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;Blues&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">axes</span><span class="p">,</span>
+            <span class="n">cbar_kws</span><span class="o">=</span><span class="p">{</span><span class="s1">&#39;label&#39;</span><span class="p">:</span> <span class="s1">&#39;Decay rate (%)&#39;</span><span class="p">},</span>
+            <span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">xlabel</span><span class="o">=</span><span class="s1">&#39;5´ splice site position&#39;</span><span class="p">,</span>
+         <span class="n">ylabel</span><span class="o">=</span><span class="s1">&#39;Allele&#39;</span><span class="p">)</span>
+<span class="n">axes</span><span class="o">.</span><span class="n">set_yticklabels</span><span class="p">(</span><span class="n">alleles</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">sns</span><span class="o">.</span><span class="n">despine</span><span class="p">(</span><span class="n">left</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">bottom</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">top</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">right</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<img alt="../_images/usage_tutorial_24_0.png" src="../_images/usage_tutorial_24_0.png" />
+</div>
+</div>
+<p>The decay rate of a mutation is the percent decrease in the predictability of other mutatiob. These effects are constant and thus accumulate as discount coupons when two sequences differ by sevelal mutations. In the Jenga model, a mutation decreases the predictability of other mutations by accumulating the decay rates associated to the alleles that are exchanged. Next, we show examples of mutations, even at the same position, that have very different effects on the predictability of other
+mutations under this prior.</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[14]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">d</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">delta</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s1">&#39;-1&#39;</span><span class="p">,</span> <span class="s1">&#39;G&#39;</span><span class="p">])</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">delta</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s1">&#39;-1&#39;</span><span class="p">,</span> <span class="s1">&#39;U&#39;</span><span class="p">]))</span> <span class="o">*</span> <span class="mi">100</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;For instance, a G-1U mutation is expected to decrease the predictability of other mutations by </span><span class="si">{:.2f}</span><span class="s1">%&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">d</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+For instance, a G-1U mutation is expected to decrease the predictability of other mutations by 89.77%
+</pre></div></div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[15]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">d</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">delta</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s1">&#39;-1&#39;</span><span class="p">,</span> <span class="s1">&#39;A&#39;</span><span class="p">])</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">-</span> <span class="n">delta</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s1">&#39;-1&#39;</span><span class="p">,</span> <span class="s1">&#39;C&#39;</span><span class="p">]))</span> <span class="o">*</span> <span class="mi">100</span>
+<span class="nb">print</span><span class="p">(</span><span class="s1">&#39;In contrast, a mutation at the same position, A-1C, is expected to decrease the predictability of other mutations by only </span><span class="si">{:.2f}</span><span class="s1">%&#39;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">d</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+In contrast, a mutation at the same position, A-1C, is expected to decrease the predictability of other mutations by only 15.20%
+</pre></div></div>
+</div>
+<p>In general, we see that the positions close to the exon-intron boundary, which are known to be more relevant for the recognition of the 5´splice site during the splicing reaction, have stronger decay factors. But we also see that, within each position, alleles with weak decay factors are more likely to be generally exchangeable without affecting the effects of other mutations.</p>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../installation.html" class="btn btn-neutral float-left" title="Installation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../api.html" class="btn btn-neutral float-right" title="API Reference" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Carlos Martí-Gómez, Juannan Zhou, Samantha Petti, David M. McCandlish.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

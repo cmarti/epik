@@ -672,7 +672,7 @@ def inner_product(x1, x2, metric=None, diag=False):
         if metric is None:
             return (x1[:min_size, :] * x2[:min_size, :]).sum(1)
         else:
-            return ((x1[:min_size, :] @ metric) * x2[:min_size, :]).sum(1)
+            return ((metric @ x1[:min_size, :].T).T * x2[:min_size, :]).sum(1)
     else:
         if metric is None:
             return x1 @ x2.T

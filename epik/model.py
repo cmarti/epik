@@ -1299,6 +1299,7 @@ class EpiK(_Epik):
         if len(matrices) != self.l:
             msg = f"Number of matrices must be equal to sequence length {self.l}"
             raise ValueError(msg)
+        matrices = [self.get_tensor(m) for m in matrices]
 
         output_sizes = [m.shape[0] for m in matrices]
         output_size = sum(output_sizes)
@@ -1314,7 +1315,6 @@ class EpiK(_Epik):
         # Compute (P @ K)_{x1, x2} using Kronecker factorization
         site_kernels = self.kernel.get_site_kernels()
         PK = 1.0
-        print([m.shape[1] for m in matrices])
         for p, (m, k) in enumerate(zip(matrices, site_kernels)):
             if m.shape[1] != k.shape[0]:
                 msg = f"Incompatible size of matrices at position {p}: "
@@ -1398,7 +1398,7 @@ class EpiK(_Epik):
                 X.append("".join(seq))
                 names.append(f"{p}{a}")
         X = np.array(X)
-        theta = self.calc_gauge_fixed_theta(X, pi_lc)
+        theta = self.calc_gauge_fixed_theta(X, pi_lc).cpu().numpy()
         theta = pd.DataFrame(
             {
                 "theta": theta,
@@ -1443,6 +1443,7 @@ class EpiK(_Epik):
         if len(matrices) != self.l:
             msg = f"Number of matrices must be equal to sequence length {self.l}"
             raise ValueError(msg)
+        matrices = [self.get_tensor(m) for m in matrices]
 
         # Compute (K @ P @ K)_xx using Kronecker factorization
         site_kernels = self.kernel.get_site_kernels()
