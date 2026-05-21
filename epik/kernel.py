@@ -1288,6 +1288,7 @@ class DiploidKernel(CorrelationKernel):
         )
         self._set_params(log_var0, log_lambda0, log_eta0, logit_p0)
         self.partition_size = partition_size
+        self.n_features = 3 * self.l
         if self.alpha > 2:
             raise ValueError("DiploidKernel only supports binary alphabets.")
 
