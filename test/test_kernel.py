@@ -706,6 +706,15 @@ class KernelsTests(unittest.TestCase):
         assert np.allclose(np.diag(cov), 1.0)
         assert np.allclose(cov[0, 1], 3 / 7.0)
         assert np.allclose(cov[0, 2], 5 / 21.0)
+        
+        # Check with partitioning
+        config.update({"partition_size": 1})
+        kernel = DiploidKernel(**config)
+        cov = (kernel.forward(x, x) @ torch.eye(x.shape[0])).detach().numpy()
+
+        assert np.allclose(np.diag(cov), 1.0)
+        assert np.allclose(cov[0, 1], 3 / 7.0)
+        assert np.allclose(cov[0, 2], 5 / 21.0)
 
 
 if __name__ == "__main__":

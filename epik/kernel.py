@@ -1,33 +1,34 @@
+import sys
+from itertools import product
 from typing import Any, Generator, List, Optional, Tuple, Union
 
-import sys
-
-import pandas as pd
 import numpy as np
-import torch as torch
-
-from itertools import product
-from torch.utils.checkpoint import checkpoint
+import pandas as pd
+import torch
 from gpytorch.kernels import Kernel
 from linear_operator.operators import (
-    KernelLinearOperator,
     BlockDiagLinearOperator,
+    KernelLinearOperator,
     LinearOperator,
     to_linear_operator,
 )
 from pykeops.torch import LazyTensor
 from scipy.optimize import minimize
 from scipy.special import comb, logsumexp
-from torch.distributions.transforms import CorrCholeskyTransform, LowerCholeskyTransform
-from torch.nn import Parameter
+from torch.distributions.transforms import (
+    CorrCholeskyTransform,
+    LowerCholeskyTransform,
+)
 from torch.linalg import cholesky
+from torch.nn import Parameter
+from torch.utils.checkpoint import checkpoint
 
 from epik.utils import (
     HammingDistanceCalculator,
     KrawtchoukPolynomials,
+    diff_inner_prod,
     inner_product,
     log1mexp,
-    diff_inner_prod,
     validate_alphabet,
 )
 
@@ -75,11 +76,18 @@ class SequenceKernel(Kernel):
         self.starts = np.cumsum(np.append([0], self.alphas[:-1]))
         self.ends = np.cumsum(self.alphas)
         self.alleles_pos = {
-            a: [i for i, alphabet in enumerate(self.alphabet_list) if a in alphabet]
+            a: [
+                i
+                for i, alphabet in enumerate(self.alphabet_list)
+                if a in alphabet
+            ]
             for a in self.alphabet_full
         }
         self.alleles_idx = {
-            a: [self.starts[i] + self.alphabet_list[i].index(a) for i in allele_pos]
+            a: [
+                self.starts[i] + self.alphabet_list[i].index(a)
+                for i in allele_pos
+            ]
             for a, allele_pos in self.alleles_pos.items()
         }
 
@@ -155,7 +163,11 @@ class SequenceKernel(Kernel):
         return d
 
     def forward(
-        self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        diag: bool = False,
+        **kwargs: Any,
     ) -> Union[torch.Tensor, KernelLinearOperator]:
         """
         Compute the kernel matrix or its diagonal between two input tensors.
@@ -189,7 +201,7 @@ class SequenceKernel(Kernel):
                 kernel = self._nonkeops_forward(x1, x2, diag=False, **kwargs)
 
             except RuntimeError as error:  # Memory error
-                msg = "\n{}. Likely due to memory error when loading ".format(error)
+                msg = f"\n{error}. Likely due to memory error when loading "
                 msg += "kernel matrix: switching to KeOps\n"
                 sys.stderr.write(msg)
 
@@ -199,8 +211,12 @@ class SequenceKernel(Kernel):
                 sys.stderr.write(
                     f"Kernel matrix memory {(n1, n2)}: {n1 * n2 * x2.element_size() / 1e6} MB"
                 )
-                sys.stderr.write(f"Memory allocated: {allocated_memory / 1e6:.2f} MB\n")
-                sys.stderr.write(f"Memory reserved: {reserved_memory / 1e6:.2f} MB\n")
+                sys.stderr.write(
+                    f"Memory allocated: {allocated_memory / 1e6:.2f} MB\n"
+                )
+                sys.stderr.write(
+                    f"Memory reserved: {reserved_memory / 1e6:.2f} MB\n"
+                )
                 sys.stderr.write(torch.cuda.memory_summary(device="cuda"))
                 self.use_keops = True
                 torch.cuda.empty_cache()
@@ -247,7 +263,7 @@ class CorrelationKernel(SequenceKernel):
 
 
 class VarianceComponentKernel(SequenceKernel):
-    """
+    r"""
     Variance Component Kernel for functions on sequence space.
 
     This kernel computes the covariance between two sequences using
@@ -283,7 +299,9 @@ class VarianceComponentKernel(SequenceKernel):
         self.max_alpha = int(max(self.alphas))
         self.max_k = max_k if max_k is not None else self.l
         self.set_log_lambdas0(log_lambdas0)
-        self.ws = KrawtchoukPolynomials(self.max_alpha, self.l, max_k=self.max_k)
+        self.ws = KrawtchoukPolynomials(
+            self.max_alpha, self.l, max_k=self.max_k
+        )
         self.set_params()
 
     def set_log_lambdas0(self, log_lambdas0: Optional[torch.Tensor]) -> None:
@@ -298,7 +316,9 @@ class VarianceComponentKernel(SequenceKernel):
 
     def set_params(self) -> None:
         c_bk = Parameter(self.calc_c_bk(), requires_grad=False)
-        theta = Parameter(torch.Tensor([[-np.log(0.1) / self.l]]), requires_grad=False)
+        theta = Parameter(
+            torch.Tensor([[-np.log(0.1) / self.l]]), requires_grad=False
+        )
         log_lambdas = Parameter(self.log_lambdas0, requires_grad=True)
 
         self.register_parameter(name="c_bk", parameter=c_bk)
@@ -313,7 +333,10 @@ class VarianceComponentKernel(SequenceKernel):
         return self.calc_c_b(self.log_lambdas)
 
     def distance_to_cov(
-        self, d: Union[torch.Tensor, LazyTensor], c_b: torch.Tensor, keops: bool = False
+        self,
+        d: Union[torch.Tensor, LazyTensor],
+        c_b: torch.Tensor,
+        keops: bool = False,
     ) -> Union[torch.Tensor, LazyTensor]:
         basis = self.calc_basis(d, keops=keops)
         b_0 = next(basis)
@@ -337,14 +360,27 @@ class VarianceComponentKernel(SequenceKernel):
         return self.distance_to_cov(d, c_b, keops=False)
 
     def _nonkeops_forward(
-        self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        diag: bool = False,
+        **kwargs: Any,
     ) -> Union[torch.Tensor, KernelLinearOperator]:
         return checkpoint(
-            self._compute, x1, x2, self.log_lambdas, diag, preserve_rng_state=True
+            self._compute,
+            x1,
+            x2,
+            self.log_lambdas,
+            diag,
+            preserve_rng_state=True,
         )
 
     def _covar_func(
-        self, x1: torch.Tensor, x2: torch.Tensor, c_b: torch.Tensor, **kwargs: Any
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        c_b: torch.Tensor,
+        **kwargs: Any,
     ) -> LazyTensor:
         d = self.calc_hamming_distance(x1, x2, keops=True)
         return self.distance_to_cov(d, c_b, keops=True)
@@ -422,7 +458,11 @@ class AdditiveKernel(VarianceComponentKernel):
         return c_bk
 
     def forward(
-        self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        diag: bool = False,
+        **kwargs: Any,
     ) -> Union[torch.Tensor, KernelLinearOperator]:
         self.check_input_shape(x1)
         self.check_input_shape(x2)
@@ -432,13 +472,15 @@ class AdditiveKernel(VarianceComponentKernel):
             d = self.calc_hamming_distance(x1, x2, diag=True)
             kernel = c_b[0] + c_b[1] * d
         else:
-            calc_d = HammingDistanceCalculator(self.l, scale=c_b[1], shift=c_b[0])
+            calc_d = HammingDistanceCalculator(
+                self.l, scale=c_b[1], shift=c_b[0]
+            )
             kernel = calc_d(x1, x2)
         return kernel
 
 
 class PairwiseKernel(VarianceComponentKernel):
-    """
+    r"""
     Pairwise kernel for functions on sequence space.
 
     The covariance between two sequences is quadratic in the Hamming distance
@@ -491,7 +533,9 @@ class PairwiseKernel(VarianceComponentKernel):
             + 0.5 * sl**2
         )
         c23 = -a + 0.5 * a**2 + a * sl - a**2 * sl
-        c_bk = torch.tensor([[1, sl * (a - 1), c13], [0, -a, c23], [0, 0, 0.5 * a**2]])
+        c_bk = torch.tensor(
+            [[1, sl * (a - 1), c13], [0, -a, c23], [0, 0, 0.5 * a**2]]
+        )
         return c_bk
 
 
@@ -516,7 +560,11 @@ class SiteProductKernel(CorrelationKernel):
         return log_mu0
 
     def _nonkeops_forward(
-        self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        diag: bool = False,
+        **kwargs: Any,
     ) -> Union[torch.Tensor, KernelLinearOperator]:
         if self.is_positive():
             site_log_kernels = self.get_site_log_kernels()
@@ -526,7 +574,10 @@ class SiteProductKernel(CorrelationKernel):
                 log_kernel = 0.0
                 for i in range(self.l):
                     log_kernel += (
-                        (self.select_site(x1[:min_size], site=i) @ site_log_kernels[i])
+                        (
+                            self.select_site(x1[:min_size], site=i)
+                            @ site_log_kernels[i]
+                        )
                         * self.select_site(x2[:min_size], site=i)
                     ).sum(1)
 
@@ -565,8 +616,12 @@ class SiteProductKernel(CorrelationKernel):
     ) -> LazyTensor:
         K = 1.0
         for i in range(self.l):
-            x1_ = LazyTensor(self.select_site(x1, site=i).contiguous()[:, None, :])
-            x2_ = LazyTensor(self.select_site(x2, site=i).contiguous()[None, :, :])
+            x1_ = LazyTensor(
+                self.select_site(x1, site=i).contiguous()[:, None, :]
+            )
+            x2_ = LazyTensor(
+                self.select_site(x2, site=i).contiguous()[None, :, :]
+            )
             K *= (x1_ * x2_).sum(-1)
 
         return K
@@ -726,7 +781,11 @@ class GeometricKernel(AlleleSymmetricProductKernel):
         return log_kernels
 
     def _nonkeops_forward(
-        self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        diag: bool = False,
+        **kwargs: Any,
     ) -> Union[torch.Tensor, KernelLinearOperator]:
         d = self.calc_hamming_distance(x1, x2, diag=diag, keops=self.use_keops)
         if self.is_positive():
@@ -742,8 +801,12 @@ class GeometricKernel(AlleleSymmetricProductKernel):
     ) -> LazyTensor:
         K = 1.0
         for i in range(self.l):
-            x1_ = LazyTensor(self.select_site(x1, site=i).contiguous()[:, None, :])
-            x2_ = LazyTensor(self.select_site(x2, site=i).contiguous()[None, :, :])
+            x1_ = LazyTensor(
+                self.select_site(x1, site=i).contiguous()[:, None, :]
+            )
+            x2_ = LazyTensor(
+                self.select_site(x2, site=i).contiguous()[None, :, :]
+            )
             K *= (x1_ * x2_).sum(-1)
 
         return K
@@ -754,7 +817,10 @@ class GeometricKernel(AlleleSymmetricProductKernel):
         if self.is_positive():
             w = self.log_mu_to_log_corr_1d(self.log_mu)
             kernel = KernelLinearOperator(
-                self.log_var + w - w * x1, x2, covar_func=self._covar_func_log, **kwargs
+                self.log_var + w - w * x1,
+                x2,
+                covar_func=self._covar_func_log,
+                **kwargs,
             )
 
         else:
@@ -880,7 +946,9 @@ class JengaKernel(SiteProductKernel):
         self.site_shapes = [(a, a) for a in self.alphas]
         self._set_params(log_var0, log_mu0, log_pi0)
 
-    def get_log_pi0(self, log_pi0: Optional[List[torch.Tensor]]) -> List[torch.Tensor]:
+    def get_log_pi0(
+        self, log_pi0: Optional[List[torch.Tensor]]
+    ) -> List[torch.Tensor]:
         if log_pi0 is None:
             log_pi0 = [torch.zeros(alpha) for alpha in self.alphas]
 
@@ -973,7 +1041,7 @@ class JengaKernel(SiteProductKernel):
 
 
 class GeneralProductKernel(SiteProductKernel):
-    """
+    r"""
     General Product Kernel for sequence data.
 
     This kernel computes the covariance between two sequences as the product
@@ -1059,7 +1127,9 @@ class GeneralProductKernel(SiteProductKernel):
         return L @ L.T
 
     def get_site_kernels(self) -> List[torch.Tensor]:
-        kernels = [self.theta_to_cor(self.get_theta_p(p)) for p in range(self.l)]
+        kernels = [
+            self.theta_to_cor(self.get_theta_p(p)) for p in range(self.l)
+        ]
         return kernels
 
     def get_site_log_kernels(self) -> List[torch.Tensor]:
@@ -1076,11 +1146,13 @@ class GeneralProductKernel(SiteProductKernel):
         return 1 - self.theta_to_cor(theta)
 
     def get_delta(self) -> List[torch.Tensor]:
-        return [self.theta_to_delta(self.get_theta_p(p)) for p in range(self.l)]
+        return [
+            self.theta_to_delta(self.get_theta_p(p)) for p in range(self.l)
+        ]
 
 
 class GeneralProductKernel2(SiteProductKernel):
-    """
+    r"""
     General Product Kernel for sequence data.
 
     This kernel computes the covariance between two sequences as the product
@@ -1187,7 +1259,9 @@ class GeneralProductKernel2(SiteProductKernel):
         return 1 - self.theta_to_cor(theta)
 
     def get_delta(self) -> List[torch.Tensor]:
-        return [self.theta_to_delta(self.get_theta_p(p)) for p in range(self.l)]
+        return [
+            self.theta_to_delta(self.get_theta_p(p)) for p in range(self.l)
+        ]
 
 
 class DiploidKernel(CorrelationKernel):
@@ -1227,7 +1301,9 @@ class DiploidKernel(CorrelationKernel):
         log_var = Parameter(self.get_log_var0(log_var0), requires_grad=True)
         self.register_parameter(name="log_var", parameter=log_var)
 
-        log_lambda = Parameter(self.get_log_lambda0(log_lambda0), requires_grad=True)
+        log_lambda = Parameter(
+            self.get_log_lambda0(log_lambda0), requires_grad=True
+        )
         self.register_parameter(name="log_lambda", parameter=log_lambda)
 
         log_eta = Parameter(self.get_log_eta0(log_eta0), requires_grad=True)
@@ -1253,7 +1329,9 @@ class DiploidKernel(CorrelationKernel):
             log_eta0 = torch.tensor([-1.0])
 
         if log_eta0.shape != (1,):
-            raise ValueError(f"log_eta0 should have shape (1,) but got {log_eta0}")
+            raise ValueError(
+                f"log_eta0 should have shape (1,) but got {log_eta0}"
+            )
         return log_eta0
 
     def get_logit_p(self, logit_p0: Optional[torch.Tensor]) -> torch.Tensor:
@@ -1261,12 +1339,16 @@ class DiploidKernel(CorrelationKernel):
             logit_p0 = torch.tensor([0.0])
 
         if logit_p0.shape != (1,):
-            raise ValueError(f"logit_p0 should have shape (1,) but got {logit_p0}")
+            raise ValueError(
+                f"logit_p0 should have shape (1,) but got {logit_p0}"
+            )
         return logit_p0
 
     def _expand_param(self, param: torch.Tensor) -> torch.Tensor:
         if param.ndim != 1:
-            raise ValueError(f"param must be 1D, but got shape {tuple(param.shape)}")
+            raise ValueError(
+                f"param must be 1D, but got shape {tuple(param.shape)}"
+            )
         if param.shape[0] == 1:
             return param.expand(self.l)
         if param.shape[0] == self.l:
@@ -1288,7 +1370,11 @@ class DiploidKernel(CorrelationKernel):
         log_1mp_lambda = log_1mp + log_lambda
 
         log_d1 = log1mexp(log_eta) - log_denom
-        log_d2 = log_1p_eta_nu + log1mexp(log_1mp_lambda - log_1p_eta_nu) - log_denom
+        log_d2 = (
+            log_1p_eta_nu
+            + log1mexp(log_1mp_lambda - log_1p_eta_nu)
+            - log_denom
+        )
         log_het = torch.logaddexp(zeros, log_eta - logit_p) - log_denom
 
         log_kernel = torch.zeros(
@@ -1314,17 +1400,39 @@ class DiploidKernel(CorrelationKernel):
             kernel = torch.exp(inner_product(x1, x2, metric=M, diag=diag))
         else:
             x2_T = M @ x2.T
-            def matmul(v):
-                u = torch.zeros(x1.shape[2])
-                for i in range(0, x1.shape[0], self.partition_size):
-                    e = i + self.partition_size
-                    u[i:e] = torch.exp(x1[i:e] @ x2_T) @ v
-                return u
-
-            kernel = LinearOperator(matmul=matmul, shape=(x1.shape[0], x2.shape[0]))
-
+            kernel = PartitionedExpKernelOperator(x1, x2_T, partition_size=self.partition_size)
         return kernel
 
+
+class PartitionedExpKernelOperator(LinearOperator):
+    def __init__(self, x1, x2_T, partition_size: int):
+        super().__init__(x1, x2_T, partition_size=partition_size)
+        self.partition_size = partition_size
+        self.x1 = x1
+        self.x2_T = x2_T
+        self._shape = torch.Size((x1.shape[0], x2_T.shape[1]))
+
+    def representation(self):
+        return self.x1, self.x2_T
+
+    def _size(self):
+        return self._shape
+
+    def _transpose_nonbatch(self):
+        return PartitionedExpKernelOperator(
+            self.x2_T.transpose(-1, -2),
+            self.x1.transpose(-1, -2),
+            self.partition_size,
+        )
+
+    def _matmul(self, rhs):
+        out = rhs.new_zeros(self.x1.shape[0], rhs.shape[-1])
+
+        for i in range(0, self.x1.shape[0], self.partition_size):
+            e = min(i + self.partition_size, self.x1.shape[0])
+            out[i:e] = torch.exp(self.x1[i:e] @ self.x2_T) @ rhs
+
+        return out
 
 def get_kernel(
     kernel: str,
@@ -1357,7 +1465,7 @@ def get_kernel(
     return kernel
 
 
-class SiteKernelAligner(object):
+class SiteKernelAligner:
     def __init__(self, n_alleles: int, seq_length: int) -> None:
         self.n_alleles = n_alleles
         self.l = seq_length
@@ -1416,7 +1524,9 @@ class SiteKernelAligner(object):
         z = np.zeros((self.l, self.n_alleles))
         return np.hstack([theta, z])
 
-    def connectedness_to_general_product(self, theta: np.ndarray) -> np.ndarray:
+    def connectedness_to_general_product(
+        self, theta: np.ndarray
+    ) -> np.ndarray:
         theta = np.vstack(
             [
                 self.corr_to_general_product(self.mu_to_corr(theta_i))
@@ -1443,7 +1553,9 @@ class SiteKernelAligner(object):
         return theta
 
     def jenga_to_geometric(self, theta: np.ndarray) -> np.ndarray:
-        q = np.mean([self.corr_to_q(self.jenga_to_corr(theta_i)) for theta_i in theta])
+        q = np.mean(
+            [self.corr_to_q(self.jenga_to_corr(theta_i)) for theta_i in theta]
+        )
         theta = np.array([[self.q_to_log_mu(q)]])
         return theta
 
@@ -1458,14 +1570,20 @@ class SiteKernelAligner(object):
 
     def general_product_to_geometric(self, theta: np.ndarray) -> np.ndarray:
         q = np.mean(
-            [self.corr_to_q(self.general_product_to_corr(theta_i)) for theta_i in theta]
+            [
+                self.corr_to_q(self.general_product_to_corr(theta_i))
+                for theta_i in theta
+            ]
         )
         theta = np.array([[self.q_to_log_mu(q)]])
         return theta
 
-    def general_product_to_connectedness(self, theta: np.ndarray) -> np.ndarray:
+    def general_product_to_connectedness(
+        self, theta: np.ndarray
+    ) -> np.ndarray:
         qs = [
-            self.corr_to_q(self.general_product_to_corr(theta_i)) for theta_i in theta
+            self.corr_to_q(self.general_product_to_corr(theta_i))
+            for theta_i in theta
         ]
         theta = np.array([[self.q_to_log_mu(q)] for q in qs])
         return theta
@@ -1523,7 +1641,11 @@ class LinearEmbeddingKernel(CorrelationKernel):
         return M
 
     def _nonkeops_forward(
-        self, x1: torch.Tensor, x2: torch.Tensor, diag: bool = False, **kwargs: Any
+        self,
+        x1: torch.Tensor,
+        x2: torch.Tensor,
+        diag: bool = False,
+        **kwargs: Any,
     ) -> torch.Tensor:
         A = self.get_A()
         z1 = self.x_to_z(x1, A)
@@ -1578,7 +1700,9 @@ class LinearEmbeddingKernel(CorrelationKernel):
                 for i, (x, y) in enumerate(allele_pairs_p):
                     s, e = self.starts[p], self.ends[p]
                     M_pp = M[s:e, :][:, s:e]
-                    delta = 1 - np.exp(2 * M_pp[x, y] - M_pp[x, x] - M_pp[y, y])
+                    delta = 1 - np.exp(
+                        2 * M_pp[x, y] - M_pp[x, x] - M_pp[y, y]
+                    )
                     decay_factors_pq[i, i] = delta
 
             # off-diagonal blocks
@@ -1650,7 +1774,9 @@ class MahalanobisRBFKernel(LinearEmbeddingKernel):
 
             B = torch.linalg.inv(self.P0.T @ self.P0) @ self.P0.T
             M_prime = B @ M0 @ B.T
-            log_diag_sqrt0 = torch.log(torch.sqrt(torch.diag(M_prime))).unsqueeze(1)
+            log_diag_sqrt0 = torch.log(
+                torch.sqrt(torch.diag(M_prime))
+            ).unsqueeze(1)
             L = torch.linalg.cholesky(M_prime)
             theta0 = self.theta_to_L._inverse(L)
 
@@ -1681,7 +1807,9 @@ class MahalanobisRBFKernel(LinearEmbeddingKernel):
 
         P = Parameter(self.P0, requires_grad=False)
         theta = Parameter(theta0, requires_grad=self.train_embedding)
-        log_diag_sqrt = Parameter(log_diag_sqrt0, requires_grad=self.train_embedding)
+        log_diag_sqrt = Parameter(
+            log_diag_sqrt0, requires_grad=self.train_embedding
+        )
         log_var = Parameter(log_var0, requires_grad=True)
 
         self.register_parameter(name="P", parameter=P)
@@ -1755,7 +1883,9 @@ class FactorAnalysisKernel(LinearEmbeddingKernel):
 
         P = Parameter(self.P0, requires_grad=False)
         q = Parameter(q0, requires_grad=self.train_embedding)
-        log_sqrt_lda = Parameter(log_sqrt_lda0, requires_grad=self.train_embedding)
+        log_sqrt_lda = Parameter(
+            log_sqrt_lda0, requires_grad=self.train_embedding
+        )
         log_var = Parameter(log_var0, requires_grad=True)
 
         self.register_parameter(name="P", parameter=P)
@@ -1849,5 +1979,7 @@ def get_named_kernel(
     if kernel in NAMED_KERNELS:
         return NAMED_KERNELS[kernel](alphabet_list=alphabet_list, **kwargs)
     else:
-        msg = f"kernel label {kernel} not allowed. Check {NAMED_KERNELS.keys()}"
+        msg = (
+            f"kernel label {kernel} not allowed. Check {NAMED_KERNELS.keys()}"
+        )
         raise ValueError(msg)
