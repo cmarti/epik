@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import sys
 import unittest
+from itertools import product
 from os.path import join
 from subprocess import check_call
 from tempfile import NamedTemporaryFile
@@ -9,32 +10,30 @@ import gpytorch
 import numpy as np
 import pandas as pd
 import torch
-from itertools import product
-from scipy.stats import pearsonr, multivariate_normal
-from scipy.special import comb
 from gpytorch.distributions import MultivariateNormal
-from torch.distributions.transforms import CorrCholeskyTransform
+from scipy.special import comb
+from scipy.stats import multivariate_normal, pearsonr
 from torch.distributions import Dirichlet
+from torch.distributions.transforms import CorrCholeskyTransform
 
 from epik.kernel import (
     AdditiveKernel,
     ConnectednessKernel,
-    GeometricKernel,
+    FactorAnalysisKernel,
     GeneralProductKernel,
+    GeometricKernel,
     JengaKernel,
     PairwiseKernel,
     VarianceComponentKernel,
-    FactorAnalysisKernel,
+    DiploidKernel,
 )
 from epik.model import EpiK
 from epik.settings import BIN_DIR, KERNELS
 from epik.utils import (
-    get_full_space_one_hot,
-    get_mut_effs_contrast_matrix,
-    one_hot_to_seq,
-    seq_to_one_hot,
     get_one_hot_encoding,
     get_random_sequences,
+    one_hot_to_seq,
+    get_full_space_one_hot,
 )
 
 
@@ -472,6 +471,74 @@ class ModelsTests(unittest.TestCase):
             test_y_pred = model.predict(test_x, method="cg")["coef"]
             r2 = pearsonr(test_y_pred, test_y)[0] ** 2
             assert r2 > r2_bound
+    
+    def test_diploid_model(self):
+        # simulate data
+        config = {
+            "seq_length": 6, 
+            'alphabet': list('AB'),
+            "log_lambda0": torch.Tensor([np.log(0.2)]),
+            "log_eta0": torch.Tensor([np.log(0.05)]),
+            "logit_p0": torch.Tensor([0.0]),
+        }
+        kernel = DiploidKernel(**config)
+        model = EpiK(kernel, alphabet_list=kernel.alphabet_list)
+        model.encode = lambda x: x
+        X = get_full_space_one_hot(seq_length=6, n_alleles=3)
+        dataset = model.simulate_dataset(
+            X, sigma=self.sigma, ptrain=self.ptrain
+        )
+        X_train, y_train, X_test, y_test, y_var = dataset
+        
+        # Fit model
+        config = {
+            "seq_length": 6, 
+            'alphabet': list('AB'),
+        }
+        kernel = DiploidKernel(**config)
+        model = EpiK(kernel, alphabet_list=kernel.alphabet_list)
+        model.encode = lambda x: x
+        model.set_data(X_train, y_train, y_var)
+        model.fit(n_iter=100, track_progress=True)
+        
+        # Predict
+        pred = model.predict(X_test, add_labels=False)
+        r2 = pearsonr(pred["coef"], y_test)[0] ** 2
+        assert r2 > 0.75
+    
+    def test_diploid_model_partitioning(self):
+        # simulate data
+        config = {
+            "seq_length": 6, 
+            'alphabet': list('AB'),
+            "log_lambda0": torch.Tensor([np.log(0.2)]),
+            "log_eta0": torch.Tensor([np.log(0.05)]),
+            "logit_p0": torch.Tensor([0.0]),
+        }
+        kernel = DiploidKernel(**config)
+        model = EpiK(kernel, alphabet_list=kernel.alphabet_list)
+        model.encode = lambda x: x
+        X = get_full_space_one_hot(seq_length=6, n_alleles=3)
+        dataset = model.simulate_dataset(
+            X, sigma=self.sigma, ptrain=self.ptrain
+        )
+        X_train, y_train, X_test, y_test, y_var = dataset
+        
+        # Use partitioning
+        config = {
+            "seq_length": 6, 
+            'alphabet': list('AB'),
+            "partition_size": 5,
+        }
+        kernel = DiploidKernel(**config)
+        model = EpiK(kernel, alphabet_list=kernel.alphabet_list)
+        model.encode = lambda x: x
+        model.set_data(X_train, y_train, y_var)
+        model.fit(n_iter=100, track_progress=True)
+        
+        pred = model.predict(X_test, add_labels=False)
+        r2 = pearsonr(pred["coef"], y_test)[0] ** 2
+        assert r2 > 0.75
 
     def xtest_bin(self):
         bin_fpath = join(BIN_DIR, "EpiK.py")
@@ -484,9 +551,9 @@ class ModelsTests(unittest.TestCase):
 
         with NamedTemporaryFile() as fhand:
             out_fpath = fhand.name
-            params_fpath = "{}.model_params.pth".format(out_fpath)
-            data_fpath = "{}.train.csv".format(out_fpath)
-            xpred_fpath = "{}.test.csv".format(out_fpath)
+            params_fpath = f"{out_fpath}.model_params.pth"
+            data_fpath = f"{out_fpath}.train.csv"
+            xpred_fpath = f"{out_fpath}.test.csv"
             data.to_csv(data_fpath)
             test.to_csv(xpred_fpath, header=False, index=False)
 

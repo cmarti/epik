@@ -343,7 +343,7 @@ class _Epik(object):
             there is no uncertainty in the measurements.
         """
         self.X_seqs = X
-        self.X = self.get_tensor(get_one_hot_encoding(X, self.alphabet_list))
+        self.X = self.get_tensor(self.encode(X))
         self.y = self.get_tensor(y)
         if y_var is None:
             self.y_var: torch.Tensor = torch.zeros_like(self.y)
@@ -913,6 +913,7 @@ class EpiK(_Epik):
         preconditioner_size: int = 0,
         n_trace_samples: int = 50,
         root_decomposition_size: int = 50,
+        add_labels: bool = True,
     ) -> pd.DataFrame:
         """
         Make phenotypic predictions using the Gaussian process model.
@@ -951,6 +952,9 @@ class EpiK(_Epik):
         root_decomposition_size : int, optional (default=50)
             The size of the root decomposition used for approximating covariance
             matrices. Larger values improve accuracy but increase memory usage.
+        
+        add_labels : bool, optional (default=True)
+            Whether to include the input sequences as labels in the output DataFrame.
 
         Returns
         -------
@@ -959,7 +963,7 @@ class EpiK(_Epik):
             If `calc_variance=True`, the DataFrame includes posterior standard
             deviations and 95% credible interval bounds.
         """
-        labels = X
+        labels = X if add_labels else None
         f = self.get_posterior(
             X,
             calc_variance=calc_variance,
