@@ -1105,7 +1105,7 @@ class GeneralProductKernel(SiteProductKernel):
             q = self.get_corr1d0()
             theta0 = []
             for a in self.alphas:
-                C = (1 - q) * torch.eye(self.a_max) + q * torch.ones((a, a))
+                C = (1 - q) * torch.eye(a) + q * torch.ones((a, a))
                 v = self.cor_to_theta(C)
                 theta0.append(v)
 
@@ -1216,7 +1216,7 @@ class GeneralProductKernel2(SiteProductKernel):
             q = self.get_corr1d0()
             theta0 = []
             for a in self.alphas:
-                C = (1 - q) * torch.eye(self.a_max) + q * torch.ones((a, a))
+                C = (1 - q) * torch.eye(a) + q * torch.ones((a, a))
                 v = self.cor_to_theta(C)
                 theta0.append(v)
 
