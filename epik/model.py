@@ -1,26 +1,29 @@
 import sys
 from copy import deepcopy
 from time import time
-from typing import Any, Optional, Tuple, List, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
 from gpytorch.distributions import MultivariateNormal
 from gpytorch.kernels import Kernel
-from gpytorch.likelihoods import FixedNoiseGaussianLikelihood, _GaussianLikelihoodBase
+from gpytorch.likelihoods import (
+    FixedNoiseGaussianLikelihood,
+    _GaussianLikelihoodBase,
+)
 from gpytorch.means import ConstantMean, ZeroMean
 from gpytorch.mlls import MarginalLogLikelihood, VariationalELBO
 from gpytorch.models import ApproximateGP, ExactGP
 from gpytorch.settings import (
     cg_tolerance,
     eval_cg_tolerance,
-    fast_pred_var,
     fast_computations,
+    fast_pred_var,
     max_cg_iterations,
+    max_cholesky_size,
     max_lanczos_quadrature_iterations,
     max_preconditioner_size,
-    max_cholesky_size,
     max_root_decomposition_size,
     num_likelihood_samples,
     num_trace_samples,
@@ -33,15 +36,15 @@ from gpytorch.variational import (
 from torch.optim import Adam
 from tqdm import tqdm
 
-from epik.kernel import get_named_kernel, SiteProductKernel
+from epik.kernel import SiteProductKernel, get_named_kernel
 from epik.utils import (
     get_epistatic_coeffs_contrast_matrix,
     get_mut_effs_contrast_matrix,
+    get_one_hot_encoding,
     get_tensor,
+    split_training_test,
     to_numpy,
     validate_alphabet,
-    get_one_hot_encoding,
-    split_training_test,
 )
 
 
@@ -66,7 +69,7 @@ class ExactMLL(MarginalLogLikelihood):
     def __init__(self, likelihood, model) -> None:
         if not isinstance(likelihood, _GaussianLikelihoodBase):
             raise RuntimeError("Likelihood must be Gaussian for exact inference")
-        super(ExactMLL, self).__init__(likelihood, model)
+        super().__init__(likelihood, model)
 
     def _add_other_terms(self, res: torch.Tensor, params: tuple) -> torch.Tensor:
         # Add additional terms (SGPR / learned inducing points, heteroskedastic likelihood models)
@@ -153,7 +156,7 @@ class GPModel(ExactGP):
         constant_mean: float = 0.0,
         train_mean: bool = False,
     ) -> None:
-        super(GPModel, self).__init__(train_x, train_y, likelihood)
+        super().__init__(train_x, train_y, likelihood)
         self.mean_module = ConstantMean() if train_mean else ZeroMean()
         self.covar_module = kernel
         self.constant_mean = constant_mean
@@ -202,7 +205,7 @@ class GeneralizedGPModel(ApproximateGP):
         strategy = UnwhitenedVariationalStrategy(
             self, train_x, distribution, learn_inducing_locations=False
         )
-        super(GeneralizedGPModel, self).__init__(strategy)
+        super().__init__(strategy)
         self.mean_module = ConstantMean() if train_mean else ZeroMean()
         self.covar_module: Any = kernel
 
@@ -223,7 +226,7 @@ class GeneralizedGPModel(ApproximateGP):
         return MultivariateNormal(mean_x, covar_x)
 
 
-class _Epik(object):
+class _Epik:
     def __init__(
         self,
         kernel: Union[str, Kernel],
@@ -356,7 +359,7 @@ class _Epik(object):
                 msg.format(self.X.shape[0], self.y.shape[0], self.y_var.shape[0])
             )
 
-        if self.X.shape[1] != self.kernel.n_features:
+        if hasattr(self.kernel, 'n_features') and self.X.shape[1] != self.kernel.n_features:
             msg = "Number of features in X ({}) should match the kernel features ({})"
             raise ValueError(msg.format(self.X.shape[1], self.kernel.n_features))
 
@@ -1420,7 +1423,7 @@ class EpiK(_Epik):
 
         This method calculates the quadratic form given by:
         .. math::
-        f^T (\bigotimes_p^\ell A_p) f
+        f^T (\bigotimes_p^\\ell A_p) f
 
         where :math:`\bigotimes` represents the Kronecker product.
 
