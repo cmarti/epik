@@ -8,7 +8,8 @@ BIN_DIR = join(BASE_DIR, 'bin')
 KERNELS = ['Additive', 'Pairwise', 'VC', 
            'Exponential', 'Connectedness',
            'Jenga', 'GeneralProduct', 
-           'FactorAnalysis', 'MahalanobisRBF']
+           'FactorAnalysis', 'JengaFactorAnalysis',
+           'ConnectednessFactorAnalysis', 'MahalanobisRBF']
 ALPHABETS = {
     "dna": list("ACGT"),
     "rna": list("ACGU"),

@@ -5,11 +5,13 @@ from typing import Any, Generator, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
-from gpytorch.kernels import Kernel
+from gpytorch.kernels import Kernel, RBFKernel, ScaleKernel
+from gpytorch.kernels.keops import RBFKernel as KeOpsRBFKernel
 from linear_operator.operators import (
     BlockDiagLinearOperator,
     KernelLinearOperator,
     LinearOperator,
+    MatmulLinearOperator,
     to_linear_operator,
 )
 from pykeops.torch import LazyTensor
@@ -1437,33 +1439,42 @@ class PartitionedExpKernelOperator(LinearOperator):
 
 def get_kernel(
     kernel: str,
-    n_alleles: int,
-    seq_length: int,
+    n_alleles: Optional[int] = None,
+    seq_length: Optional[int] = None,
     theta0: Optional[torch.Tensor] = None,
     log_var0: Optional[torch.Tensor] = None,
     log_lambdas0: Optional[torch.Tensor] = None,
     ndim: int = 3,
-) -> SequenceKernel:
-    kernels = {
-        "Additive": AdditiveKernel,
-        "Pairwise": PairwiseKernel,
-        "VC": VarianceComponentKernel,
-        "Geometric": GeometricKernel,
-        "Connectedness": ConnectednessKernel,
-        "Jenga": JengaKernel,
-        "GeneralProduct": GeneralProductKernel,
-        "FactorAnalysis": FactorAnalysisKernel,
-        "MahalanobisRBF": MahalanobisRBFKernel,
-    }
-    kernel = kernels[kernel](
-        n_alleles,
-        seq_length,
-        theta0=theta0,
-        log_var0=log_var0,
-        log_lambdas0=log_lambdas0,
-        ndim=ndim,
+    *,
+    alphabet_type: Optional[str] = None,
+    alphabet: Optional[List[str]] = None,
+    alphabet_list: Optional[List[List[str]]] = None,
+    use_keops: bool = False,
+    **kwargs: Any,
+) -> Kernel:
+    """Build a named kernel using explicit alphabets or a legacy allele count."""
+    ndim = 3 if ndim is None else ndim
+    if n_alleles is not None:
+        if any(value is not None for value in (alphabet_type, alphabet, alphabet_list)):
+            raise ValueError("Specify n_alleles or an alphabet configuration")
+        alphabet = [str(i) for i in range(n_alleles)]
+    alphabet_list = validate_alphabet(
+        seq_length, alphabet_type, alphabet, alphabet_list
     )
-    return kernel
+    options = dict(kwargs, use_keops=use_keops)
+    if theta0 is not None:
+        options["theta0"] = theta0
+    if log_var0 is not None:
+        options["log_var0"] = log_var0
+    if log_lambdas0 is not None:
+        options["log_lambdas0"] = log_lambdas0
+    if kernel in ("FactorAnalysis", "JengaFactorAnalysis"):
+        options["ndim"] = ndim
+    if kernel == "Precomputed":
+        options.setdefault("ard_num_dims", ndim)
+    if kernel == "PositionARDESM":
+        options.setdefault("feature_dim", ndim)
+    return get_named_kernel(kernel, alphabet_list, options)
 
 
 class SiteKernelAligner:
@@ -1633,6 +1644,52 @@ class LinearEmbeddingKernel(CorrelationKernel):
         P = U[:, S > 1e-4]
         return P
 
+    def masked_calc_P(self, unseen_alleles=None):
+        """Orthonormal gauge basis with unseen allele rows fixed to zero.
+
+        ``unseen_alleles`` maps zero-based sites to zero-based allele indices.
+        Missing sites use all alleles. Sites with at most one observed allele
+        contribute no free directions. Per-site alphabet sizes may differ.
+        """
+        unseen_alleles = {} if unseen_alleles is None else unseen_alleles
+        if any(site not in self.positions for site in unseen_alleles):
+            raise ValueError("Unseen allele mask contains an invalid site")
+        blocks = []
+        for site, size in enumerate(self.alphas):
+            excluded = set(unseen_alleles.get(site, ()))
+            if not excluded.issubset(range(size)):
+                raise ValueError(f"Unseen allele mask contains an invalid allele at site {site}")
+            observed = [allele for allele in range(size) if allele not in excluded]
+            block = torch.zeros(size, size)
+            if len(observed) > 1:
+                indices = torch.tensor(observed)
+                centered = torch.eye(len(observed)) - 1.0 / len(observed)
+                block[indices[:, None], indices[None, :]] = centered
+            blocks.append(block)
+        projection = torch.block_diag(*blocks)
+        U, singular_values, _ = torch.linalg.svd(projection, full_matrices=False)
+        return U[:, singular_values > 1e-4]
+
+    def calc_masked_P(self, unseen_alleles=None):
+        """Alias for callers using the earlier local method name."""
+        return self.masked_calc_P(unseen_alleles)
+
+    def set_observed_basis(self, unseen_alleles=None, v=None):
+        if v is not None:
+            if unseen_alleles is not None:
+                raise ValueError("Specify v or unseen_alleles")
+            values = torch.as_tensor(v).flatten()
+            if values.numel() != self.n_features:
+                raise ValueError(f"v must contain {self.n_features} feature values")
+            unseen_alleles = {
+                site: torch.nonzero(
+                    values[start:end] == 0, as_tuple=False
+                ).flatten().tolist()
+                for site, (start, end) in enumerate(zip(self.starts, self.ends))
+            }
+        self.P0 = self.masked_calc_P(unseen_alleles)
+        self.n_features_free = self.P0.shape[1]
+
     def get_M(self):
         A = self.get_A()
         M = A @ A.T
@@ -1652,7 +1709,9 @@ class LinearEmbeddingKernel(CorrelationKernel):
         z1 = self.x_to_z(x1, A)
         z2 = self.x_to_z(x2, A)
         diff1 = diff_inner_prod(z1, z2, diag=diag)
-        diff2 = diff_inner_prod(z2, z1, diag=diag).T
+        diff2 = diff_inner_prod(z2, z1, diag=diag)
+        if not diag:
+            diff2 = diff2.T
         diff = 0.5 * (diff1 + diff2)
         kernel = torch.exp(self.log_var - diff)
         return kernel
@@ -1675,6 +1734,10 @@ class LinearEmbeddingKernel(CorrelationKernel):
         A = self.get_A()
         z1 = self.x_to_z(x1, A)
         z2 = self.x_to_z(x2, A)
+        if z1.shape[-1] == 0:
+            return sigma2 * MatmulLinearOperator(
+                z1.new_ones(z1.shape[0], 1), z2.new_ones(1, z2.shape[0])
+            )
         kernel = sigma2 * KernelLinearOperator(
             z1, z2, covar_func=self._covar_func, **kwargs
         )
@@ -1837,6 +1900,8 @@ class FactorAnalysisKernel(LinearEmbeddingKernel):
         log_var0: Optional[torch.Tensor] = None,
         A0: Optional[torch.Tensor] = None,
         ndim: int = 3,
+        unseen_alleles=None,
+        v: Optional[torch.Tensor] = None,
     ):
         super().__init__(
             seq_length=seq_length,
@@ -1846,11 +1911,19 @@ class FactorAnalysisKernel(LinearEmbeddingKernel):
             train_embedding=train_embedding,
             use_keops=use_keops,
         )
+        ndim = 3 if ndim is None else ndim
+        if ndim < 1:
+            raise ValueError("ndim must be positive")
+        self.set_observed_basis(unseen_alleles, v)
         self.ndim = ndim
         self._set_params(log_var0=log_var0, A0=A0)
 
     def get_A(self) -> torch.Tensor:
-        q = torch.linalg.qr(self.q)[0]
+        if self.q.shape[1] == 1:
+            # Keep the factor's sign while normalizing its magnitude.
+            q = self.q / self.q.norm().clamp_min(torch.finfo(self.q.dtype).tiny)
+        else:
+            q = torch.linalg.qr(self.q)[0]
         lda = torch.exp(self.log_sqrt_lda)
         A = self.P @ (q * lda)
         return A
@@ -1867,11 +1940,13 @@ class FactorAnalysisKernel(LinearEmbeddingKernel):
             raise ValueError(msg)
 
         M0 = A0 @ A0.T
-        B = torch.linalg.inv(self.P0.T @ self.P0) @ self.P0.T
+        B = self.P0.to(A0).T
         M_prime = B @ M0 @ B.T
         lda, q = torch.linalg.eigh(M_prime)
-        log_sqrt_lda0 = 0.5 * torch.log(lda[-self.ndim :]).unsqueeze(0)
-        q0 = q[:, -self.ndim :]
+        rank = min(self.ndim, self.n_features_free)
+        q0 = q[:, self.n_features_free - rank :]
+        scales = lda[self.n_features_free - rank :].clamp_min(torch.finfo(lda.dtype).eps)
+        log_sqrt_lda0 = 0.5 * torch.log(scales).unsqueeze(0)
         return (q0, log_sqrt_lda0)
 
     def _set_params(
@@ -1882,7 +1957,7 @@ class FactorAnalysisKernel(LinearEmbeddingKernel):
         log_var0 = self.get_log_var0(log_var0)
         q0, log_sqrt_lda0 = self.get_q0_log_sqrt_lda0(A0)
 
-        P = Parameter(self.P0, requires_grad=False)
+        P = Parameter(self.P0.to(q0), requires_grad=False)
         q = Parameter(q0, requires_grad=self.train_embedding)
         log_sqrt_lda = Parameter(
             log_sqrt_lda0, requires_grad=self.train_embedding
@@ -1893,6 +1968,33 @@ class FactorAnalysisKernel(LinearEmbeddingKernel):
         self.register_parameter(name="q", parameter=q)
         self.register_parameter(name="log_sqrt_lda", parameter=log_sqrt_lda)
         self.register_parameter(name="log_var", parameter=log_var)
+
+
+class JengaFactorAnalysisKernel(FactorAnalysisKernel):
+    """Low-rank embedding plus a positive diagonal in the observed gauge basis."""
+
+    def __init__(self, *args, log_diag0=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if log_diag0 is None:
+            log_diag0 = self.P.new_zeros(self.n_features_free)
+        log_diag0 = torch.as_tensor(log_diag0, dtype=self.P.dtype, device=self.P.device)
+        if log_diag0.shape != (self.n_features_free,):
+            raise ValueError(f"log_diag0 must have shape {(self.n_features_free,)}")
+        self.register_parameter(
+            "log_diag", Parameter(log_diag0, requires_grad=self.train_embedding)
+        )
+
+    def get_diag(self):
+        return self.log_diag.exp()
+
+    def x_to_z(self, x, A):
+        low_rank = super().x_to_z(x, A)
+        diagonal = (x @ self.P) * self.get_diag().sqrt()
+        return torch.cat((low_rank, diagonal), dim=-1)
+
+    def get_M(self):
+        A = self.get_A()
+        return A @ A.T + (self.P * self.get_diag()) @ self.P.T
 
 
 class ConnectednessFactorAnalysisKernel(LinearEmbeddingKernel):
@@ -1906,6 +2008,8 @@ class ConnectednessFactorAnalysisKernel(LinearEmbeddingKernel):
         log_var0: Optional[torch.Tensor] = None,
         C0: Optional[torch.Tensor] = None,
         train_embedding: bool = True,
+        unseen_alleles=None,
+        v: Optional[torch.Tensor] = None,
     ):
         super().__init__(
             seq_length=seq_length,
@@ -1915,6 +2019,8 @@ class ConnectednessFactorAnalysisKernel(LinearEmbeddingKernel):
             use_keops=use_keops,
             train_embedding=train_embedding,
         )
+        self.set_observed_basis(unseen_alleles, v)
+        self.register_parameter("P", Parameter(self.P0, requires_grad=False))
         self.theta_to_L = LowerCholeskyTransform()
         self._set_params(log_var0, C0)
 
@@ -1949,38 +2055,106 @@ class ConnectednessFactorAnalysisKernel(LinearEmbeddingKernel):
         self.register_parameter(name="theta", parameter=theta)
         self.register_parameter(name="log_var", parameter=log_var)
 
-    def x_to_z(self, x: torch.Tensor) -> torch.Tensor:
-        A = self.A
-        z = torch.zeros_like(x)
+    def get_A(self):
+        site_embedding = self.A
+        embedding = site_embedding.new_zeros(self.M_shape)
         for allele in self.alphabet_full:
-            indices = self.alleles_idx[allele]
-            sites = self.alleles_pos[allele]
-            z[:, indices] = x[:, indices] @ A[sites, :][:, sites]
-        return z
+            indices = torch.as_tensor(self.alleles_idx[allele], device=embedding.device)
+            sites = torch.as_tensor(self.alleles_pos[allele], device=embedding.device)
+            embedding[indices[:, None], indices[None, :]] = site_embedding[
+                sites[:, None], sites[None, :]
+            ]
+        return self.P @ (self.P.T @ embedding)
 
     def get_C(self):
         return self.A @ self.A.T  # type: ignore
 
 
-def get_named_kernel(
-    kernel: str, alphabet_list: List[List[str]], kwargs: dict = {}
-) -> Kernel:
-    NAMED_KERNELS = {
-        "Additive": AdditiveKernel,
-        "Pairwise": PairwiseKernel,
-        "VC": VarianceComponentKernel,
-        "VarianceComponent": VarianceComponentKernel,
-        "Geometric": GeometricKernel,
-        "Connectedness": ConnectednessKernel,
-        "Jenga": JengaKernel,
-        "GeneralProduct": GeneralProductKernel,
-        "FactorAnalysis": FactorAnalysisKernel,
-        "MahalanobisRBF": MahalanobisRBFKernel,
-    }
-    if kernel in NAMED_KERNELS:
-        return NAMED_KERNELS[kernel](alphabet_list=alphabet_list, **kwargs)
-    else:
-        msg = (
-            f"kernel label {kernel} not allowed. Check {NAMED_KERNELS.keys()}"
+
+class PrecomputedKernel(Kernel):
+    """Scaled RBF on pooled ESM or other precomputed feature vectors."""
+
+    input_type = "features"
+
+    def __init__(self, seq_length=None, ard_num_dims=None, use_keops=False):
+        super().__init__()
+        self.seq_length = seq_length
+        self.ard_num_dims = ard_num_dims
+        self.use_keops = use_keops
+        base = KeOpsRBFKernel if use_keops else RBFKernel
+        self.base_kernel = ScaleKernel(base(ard_num_dims=ard_num_dims))
+
+    def forward(self, x1, x2, diag=False, **kwargs):
+        return self.base_kernel(x1, x2, diag=diag, **kwargs)
+
+
+class PositionARDESMKernel(Kernel):
+    """RBF on flattened per-position ESM features with one scale per site.
+
+    Inputs have shape ``(n_sequences, seq_length * feature_dim)``.
+    """
+
+    input_type = "features"
+
+    def __init__(
+        self, seq_length, feature_dim, init_log_lengthscale=0.00005,
+        use_keops=False,
+    ):
+        super().__init__()
+        if seq_length < 1 or feature_dim < 1:
+            raise ValueError("seq_length and feature_dim must be positive")
+        self.seq_length = seq_length
+        self.feature_dim = feature_dim
+        self.n_features = seq_length * feature_dim
+        self.use_keops = use_keops
+        self.register_parameter(
+            "log_lengthscales",
+            Parameter(torch.full((seq_length,), float(init_log_lengthscale))),
         )
-        raise ValueError(msg)
+        self.register_parameter("raw_outputscale", Parameter(torch.zeros(1)))
+        base = KeOpsRBFKernel if use_keops else RBFKernel
+        self.base_kernel = base()
+        self.base_kernel.lengthscale = 1.0
+        self.base_kernel.raw_lengthscale.requires_grad_(False)
+
+    @property
+    def lengthscales(self):
+        return self.log_lengthscales.exp()
+
+    def forward(self, x1, x2, diag=False, **kwargs):
+        if x1.shape[-1] != self.n_features or x2.shape[-1] != self.n_features:
+            raise ValueError(f"ESM inputs must have {self.n_features} features")
+        scales = self.lengthscales.repeat_interleave(self.feature_dim)
+        covariance = self.base_kernel(x1 / scales, x2 / scales, diag=diag, **kwargs)
+        return self.raw_outputscale.exp() * covariance
+
+
+NAMED_KERNELS = {
+    "Additive": AdditiveKernel,
+    "Pairwise": PairwiseKernel,
+    "VC": VarianceComponentKernel,
+    "VarianceComponent": VarianceComponentKernel,
+    "Geometric": GeometricKernel,
+    "Exponential": GeometricKernel,
+    "Connectedness": ConnectednessKernel,
+    "Jenga": JengaKernel,
+    "GeneralProduct": GeneralProductKernel,
+    "FactorAnalysis": FactorAnalysisKernel,
+    "JengaFactorAnalysis": JengaFactorAnalysisKernel,
+    "ConnectednessFactorAnalysis": ConnectednessFactorAnalysisKernel,
+    "MahalanobisRBF": MahalanobisRBFKernel,
+    "Precomputed": PrecomputedKernel,
+    "PositionARDESM": PositionARDESMKernel,
+}
+
+
+def get_named_kernel(
+    kernel: str, alphabet_list: List[List[str]], kwargs: Optional[dict] = None
+) -> Kernel:
+    """Resolve names for both the kernel factory and EpiK's model API."""
+    if kernel not in NAMED_KERNELS:
+        raise ValueError(f"kernel label {kernel} not allowed. Check {NAMED_KERNELS.keys()}")
+    options = {} if kwargs is None else dict(kwargs)
+    if kernel in ("Precomputed", "PositionARDESM"):
+        return NAMED_KERNELS[kernel](seq_length=len(alphabet_list), **options)
+    return NAMED_KERNELS[kernel](alphabet_list=alphabet_list, **options)

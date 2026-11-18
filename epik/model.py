@@ -239,6 +239,7 @@ class _Epik:
         train_noise: bool = False,
         constant_mean: float = 0.0,
         kernel_kwargs: dict = {},
+        dtype: torch.dtype = torch.float32,
     ) -> None:
         self.alphabet_list = validate_alphabet(
             seq_length, alphabet_type, alphabet, alphabet_list
@@ -249,6 +250,8 @@ class _Epik:
         self.l = len(self.alphabet_list)
         self.kernel = self.get_kernel(kernel, kernel_kwargs)
         self.device = device
+        self.dtype = dtype
+        self.kernel = self.kernel.to(device=device, dtype=dtype)
         self.train_mean = train_mean
         self.train_noise = train_noise
         self.constant_mean = constant_mean
@@ -296,6 +299,14 @@ class _Epik:
         return kernel
 
     def encode(self, X: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+        numeric_inputs = torch.is_tensor(X) or (
+            isinstance(X, np.ndarray) and np.issubdtype(X.dtype, np.number)
+        )
+        if getattr(self.kernel, "input_type", None) == "features" or numeric_inputs:
+            features = self.get_tensor(X)
+            if features.ndim != 2:
+                raise ValueError("Precomputed embeddings must have shape (n_sequences, n_features)")
+            return features
         return self.get_tensor(get_one_hot_encoding(X, self.alphabet_list))
 
     def report_fit_progress(self, pbar: Any) -> None:
@@ -311,7 +322,7 @@ class _Epik:
         pbar.set_postfix(report_dict)
 
     def get_tensor(self, ndarray: Any) -> torch.Tensor:
-        return get_tensor(ndarray, device=self.device)
+        return get_tensor(ndarray, device=self.device, dtype=self.dtype)
 
     def set_training_mode(self) -> None:
         self.gp.train()
@@ -334,7 +345,8 @@ class _Epik:
         ----------
         X : np.ndarray | torch.Tensor
             A array or tensor of shape (n_sequences,) containing the
-            input sequences as str.
+            input sequences as str. Feature-input kernels instead accept
+            numeric embeddings of shape (n_sequences, n_features).
 
         y : torch.Tensor
             A tensor of shape (n_sequences,) containing the phenotypic
@@ -756,8 +768,7 @@ class EpiK(_Epik):
         self.likelihood = FixedNoiseGaussianLikelihood(
             noise=self.y_var, learn_additional_noise=self.train_noise
         )
-        if self.device != "cpu":
-            self.likelihood = self.likelihood.to(device=self.device)
+        self.likelihood = self.likelihood.to(device=self.device, dtype=self.dtype)
 
     def get_gp(
         self,
@@ -774,10 +785,7 @@ class EpiK(_Epik):
             constant_mean=self.constant_mean,
         )
 
-        if self.device == "cuda":
-            gp = gp.cuda()
-
-        return gp
+        return gp.to(device=self.device, dtype=self.dtype)
 
     def define_gp(self) -> None:
         self.gp: GPModel = self.get_gp(self.likelihood, self.X, self.y)
@@ -966,7 +974,7 @@ class EpiK(_Epik):
             If `calc_variance=True`, the DataFrame includes posterior standard
             deviations and 95% credible interval bounds.
         """
-        labels = X if add_labels else None
+        labels = X if add_labels and X.ndim == 1 else None
         f = self.get_posterior(
             X,
             calc_variance=calc_variance,

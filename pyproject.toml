@@ -15,6 +15,7 @@ dependencies = [
     "tqdm",
     "numpy",
     "pandas",
+    "scipy",
     "torch",
     "gpytorch>=1.11",
     "pykeops",
